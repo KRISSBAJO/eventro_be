@@ -1,0 +1,29 @@
+import { randomInt } from 'node:crypto';
+
+// No 0/O/1/I/L so codes read cleanly over the phone.
+const ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
+
+function chunk(n: number) {
+  let s = '';
+  for (let i = 0; i < n; i++) s += ALPHABET[randomInt(ALPHABET.length)];
+  return s;
+}
+
+/** Human-friendly order code, e.g. EVT-7F3K-2Q9M. */
+export const orderCode = () => `EVT-${chunk(4)}-${chunk(4)}`;
+
+/** Ticket code: order code + 2-digit index. */
+export const ticketCode = (order: string, index: number) => `${order}-${String(index + 1).padStart(2, '0')}`;
+
+export function slugify(s: string) {
+  return s
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 60);
+}
+
+export const randomSuffix = () => chunk(4).toLowerCase();

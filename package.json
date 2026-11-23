@@ -1,0 +1,38 @@
+{
+  "name": "eventro-be",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Eventro API: events, seat maps, orders, tickets, payouts and admin.",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node --enable-source-maps dist/src/main.js",
+    "dev": "node scripts/dev.mjs",
+    "db:start": "node scripts/db.mjs",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:seed": "node dist/prisma/seed.js",
+    "db:reset": "prisma migrate reset --force --skip-seed && npm run build && npm run db:seed",
+    "test": "node scripts/test.mjs"
+  },
+  "dependencies": {
+    "@nestjs/common": "^11.0.0",
+    "@nestjs/core": "^11.0.0",
+    "@nestjs/jwt": "^11.0.0",
+    "@nestjs/platform-express": "^11.0.0",
+    "@nestjs/swagger": "^11.0.0",
+    "@prisma/client": "^6.16.0",
+    "bcryptjs": "^3.0.2",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.14.1",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1",
+    "stripe": "^18.0.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.0.0",
+    "embedded-postgres": "^17.5.0-beta.15",
+    "prisma": "^6.16.0",
+    "typescript": "^5.9.0"
+  }
+}

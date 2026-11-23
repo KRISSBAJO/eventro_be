@@ -1,0 +1,364 @@
+// Eventro data model.
+// Money is stored in integer cents. Prices on ticket types are the all-in price the fan pays.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  FAN
+  ORGANIZER
+  ADMIN
+}
+
+enum Category {
+  CONCERTS
+  SPORTS
+  COMEDY
+  THEATER
+  FESTIVALS
+  FAMILY
+  NIGHTLIFE
+  CONFERENCE
+  WORKSHOP
+  OTHER
+}
+
+enum EventStatus {
+  DRAFT
+  IN_REVIEW
+  PUBLISHED
+  REJECTED
+  CANCELLED
+}
+
+enum Visibility {
+  PUBLIC
+  UNLISTED
+}
+
+enum FeeMode {
+  BUYER // fee is inside the all-in price; organizer keeps the base price
+  ORGANIZER // fan pays the listed price; fee comes out of the payout
+}
+
+enum MemberRole {
+  ADMIN
+  MANAGER
+  DOOR
+}
+
+enum MemberStatus {
+  ACTIVE
+  INVITED
+}
+
+enum PayoutSchedule {
+  DAILY
+  WEEKLY
+}
+
+enum HoldStatus {
+  ACTIVE
+  CONVERTED
+  RELEASED
+  EXPIRED
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  CANCELLED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+enum TicketStatus {
+  ACTIVE
+  TRANSFER_PENDING
+  LISTED
+  CHECKED_IN
+  VOID
+}
+
+enum RefundStatus {
+  OPEN
+  APPROVED
+  PARTIAL
+  DENIED
+}
+
+enum FraudStatus {
+  OPEN
+  BLOCKED
+  WATCHING
+  ALLOWED
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String
+  passwordHash String
+  roles        Role[]   @default([FAN])
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  memberships OrganizationMember[]
+  orders      Order[]
+  tickets     Ticket[]            @relation("TicketOwner")
+  auditLogs   AuditLog[]
+}
+
+model Organization {
+  id             String         @id @default(cuid())
+  name           String
+  website        String?
+  supportEmail   String
+  about          String?
+  payoutSchedule PayoutSchedule @default(DAILY)
+  // Bank details live with the payment provider (e.g. Stripe Connect); only a display hint is stored here.
+  stripeAccountId String?
+  bankLast4      String?
+  bankName       String?
+  bankCountry    String?
+  createdAt      DateTime       @default(now())
+
+  members OrganizationMember[]
+  events  Event[]
+}
+
+model OrganizationMember {
+  id        String       @id @default(cuid())
+  orgId     String
+  userId    String?
+  email     String
+  role      MemberRole
+  status    MemberStatus @default(INVITED)
+  createdAt DateTime     @default(now())
+
+  org  Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  user User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@unique([orgId, email])
+  @@index([userId])
+}
+
+model Venue {
+  id        String   @id @default(cuid())
+  slug      String   @unique
+  name      String
+  address   String
+  city      String
+  country   String?
+  lat       Float?
+  lng       Float?
+  capacity  Int?
+  /// Default seat map for events at this venue (same shape as Event.seatMap).
+  layout    Json?
+  createdAt DateTime @default(now())
+
+  events Event[]
+}
+
+model Event {
+  id          String      @id @default(cuid())
+  slug        String      @unique
+  orgId       String
+  venueId     String?
+  title       String
+  subtitle    String      @default("")
+  description String      @default("")
+  category    Category
+  imageUrl    String?
+  startsAt    DateTime
+  doorsAt     DateTime?
+  endsAt      DateTime?
+  timezone    String      @default("UTC")
+  online      Boolean     @default(false)
+  streamUrl   String?
+  status      EventStatus @default(DRAFT)
+  reviewNote  String?
+  visibility  Visibility  @default(PUBLIC)
+  feeMode     FeeMode     @default(BUYER)
+  salesPaused Boolean     @default(false)
+  /// Seat map layout: stage + sections (arc / rect / ga), each linked to a ticket type.
+  seatMap     Json?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  org         Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  venue       Venue?       @relation(fields: [venueId], references: [id], onDelete: SetNull)
+  ticketTypes TicketType[]
+  holds       Hold[]
+  orders      Order[]
+  tickets     Ticket[]
+  promos      Promo[]
+
+  @@index([status, startsAt])
+  @@index([orgId])
+}
+
+model TicketType {
+  id          String    @id @default(cuid())
+  eventId     String
+  name        String
+  description String    @default("")
+  /// All-in price the fan pays, in cents.
+  priceCents  Int
+  capacity    Int
+  sold        Int       @default(0)
+  maxPerOrder Int       @default(8)
+  sortOrder   Int       @default(0)
+  salesStart  DateTime?
+  salesEnd    DateTime?
+
+  event   Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  holds   Hold[]
+  orders  Order[]
+  tickets Ticket[]
+
+  @@index([eventId])
+}
+
+model Hold {
+  id           String     @id @default(cuid())
+  eventId      String
+  ticketTypeId String
+  /// Seat map section the fan chose, if any.
+  sectionId    String?
+  quantity     Int
+  userId       String?
+  status       HoldStatus @default(ACTIVE)
+  expiresAt    DateTime
+  createdAt    DateTime   @default(now())
+
+  event      Event      @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  ticketType TicketType @relation(fields: [ticketTypeId], references: [id], onDelete: Cascade)
+  order      Order?
+
+  @@index([ticketTypeId, status, expiresAt])
+}
+
+model Order {
+  id              String      @id // human-friendly code, e.g. EVT-7F3K-2Q9M
+  eventId         String
+  ticketTypeId    String
+  holdId          String?     @unique
+  buyerId         String?
+  email           String
+  buyerName       String
+  quantity        Int
+  unitCents       Int
+  subtotalCents   Int
+  protectionCents Int         @default(0)
+  discountCents   Int         @default(0)
+  totalCents      Int
+  refundedCents   Int         @default(0)
+  promoCode       String?
+  status          OrderStatus @default(PENDING)
+  provider        String // "stripe" | "mock"
+  paymentRef      String?     @unique
+  clientIp        String?
+  createdAt       DateTime    @default(now())
+  paidAt          DateTime?
+
+  event      Event          @relation(fields: [eventId], references: [id])
+  ticketType TicketType     @relation(fields: [ticketTypeId], references: [id])
+  hold       Hold?          @relation(fields: [holdId], references: [id])
+  buyer      User?          @relation(fields: [buyerId], references: [id], onDelete: SetNull)
+  tickets    Ticket[]
+  refunds    RefundRequest[]
+  fraudFlag  FraudFlag?
+
+  @@index([eventId, status, paidAt])
+  @@index([email])
+}
+
+model Ticket {
+  id           String       @id // order code + "-01"
+  orderId      String
+  eventId      String
+  ticketTypeId String
+  ownerId      String?
+  holderName   String
+  holderEmail  String
+  section      String?
+  row          String?
+  seat         Int?
+  status       TicketStatus @default(ACTIVE)
+  transferTo   String?
+  listCents    Int?
+  checkedInAt  DateTime?
+  checkedInBy  String?
+  createdAt    DateTime     @default(now())
+
+  order      Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  event      Event      @relation(fields: [eventId], references: [id])
+  ticketType TicketType @relation(fields: [ticketTypeId], references: [id])
+  owner      User?      @relation("TicketOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+
+  /// A reserved seat can only be sold once (GA tickets have no seat, so they don't collide).
+  @@unique([eventId, section, row, seat])
+  @@index([holderEmail])
+  @@index([transferTo])
+}
+
+model Promo {
+  id        String  @id @default(cuid())
+  eventId   String
+  code      String
+  percent   Int
+  limit     Int?
+  used      Int     @default(0)
+  active    Boolean @default(true)
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, code])
+}
+
+model RefundRequest {
+  id          String       @id @default(cuid())
+  orderId     String
+  reason      String
+  status      RefundStatus @default(OPEN)
+  amountCents Int?
+  decidedBy   String?
+  decidedAt   DateTime?
+  createdAt   DateTime     @default(now())
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+}
+
+model FraudFlag {
+  id        String      @id @default(cuid())
+  orderId   String      @unique
+  score     Int
+  reasons   String[]
+  status    FraudStatus @default(OPEN)
+  decidedBy String?
+  decidedAt DateTime?
+  createdAt DateTime    @default(now())
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  actorId   String?
+  action    String
+  entity    String
+  entityId  String
+  data      Json?
+  createdAt DateTime @default(now())
+
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([entity, entityId])
+}
