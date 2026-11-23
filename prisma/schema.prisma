@@ -189,6 +189,8 @@ model Event {
   salesPaused Boolean     @default(false)
   /// Seat map layout: stage + sections (arc / rect / ga), each linked to a ticket type.
   seatMap     Json?
+  /// Photos and videos hosted on mediaEX, in display order: [{ id, kind: "image" | "video" }]. The first image is the cover.
+  media       Json?
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
 
@@ -363,4 +365,16 @@ model AuditLog {
   actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
 
   @@index([entity, entityId])
+}
+
+/// Files uploaded to mediaEX through Eventro. Lets the API check that people only attach media they uploaded.
+model MediaUpload {
+  id        String   @id // mediaEX asset id (ast_…)
+  userId    String
+  kind      String // "image" | "video"
+  fileName  String
+  size      Int
+  createdAt DateTime @default(now())
+
+  @@index([userId])
 }

@@ -35,6 +35,9 @@ export const config = {
   resaleFeePermille: int('RESALE_FEE_PERMILLE', 50),
   adminEmail: (process.env.ADMIN_EMAIL || '').trim().toLowerCase(),
   holdMinutes: int('HOLD_MINUTES', 10),
+  /** mediaEX hosts event photos and videos. Without a key, uploads are switched off. */
+  mediaexUrl: (process.env.MEDIAEX_URL || 'http://localhost:3400').replace(/\/$/, ''),
+  mediaexApiKey: process.env.MEDIAEX_API_KEY || '',
   isProduction: process.env.NODE_ENV === 'production',
 };
 

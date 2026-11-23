@@ -9,6 +9,7 @@ import { buyerPrice, organizerNet, type FeeMode } from '../domain/money';
 import { verifyQr } from '../domain/qr';
 import { arenaTemplate, capacityByTicketType, validateSeatMap, type SeatMap } from '../domain/seatmap';
 import type { AuthUser } from '../common/auth';
+import { mediaUrls, type MediaItem } from '../media/media.module';
 import type {
   CreateEventDto,
   CreateOrgDto,
@@ -240,7 +241,7 @@ export class OrganizerService {
     const ev = await this.eventFor(id, user, DOOR);
     const promos = await this.prisma.promo.findMany({ where: { eventId: id }, orderBy: { code: 'asc' } });
     const venue = ev.venueId ? await this.prisma.venue.findUnique({ where: { id: ev.venueId } }) : null;
-    return { ...ev, venue, promos };
+    return { ...ev, venue, promos, media: ((ev.media as MediaItem[] | null) ?? []).map(mediaUrls) };
   }
 
   async updateEvent(id: string, user: AuthUser, dto: UpdateEventDto) {

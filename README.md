@@ -53,6 +53,22 @@ Runs against a separate `eventro_test` database (created by `db:start`; override
 
 Fulfilment can safely run more than once. If a hold expired during payment and the seats were sold in the meantime, the order is cancelled and refunded automatically.
 
+## Photos and videos (mediaEX)
+
+Event media is hosted on mediaEX. Set `MEDIAEX_URL` and `MEDIAEX_API_KEY` (a key with `upload` or `full` scope, from
+Developers in mediaEX). The key never leaves this server:
+
+1. `POST /media/uploads` `{ fileName, size, mimeType }` asks mediaEX for an upload slot and records who uploaded it.
+2. The browser sends the file either straight to a presigned bucket URL, or to `PUT /media/uploads/:id` here, which
+   streams it to mediaEX with the key (when mediaEX stores files on its own disk).
+3. `POST /media/uploads/:id/complete`, then `GET /media/uploads/:id` until `status` is `ready` (videos are encoded to HLS).
+4. `PUT /organizer/events/:id/media` `{ items: [{ id, kind, alt? }] }` sets the event's photos and videos in order.
+   Only files uploaded by the organization's members are accepted. The first photo becomes the event's cover.
+
+Limits: 12 photos (25 MB each) and 3 videos (2 GB each) per event. `GET /media/config` tells the website whether
+uploads are on. Public event responses include `media` with ready-to-use URLs (resized images, video posters and the
+mediaEX player). Without a key, uploads are off and events use stock covers.
+
 ## How inventory works
 
 - **Holds:** creating a hold locks the ticket type row (`SELECT … FOR UPDATE`). Seats left = capacity − sold − unexpired holds, so seats can't be oversold. Holds last `HOLD_MINUTES` (default 10).
@@ -101,6 +117,7 @@ All routes are under `/api/v1`. Send `Authorization: Bearer <token>` from `/auth
 | Browse | `GET /events?q&category&city&from&to&maxPrice&sort&page`, `GET /events/:slug`, `GET /events/:slug/availability?qty`, `GET /events/:slug/sections/:id/seats`, `GET /venues`, `GET /venues/:slug` |
 | Checkout | `POST /holds`, `GET /holds/:id`, `DELETE /holds/:id`, `POST /quote`, `POST /orders`, `GET /orders/:id`, `POST /orders/:id/pay` (mock), `POST /orders/:id/refund-requests`, `POST /webhooks/stripe` |
 | Tickets | `GET /me/tickets`, `GET /tickets/:id/qr`, `POST/DELETE /tickets/:id/transfer`, `POST /tickets/:id/accept`, `POST/DELETE /tickets/:id/listing` |
+| Media | `GET /media/config`, `POST /media/uploads`, `PUT /media/uploads/:id`, `POST /media/uploads/:id/complete`, `GET /media/uploads/:id`, `PUT /organizer/events/:id/media` |
 | Organizer | `POST/GET /organizer/orgs`, `PATCH /organizer/orgs/:orgId`, `GET …/orders/recent`, team `GET/POST /organizer/orgs/:orgId/team`, `PATCH/DELETE …/team/:memberId`, `POST /organizer/invites/accept`, payouts `GET /organizer/orgs/:orgId/payouts`, `PUT …/payout-settings`, `POST …/payouts/onboarding` |
 | Organizer events | `POST/GET /organizer/orgs/:orgId/events`, `GET/PATCH /organizer/events/:id`, ticket types `POST/PATCH/DELETE …/ticket-types/:ttId`, `POST …/submit`, `POST …/pause`, `POST …/resume`, `PUT …/seat-map`, `POST …/seat-map/template`, `GET …/stats?days=30`, `GET …/attendees`, `GET …/attendees.csv`, `POST …/check-in`, `DELETE …/check-in/:ticketId`, promos `GET/POST …/promos`, `PATCH/DELETE …/promos/:code` |
 | Admin | `GET /admin/reviews`, `POST /admin/events/:id/approve`, `POST /admin/events/:id/reject`, `GET /admin/refunds`, `POST /admin/refunds/:id/decide`, `GET /admin/fraud`, `POST /admin/fraud/:id/decide`, `GET /admin/audit` |

@@ -18,6 +18,9 @@ const env = {
   ADMIN_EMAIL: 'admin@test.local',
   STRIPE_SECRET_KEY: '',
   STRIPE_WEBHOOK_SECRET: '',
+  // Tests never touch the real media service; media.test.ts runs its own stand-in.
+  MEDIAEX_API_KEY: '',
+  MEDIAEX_URL: 'http://127.0.0.1:9',
 };
 const run = (cmd) => execSync(cmd, { stdio: 'inherit', env, shell: true });
 

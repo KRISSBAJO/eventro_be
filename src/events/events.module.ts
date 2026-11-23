@@ -7,6 +7,7 @@ import { PrismaService } from '../prisma.service';
 import { InventoryService } from '../common/inventory.service';
 import { OptionalAuth, Public } from '../common/auth';
 import { assignSeats, sectionCapacity, type SeatMap } from '../domain/seatmap';
+import { mediaUrls, type MediaItem } from '../media/media.module';
 
 const CATEGORIES = Object.values(Category);
 
@@ -122,6 +123,7 @@ export class EventsService {
         sortOrder: t.sortOrder,
         available: avail.get(t.id) ?? 0,
       })),
+      media: ((e.media as MediaItem[] | null) ?? []).map(mediaUrls),
       seatMap: map && {
         ...map,
         sections: map.sections.map((s) => ({ ...s, available: sectionAvail?.get(s.id) ?? 0 })),

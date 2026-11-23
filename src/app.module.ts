@@ -13,6 +13,7 @@ import { CheckoutModule } from './checkout/checkout.module';
 import { TicketsModule } from './tickets/tickets.module';
 import { OrganizerModule } from './organizer/organizer.module';
 import { AdminModule } from './admin/admin.module';
+import { MediaModule } from './media/media.module';
 
 @ApiTags('health')
 @Controller('health')
@@ -44,6 +45,7 @@ class CoreModule {}
     TicketsModule,
     OrganizerModule,
     AdminModule,
+    MediaModule,
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_GUARD, useClass: AuthGuard }],
