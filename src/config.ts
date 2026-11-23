@@ -31,6 +31,14 @@ export const config = {
   qrSecret: required('TICKET_QR_SECRET', 32),
   stripeSecretKey: process.env.STRIPE_SECRET_KEY || '',
   stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET || '',
+  /** Paystack secret key (sk_test_… or sk_live_…) for NGN, GHS, KES and ZAR. Without it those use the mock provider. */
+  paystackSecretKey: process.env.PAYSTACK_SECRET_KEY || '',
+  /** Paystack API base; only changed by tests, which run a local stand-in. */
+  paystackUrl: (process.env.PAYSTACK_API_URL || 'https://api.paystack.co').replace(/\/$/, ''),
+  /** The website's address, for payment return links. */
+  webUrl: (process.env.WEB_URL || 'http://127.0.0.1:3500').replace(/\/$/, ''),
+  /** Optional ipinfo.io token for visitor location by IP when the host doesn't add a country header. */
+  ipinfoToken: process.env.IPINFO_TOKEN || '',
   organizerFeePermille: int('ORGANIZER_FEE_PERMILLE', 35),
   resaleFeePermille: int('RESALE_FEE_PERMILLE', 50),
   adminEmail: (process.env.ADMIN_EMAIL || '').trim().toLowerCase(),

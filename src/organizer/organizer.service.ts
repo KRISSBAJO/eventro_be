@@ -10,6 +10,8 @@ import { verifyQr } from '../domain/qr';
 import { arenaTemplate, capacityByTicketType, validateSeatMap, type SeatMap } from '../domain/seatmap';
 import type { AuthUser } from '../common/auth';
 import { mediaUrls, type MediaItem } from '../media/media.module';
+import { countryTimezone, isTimeZone, timezoneAt } from '../geo/geo.module';
+import { FxService } from '../fx/fx.module';
 import type {
   CreateEventDto,
   CreateOrgDto,
@@ -36,6 +38,7 @@ export class OrganizerService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly payments: Payments,
+    private readonly fx: FxService,
   ) {}
 
   /* ---------- access ---------- */
@@ -146,11 +149,18 @@ export class OrganizerService {
   async createEvent(orgId: string, user: AuthUser, dto: CreateEventDto) {
     await this.member(orgId, user, EDIT);
     if (!dto.online && !dto.venueId && !dto.venue) throw new BadRequestException('Add a venue, or mark the event as online.');
+    // Times are wall-clock times in this zone, so an unknown zone would show the wrong time to everyone.
+    if (dto.timezone && !isTimeZone(dto.timezone)) throw new BadRequestException(`Unknown time zone "${dto.timezone}". Use an IANA name such as Africa/Lagos.`);
     const feeMode: FeeMode = dto.feeMode ?? 'BUYER';
     let venueId = dto.venueId ?? null;
+    let timezone = dto.timezone ?? 'UTC';
     if (!venueId && dto.venue) {
-      const v = await this.prisma.venue.create({ data: { ...dto.venue, slug: `${slugify(dto.venue.name)}-${randomSuffix()}` } });
+      const country = dto.venue.country?.toUpperCase();
+      // The venue's time zone, from its map position or else its country's main zone.
+      const tz = dto.venue.lat !== undefined && dto.venue.lng !== undefined ? timezoneAt(dto.venue.lat, dto.venue.lng) : countryTimezone(country);
+      const v = await this.prisma.venue.create({ data: { ...dto.venue, country, timezone: tz, slug: `${slugify(dto.venue.name)}-${randomSuffix()}` } });
       venueId = v.id;
+      timezone = dto.timezone ?? tz ?? 'UTC';
     }
     const ev = await this.prisma.event.create({
       data: {
@@ -165,7 +175,8 @@ export class OrganizerService {
         startsAt: new Date(dto.startsAt),
         doorsAt: dto.doorsAt ? new Date(dto.doorsAt) : null,
         endsAt: dto.endsAt ? new Date(dto.endsAt) : null,
-        timezone: dto.timezone ?? 'UTC',
+        timezone,
+        currency: dto.currency ?? 'USD',
         online: !!dto.online,
         streamUrl: dto.streamUrl,
         feeMode,
@@ -182,7 +193,7 @@ export class OrganizerService {
     await this.member(orgId, user, DOOR);
     const events = await this.prisma.event.findMany({
       where: { orgId },
-      include: { ticketTypes: { orderBy: { sortOrder: 'asc' } }, venue: { select: { name: true, city: true, address: true } } },
+      include: { ticketTypes: { orderBy: { sortOrder: 'asc' } }, venue: { select: { name: true, city: true, address: true, country: true, region: true } } },
       orderBy: { startsAt: 'asc' },
     });
     const days = 60;
@@ -213,6 +224,8 @@ export class OrganizerService {
       reviewNote: e.reviewNote,
       salesPaused: e.salesPaused,
       feeMode: e.feeMode,
+      currency: e.currency,
+      timezone: e.timezone,
       startsAt: e.startsAt,
       venue: e.venue,
       online: e.online,
@@ -233,7 +246,7 @@ export class OrganizerService {
       where: { event: { orgId }, status: { in: ['PAID', 'PARTIALLY_REFUNDED'] } },
       orderBy: { paidAt: 'desc' },
       take: 8,
-      select: { id: true, buyerName: true, quantity: true, totalCents: true, paidAt: true, ticketType: { select: { name: true } }, event: { select: { title: true } } },
+      select: { id: true, buyerName: true, quantity: true, totalCents: true, currency: true, paidAt: true, ticketType: { select: { name: true } }, event: { select: { title: true } } },
     });
   }
 
@@ -477,14 +490,20 @@ export class OrganizerService {
     const since = new Date(Date.now() - 31 * DAY);
     const orders = await this.prisma.order.findMany({
       where: { event: { orgId }, status: { in: ['PAID', 'PARTIALLY_REFUNDED'] }, paidAt: { gte: since } },
-      select: { paidAt: true, quantity: true, unitCents: true, discountCents: true, refundedCents: true, event: { select: { feeMode: true } } },
+      select: { paidAt: true, quantity: true, unitCents: true, discountCents: true, refundedCents: true, currency: true, event: { select: { feeMode: true } } },
     });
+    // Payouts are shown in the organization's main currency (the one most of its sales are in);
+    // sales in other currencies are converted at today's rate and marked as approximate.
+    const counts = new Map<string, number>();
+    for (const o of orders) counts.set(o.currency, (counts.get(o.currency) ?? 0) + 1);
+    const latest = await this.prisma.event.findFirst({ where: { orgId }, orderBy: { createdAt: 'desc' }, select: { currency: true } });
+    const currency = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? latest?.currency ?? 'USD';
     const byDay = new Map<string, number>();
     for (const o of orders) {
       const k = dayKey(o.paidAt!);
       // Organizer share of the tickets (protection is Eventro's), after discounts and refunds.
       const net = organizerNet(o.unitCents, o.event.feeMode, config.organizerFeePermille) * o.quantity - o.discountCents - o.refundedCents;
-      byDay.set(k, (byDay.get(k) ?? 0) + Math.max(0, net));
+      byDay.set(k, (byDay.get(k) ?? 0) + Math.max(0, this.fx.convert(net, o.currency, currency)));
     }
     const today = dayKey(new Date());
     const history = [...byDay.entries()]
@@ -492,6 +511,8 @@ export class OrganizerService {
       .sort((a, b) => b[0].localeCompare(a[0]))
       .map(([date, cents]) => ({ salesDate: date, amountCents: cents, status: 'PAID' as const }));
     return {
+      currency,
+      converted: counts.size > 1,
       schedule: org.payoutSchedule,
       pendingCents: byDay.get(today) ?? 0,
       nextPayoutCents: org.payoutSchedule === 'DAILY' ? (byDay.get(dayKey(new Date(Date.now() - DAY))) ?? 0) : history.slice(0, 7).reduce((s, h) => s + h.amountCents, 0),

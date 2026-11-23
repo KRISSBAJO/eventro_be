@@ -1,3 +1,4 @@
+import { CURRENCY_CODES } from '../domain/currency';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import {
@@ -50,7 +51,9 @@ export class VenueInputDto {
   @ApiProperty() @IsString() @MinLength(2) @MaxLength(120) name: string;
   @ApiProperty() @IsString() @MinLength(3) @MaxLength(200) address: string;
   @ApiProperty() @IsString() @MinLength(2) @MaxLength(80) city: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(60) country?: string;
+  @ApiPropertyOptional({ description: 'ISO 3166-1 alpha-2, e.g. NG' }) @IsOptional() @IsString() @Matches(/^[A-Za-z]{2}$/) country?: string;
+  @ApiPropertyOptional({ description: 'State, province or region' }) @IsOptional() @IsString() @MaxLength(80) region?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(20) postalCode?: string;
   @ApiPropertyOptional() @IsOptional() @IsNumber() lat?: number;
   @ApiPropertyOptional() @IsOptional() @IsNumber() lng?: number;
 }
@@ -82,6 +85,10 @@ export class CreateEventDto {
   @ApiPropertyOptional({ description: 'An existing venue' }) @IsOptional() @IsString() venueId?: string;
   @ApiPropertyOptional({ type: VenueInputDto, description: 'Or a new venue' }) @IsOptional() @ValidateNested() @Type(() => VenueInputDto) venue?: VenueInputDto;
   @ApiPropertyOptional({ enum: ['BUYER', 'ORGANIZER'] }) @IsOptional() @IsIn(['BUYER', 'ORGANIZER']) feeMode?: 'BUYER' | 'ORGANIZER';
+  @ApiPropertyOptional({ enum: CURRENCY_CODES, default: 'USD', description: 'Prices and payments for this event are in this currency' })
+  @IsOptional()
+  @IsIn(CURRENCY_CODES)
+  currency?: string;
   @ApiPropertyOptional({ enum: ['PUBLIC', 'UNLISTED'] }) @IsOptional() @IsIn(['PUBLIC', 'UNLISTED']) visibility?: 'PUBLIC' | 'UNLISTED';
   @ApiProperty({ type: [TicketTypeInputDto] })
   @ValidateNested({ each: true })

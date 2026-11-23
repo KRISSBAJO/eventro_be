@@ -14,6 +14,9 @@ import { TicketsModule } from './tickets/tickets.module';
 import { OrganizerModule } from './organizer/organizer.module';
 import { AdminModule } from './admin/admin.module';
 import { MediaModule } from './media/media.module';
+import { GeoModule } from './geo/geo.module';
+import { FxModule } from './fx/fx.module';
+import { Payments } from './checkout/payments';
 
 @ApiTags('health')
 @Controller('health')
@@ -24,7 +27,8 @@ class HealthController {
   @Get()
   async health() {
     await this.prisma.$queryRaw`SELECT 1`;
-    return { ok: true, payments: config.stripeSecretKey ? 'stripe' : 'mock' };
+    // `payments` is "mock" when neither provider has keys (test mode everywhere).
+    return { ok: true, payments: config.stripeSecretKey || config.paystackSecretKey ? 'live' : 'mock', stripe: !!config.stripeSecretKey, paystack: !!config.paystackSecretKey };
   }
 }
 
@@ -46,6 +50,8 @@ class CoreModule {}
     OrganizerModule,
     AdminModule,
     MediaModule,
+    GeoModule,
+    FxModule,
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_GUARD, useClass: AuthGuard }],

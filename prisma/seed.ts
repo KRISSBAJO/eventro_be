@@ -96,6 +96,21 @@ async function main() {
   await upsertUser(adminEmail, 'Eventro Admin', ['FAN', 'ADMIN']);
   const fan = await upsertUser('fan@eventro.test', 'Demo Fan', ['FAN']);
 
+  // Your own admin login for local testing, from .env (never committed): SEED_ADMIN_EMAIL, SEED_ADMIN_PASSWORD, SEED_ADMIN_NAME.
+  const ownEmail = process.env.SEED_ADMIN_EMAIL?.trim().toLowerCase();
+  const ownPassword = process.env.SEED_ADMIN_PASSWORD;
+  if (ownEmail && ownPassword) {
+    if (ownPassword.length < 8) throw new Error('SEED_ADMIN_PASSWORD must be at least 8 characters.');
+    const passwordHash = await bcrypt.hash(ownPassword, 11);
+    const name = process.env.SEED_ADMIN_NAME?.trim() || ownEmail.split('@')[0];
+    await prisma.user.upsert({
+      where: { email: ownEmail },
+      update: { passwordHash, roles: { set: ['FAN', 'ORGANIZER', 'ADMIN'] } },
+      create: { email: ownEmail, name, passwordHash, roles: ['FAN', 'ORGANIZER', 'ADMIN'] },
+    });
+    console.log(`  admin login ready for ${ownEmail}`);
+  }
+
   let org = await prisma.organization.findFirst({ where: { members: { some: { userId: organizer.id } } } });
   if (!org) {
     org = await prisma.organization.create({

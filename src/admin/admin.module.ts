@@ -70,7 +70,7 @@ export class AdminService {
     if (!o) throw new NotFoundException('Order not found.');
     const remaining = o.totalCents - o.refundedCents;
     if (amountCents > remaining) throw new BadRequestException(`At most ${remaining} cents can still be refunded.`);
-    if (o.paymentRef) await this.payments.provider.refund(o.paymentRef, amountCents);
+    if (o.paymentRef) await this.payments.byName(o.provider).refund(o.paymentRef, amountCents);
     const full = amountCents === remaining;
     await this.prisma.$transaction(async (tx) => {
       await tx.order.update({
@@ -82,13 +82,13 @@ export class AdminService {
         if (count) await tx.ticketType.update({ where: { id: o.ticketTypeId }, data: { sold: { decrement: count } } });
       }
     });
-    await this.audit.log(admin.id, full ? 'order.refund' : 'order.partial_refund', 'Order', orderId, { amountCents, reason });
+    await this.audit.log(admin.id, full ? 'order.refund' : 'order.partial_refund', 'Order', orderId, { amountCents, currency: o.currency, reason });
   }
 
   refunds(status = 'OPEN') {
     return this.prisma.refundRequest.findMany({
       where: { status: status as 'OPEN' },
-      include: { order: { select: { id: true, buyerName: true, email: true, totalCents: true, refundedCents: true, quantity: true, event: { select: { title: true, startsAt: true } } } } },
+      include: { order: { select: { id: true, buyerName: true, email: true, totalCents: true, refundedCents: true, quantity: true, currency: true, event: { select: { title: true, startsAt: true } } } } },
       orderBy: { createdAt: 'asc' },
     });
   }
@@ -111,7 +111,7 @@ export class AdminService {
   fraud(status = 'OPEN') {
     return this.prisma.fraudFlag.findMany({
       where: { status: status as 'OPEN' },
-      include: { order: { select: { id: true, email: true, totalCents: true, quantity: true, status: true, event: { select: { title: true } } } } },
+      include: { order: { select: { id: true, email: true, totalCents: true, quantity: true, status: true, currency: true, event: { select: { title: true } } } } },
       orderBy: [{ score: 'desc' }, { createdAt: 'asc' }],
     });
   }

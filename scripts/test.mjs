@@ -21,6 +21,11 @@ const env = {
   // Tests never touch the real media service; media.test.ts runs its own stand-in.
   MEDIAEX_API_KEY: '',
   MEDIAEX_URL: 'http://127.0.0.1:9',
+  // Same for payments and IP lookups; paystack.test.ts runs its own Paystack stand-in.
+  PAYSTACK_SECRET_KEY: '',
+  PAYSTACK_API_URL: 'http://127.0.0.1:9',
+  IPINFO_TOKEN: '',
+  FX_OFFLINE: '1',
 };
 const run = (cmd) => execSync(cmd, { stdio: 'inherit', env, shell: true });
 

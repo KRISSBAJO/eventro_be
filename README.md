@@ -2,7 +2,7 @@
 
 Backend for [Eventro](https://github.com/KRISSBAJO/eventro): events, venue seat maps, checkout with seat holds, tickets with rotating QR codes, organizer tools and admin review.
 
-**Stack:** NestJS 11 · Prisma 6 · PostgreSQL · Stripe (optional; a mock provider is used when no key is set).
+**Stack:** NestJS 11 · Prisma 6 · PostgreSQL · Stripe and Paystack (both optional; a mock provider is used when no key is set).
 
 ## Run it locally
 
@@ -43,15 +43,54 @@ Runs against a separate `eventro_test` database (created by `db:start`; override
 - **Unit:** fees, quotes, QR tokens, seat-map validation, seat assignment, fraud scoring.
 - **End to end over HTTP:** holds reserve exact seats that match the availability preview; quotes with promo codes; the organizer creates an event and a seat map, gets reviewed and approved; a fan buys with a promo code and gets seats 104-A1/A2; the next group gets A3/A4; QR check-in (valid, duplicate, invalid, tampered); transfer and accept; resale cap; refund that voids the tickets and returns the seats to sale; stats and audit log.
 - **Concurrency:** 12 simultaneous holds on 5 seats, so exactly 5 succeed.
+- **Worldwide:** a naira event paid through a stand-in Paystack (underpayments refused, webhook signatures checked,
+  tickets issued once); venue time zones from the map position; online events keep the organizer's zone and give
+  buyers the stream link; unknown zones and currencies are refused; exchange rates and visitor country.
+
+Tests never call real services: Stripe, Paystack, mediaEX, IP lookups and exchange rates are switched off or replaced
+by local stand-ins.
 
 ## Payments
 
+Each event has a **currency** (`USD`, `EUR`, `GBP`, `CAD`, `AUD`, `NGN`, `GHS`, `KES`, `ZAR`). Prices, orders, refunds and
+payouts are in that currency's minor units (kobo for NGN). Fans are always charged in the event's currency.
+
+- **NGN, GHS, KES, ZAR go through Paystack** (`PAYSTACK_SECRET_KEY`, a `sk_test_…` key for testing). `POST /orders`
+  returns `provider: "paystack"` and a `redirectUrl` to Paystack's payment page. Paystack sends the fan back to
+  `${WEB_URL}/checkout/return?order=…`, and the website calls `POST /orders/:id/verify`. The API checks the amount
+  and currency with Paystack before issuing tickets. Paystack's `charge.success` webhook (`POST /api/v1/webhooks/paystack`,
+  HMAC-SHA512 signature) does the same, so whichever arrives first fulfils the order. Set the webhook URL in the
+  Paystack dashboard.
+- **Other currencies go through Stripe.**
 - **No `STRIPE_SECRET_KEY`:** the *mock* provider is used. `POST /orders` returns `provider: "mock"`, and `POST /orders/:id/pay` completes the payment.
 - **With Stripe (test mode):** `POST /orders` returns a PaymentIntent `clientSecret` for Stripe.js. Stripe calls `POST /api/v1/webhooks/stripe` (signature-checked with `STRIPE_WEBHOOK_SECRET`), and the order is fulfilled there. Locally:
   `stripe listen --forward-to 127.0.0.1:4000/api/v1/webhooks/stripe`
 - **Organizer payouts:** use Stripe Connect. `POST /organizer/orgs/:orgId/payouts/onboarding` returns a Stripe-hosted link where organizers enter their bank details. Eventro never sees or stores account numbers.
 
 Fulfilment can safely run more than once. If a hold expired during payment and the seats were sold in the meantime, the order is cancelled and refunded automatically.
+
+## Places, time zones and exchange rates
+
+- **Countries and regions:** `GET /geo/countries` (flag, calling code, default currency) and
+  `GET /geo/countries/:code/regions` (states and provinces), from the `country-state-city` package. No network calls.
+- **Venue search:** `GET /geo/search?q=&country=` suggests venues and addresses with map positions, from
+  OpenStreetMap through Photon (photon.komoot.io). Results are cached for a day. Show "© OpenStreetMap contributors"
+  wherever they're displayed (the website does).
+- **Time zones:** event times are the venue's wall-clock time, stored with the venue's IANA zone (`Africa/Lagos`).
+  The zone comes from the venue's map position (`GET /geo/timezone?lat&lng`), else its country. Online events use the
+  zone the organizer picks. Unknown zones are refused.
+- **Visitor location:** `GET /geo/me` reads the country from the host's header (`cf-ipcountry`,
+  `x-vercel-ip-country` and similar). Without one, it looks up the IP with ipinfo.io when `IPINFO_TOKEN` is set.
+  Otherwise it answers "unknown" and the website guesses from the browser's time zone and language. It's used only
+  for defaults (currency, country), never to block anyone.
+- **Exchange rates:** `GET /fx/rates` (USD base) from ExchangeRate-API's open endpoint, refreshed every 6 hours,
+  with built-in fallback rates. They're for display only ("₦25,000 ≈ $16"). Set `FX_OFFLINE=1` to never call out.
+
+## Online events
+
+Events created with `online: true` have no venue; `streamUrl` is the private link. `GET /me/tickets` includes it
+only on tickets the holder still has (not ones listed for resale or being transferred). The website shows a
+"Watch the stream" button on those tickets instead of the door QR code.
 
 ## Photos and videos (mediaEX)
 
@@ -115,7 +154,8 @@ All routes are under `/api/v1`. Send `Authorization: Bearer <token>` from `/auth
 |---|---|
 | Auth | `POST /auth/signup`, `POST /auth/login`, `GET /auth/me`, `PATCH /auth/me` (name) |
 | Browse | `GET /events?q&category&city&from&to&maxPrice&sort&page`, `GET /events/:slug`, `GET /events/:slug/availability?qty`, `GET /events/:slug/sections/:id/seats`, `GET /venues`, `GET /venues/:slug` |
-| Checkout | `POST /holds`, `GET /holds/:id`, `DELETE /holds/:id`, `POST /quote`, `POST /orders`, `GET /orders/:id`, `POST /orders/:id/pay` (mock), `POST /orders/:id/refund-requests`, `POST /webhooks/stripe` |
+| Checkout | `POST /holds`, `GET /holds/:id`, `DELETE /holds/:id`, `POST /quote`, `POST /orders`, `GET /orders/:id`, `POST /orders/:id/pay` (mock), `POST /orders/:id/verify` (Paystack), `POST /orders/:id/refund-requests`, `POST /webhooks/stripe`, `POST /webhooks/paystack` |
+| Places & money | `GET /geo/countries`, `GET /geo/countries/:code/regions`, `GET /geo/search?q&country`, `GET /geo/timezone?lat&lng`, `GET /geo/me`, `GET /geo/currencies`, `GET /fx/rates` |
 | Tickets | `GET /me/tickets`, `GET /tickets/:id/qr`, `POST/DELETE /tickets/:id/transfer`, `POST /tickets/:id/accept`, `POST/DELETE /tickets/:id/listing` |
 | Media | `GET /media/config`, `POST /media/uploads`, `PUT /media/uploads/:id`, `POST /media/uploads/:id/complete`, `GET /media/uploads/:id`, `PUT /organizer/events/:id/media` |
 | Organizer | `POST/GET /organizer/orgs`, `PATCH /organizer/orgs/:orgId`, `GET …/orders/recent`, team `GET/POST /organizer/orgs/:orgId/team`, `PATCH/DELETE …/team/:memberId`, `POST /organizer/invites/accept`, payouts `GET /organizer/orgs/:orgId/payouts`, `PUT …/payout-settings`, `POST …/payouts/onboarding` |

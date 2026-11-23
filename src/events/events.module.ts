@@ -32,7 +32,9 @@ export class EventCardDto {
   @ApiProperty({ nullable: true }) imageUrl: string | null;
   @ApiProperty({ nullable: true }) venue: string | null;
   @ApiProperty({ nullable: true }) city: string | null;
-  @ApiProperty({ description: 'Lowest all-in price in cents' }) fromCents: number;
+  @ApiProperty({ description: 'Lowest all-in price in minor units of `currency`' }) fromCents: number;
+  @ApiProperty({ example: 'USD' }) currency: string;
+  @ApiProperty({ nullable: true, example: 'NG' }) country: string | null;
 }
 
 @Injectable()
@@ -77,6 +79,8 @@ export class EventsService {
         imageUrl: e.imageUrl,
         venue: e.venue?.name ?? (e.online ? 'Online' : null),
         city: e.venue?.city ?? null,
+        country: e.venue?.country ?? null,
+        currency: e.currency,
         fromCents: Math.min(...e.ticketTypes.map((t) => t.priceCents)),
       }));
     if (q.maxPrice !== undefined) cards = cards.filter((c) => c.fromCents <= q.maxPrice! * 100);
@@ -111,9 +115,10 @@ export class EventsService {
       endsAt: e.endsAt,
       timezone: e.timezone,
       online: e.online,
+      currency: e.currency,
       salesPaused: e.salesPaused,
       presentedBy: e.org.name,
-      venue: e.venue && { slug: e.venue.slug, name: e.venue.name, address: e.venue.address, city: e.venue.city, lat: e.venue.lat, lng: e.venue.lng },
+      venue: e.venue && { slug: e.venue.slug, name: e.venue.name, address: e.venue.address, city: e.venue.city, region: e.venue.region, country: e.venue.country, postalCode: e.venue.postalCode, timezone: e.venue.timezone, lat: e.venue.lat, lng: e.venue.lng },
       ticketTypes: e.ticketTypes.map((t) => ({
         id: t.id,
         name: t.name,

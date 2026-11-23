@@ -32,15 +32,17 @@ export class TicketsService {
       where: { OR: [{ ownerId: user.id }, { holderEmail: user.email }], status: { not: 'VOID' } },
       include: {
         ticketType: { select: { name: true, priceCents: true } },
-        order: { select: { id: true, createdAt: true, quantity: true, totalCents: true, status: true } },
-        event: { select: { slug: true, title: true, subtitle: true, startsAt: true, doorsAt: true, imageUrl: true, seatMap: true, venue: { select: { name: true, address: true, city: true } } } },
+        order: { select: { id: true, createdAt: true, quantity: true, totalCents: true, status: true, currency: true } },
+        event: { select: { slug: true, title: true, subtitle: true, startsAt: true, doorsAt: true, imageUrl: true, seatMap: true, online: true, streamUrl: true, timezone: true, venue: { select: { name: true, address: true, city: true } } } },
       },
       orderBy: [{ event: { startsAt: 'asc' } }, { id: 'asc' }],
     });
     // Section names come from the event's seat map ("Lower Level 104"); the map itself stays out of the response.
-    const tickets = rows.map(({ event: { seatMap, ...event }, ...t }) => {
+    // Online events: the stream link goes only with tickets the holder still has (not ones being sold or transferred).
+    const tickets = rows.map(({ event: { seatMap, streamUrl, ...event }, ...t }) => {
       const s = (seatMap as SeatMap | null)?.sections.find((x) => x.id === t.section);
-      return { ...t, event, sectionName: s ? sectionName(s) : null };
+      const watch = event.online && (t.status === 'ACTIVE' || t.status === 'CHECKED_IN') ? streamUrl : null;
+      return { ...t, event: { ...event, streamUrl: watch }, sectionName: s ? sectionName(s) : null };
     });
     const incoming = await this.prisma.ticket.findMany({
       where: { transferTo: user.email, status: 'TRANSFER_PENDING' },

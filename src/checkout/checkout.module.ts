@@ -93,6 +93,24 @@ export class CheckoutController {
     return this.checkout.requestRefund(id, user, dto.reason);
   }
 
+  /** After paying on Paystack's page, the website asks us to confirm the payment. */
+  @Public()
+  @Post('orders/:id/verify')
+  @HttpCode(200)
+  verify(@Param('id') id: string) {
+    return this.checkout.verifyPaystack(id);
+  }
+
+  @Public()
+  @Post('webhooks/paystack')
+  @HttpCode(200)
+  async paystack(@Req() req: Request & { rawBody?: Buffer }, @Headers('x-paystack-signature') sig: string) {
+    if (!this.payments.paystack || !req.rawBody || !sig || !this.payments.paystack.signatureOk(req.rawBody, sig)) throw new BadRequestException('Invalid signature');
+    const body = req.body as { event?: string; data?: { reference?: string } };
+    await this.checkout.handlePaystackEvent(body.event ?? '', body.data ?? {});
+    return { received: true };
+  }
+
   @Public()
   @Post('webhooks/stripe')
   @HttpCode(200)

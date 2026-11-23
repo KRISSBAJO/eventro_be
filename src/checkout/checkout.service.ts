@@ -9,6 +9,8 @@ import { quote } from '../domain/money';
 import { FRAUD_FLAG_THRESHOLD, scoreOrder } from '../domain/fraud';
 import { pickFromSections, type SeatMap, type SeatPick } from '../domain/seatmap';
 import { Payments } from './payments';
+import { FxService } from '../fx/fx.module';
+import { isCurrency, type Currency } from '../domain/currency';
 import type { AuthUser } from '../common/auth';
 
 type Tx = Prisma.TransactionClient;
@@ -25,6 +27,7 @@ export class CheckoutService {
     private readonly inventory: InventoryService,
     private readonly payments: Payments,
     private readonly audit: AuditService,
+    private readonly fx: FxService,
   ) {}
 
   /* ---------- holds ---------- */
@@ -85,7 +88,7 @@ export class CheckoutService {
       where: { id },
       include: {
         ticketType: { select: { id: true, name: true, description: true, priceCents: true } },
-        event: { select: { slug: true, title: true, subtitle: true, category: true, imageUrl: true, startsAt: true, doorsAt: true, description: true, seatMap: true, venue: { select: { name: true, city: true, address: true } } } },
+        event: { select: { slug: true, title: true, subtitle: true, category: true, currency: true, timezone: true, imageUrl: true, startsAt: true, doorsAt: true, description: true, seatMap: true, venue: { select: { name: true, city: true, address: true } } } },
         order: { select: { id: true, status: true } },
       },
     });
@@ -152,7 +155,8 @@ export class CheckoutService {
     ]);
     const risk = scoreOrder({
       email: input.email,
-      totalCents: q.totalCents,
+      // Fraud rules are written in US dollars; other currencies are converted (approximately).
+      totalCents: this.fx.convert(q.totalCents, hold.event.currency, 'USD'),
       quantity: hold.quantity,
       maxPerOrder: hold.ticketType.maxPerOrder,
       recentOrdersSameEmail: sameEmail + 1,
@@ -161,6 +165,8 @@ export class CheckoutService {
     });
 
     const id = orderCode();
+    const currency: Currency = isCurrency(hold.event.currency) ? hold.event.currency : 'USD';
+    const provider = this.payments.forCurrency(currency);
     const order = await this.prisma.order.create({
       data: {
         id,
@@ -177,15 +183,17 @@ export class CheckoutService {
         protectionCents: q.protectionCents,
         totalCents: q.totalCents,
         promoCode: promo?.code ?? null,
-        provider: this.payments.provider.name,
+        currency,
+        provider: provider.name,
         clientIp,
         ...(risk.score >= FRAUD_FLAG_THRESHOLD ? { fraudFlag: { create: { score: risk.score, reasons: risk.reasons } } } : {}),
       },
     });
 
-    const pay = await this.payments.provider.createPayment({
+    const pay = await provider.createPayment({
       orderId: id,
       amountCents: q.totalCents,
+      currency,
       email: input.email,
       description: `${hold.quantity} × ${hold.ticketType.name} — ${hold.event.title}`,
     });
@@ -194,8 +202,10 @@ export class CheckoutService {
     return {
       orderId: order.id,
       status: order.status,
-      provider: this.payments.provider.name,
-      clientSecret: pay.clientSecret,
+      provider: provider.name,
+      currency,
+      clientSecret: pay.clientSecret ?? null,
+      redirectUrl: pay.redirectUrl ?? null,
       holdExpiresAt: hold.expiresAt,
       ...q,
     };
@@ -205,8 +215,37 @@ export class CheckoutService {
   async payMock(orderId: string) {
     const o = await this.prisma.order.findUnique({ where: { id: orderId } });
     if (!o) throw new NotFoundException('Order not found.');
-    if (o.provider !== 'mock') throw new ForbiddenException('This order is paid through Stripe.');
+    if (o.provider !== 'mock') throw new ForbiddenException('This order is paid through a payment provider.');
     return this.fulfil(orderId);
+  }
+
+  /**
+   * Called when a fan comes back from Paystack: asks Paystack whether the payment went through, then fulfils.
+   * Safe to call more than once and from anyone (it only completes orders Paystack confirms were paid in full).
+   */
+  async verifyPaystack(orderId: string) {
+    const o = await this.prisma.order.findUnique({ where: { id: orderId } });
+    if (!o) throw new NotFoundException('Order not found.');
+    if (o.provider !== 'paystack') throw new BadRequestException('This order isn’t paid through Paystack.');
+    if (o.status === 'PAID') return this.orderView(orderId);
+    if (!this.payments.paystack) throw new BadRequestException('Paystack isn’t configured on this server.');
+    const t = await this.payments.paystack.verify(o.paymentRef ?? o.id);
+    if (t.status !== 'success') return { ...(await this.orderView(orderId)), paymentStatus: t.status };
+    if (t.amount !== o.totalCents || t.currency !== o.currency) {
+      this.log.error(`Paystack amount mismatch on ${o.id}: paid ${t.amount} ${t.currency}, expected ${o.totalCents} ${o.currency}`);
+      throw new BadRequestException('The payment amount doesn’t match the order. Our team has been alerted.');
+    }
+    return this.fulfil(orderId);
+  }
+
+  /** Paystack webhook (charge.success). The signature is checked by the controller. */
+  async handlePaystackEvent(event: string, data: { reference?: string }) {
+    if (event !== 'charge.success' || !data.reference) return;
+    try {
+      await this.verifyPaystack(data.reference);
+    } catch (e) {
+      this.log.warn(`Paystack webhook for ${data.reference} ended with: ${(e as Error).message}`);
+    }
   }
 
   /**
@@ -264,7 +303,7 @@ export class CheckoutService {
     );
 
     if (result.refund && result.order.paymentRef) {
-      await this.payments.provider.refund(result.order.paymentRef, result.order.totalCents);
+      await this.payments.byName(result.order.provider).refund(result.order.paymentRef, result.order.totalCents);
       await this.audit.log(null, 'order.auto_refund', 'Order', orderId, { reason: 'seats no longer available after hold expired' });
       throw new ConflictException('Your seats were released before payment finished. You have been refunded in full.');
     }

@@ -155,7 +155,13 @@ model Venue {
   name      String
   address   String
   city      String
+  /// ISO 3166-1 alpha-2, e.g. "NG"
   country   String?
+  /// State, province or region name
+  region     String?
+  postalCode String?
+  /// IANA time zone, e.g. "Africa/Lagos" (from the venue's location)
+  timezone   String?
   lat       Float?
   lng       Float?
   capacity  Int?
@@ -186,6 +192,8 @@ model Event {
   reviewNote  String?
   visibility  Visibility  @default(PUBLIC)
   feeMode     FeeMode     @default(BUYER)
+  /// ISO 4217. Ticket prices and orders are in this currency's minor units (kobo for NGN).
+  currency    String      @default("USD")
   salesPaused Boolean     @default(false)
   /// Seat map layout: stage + sections (arc / rect / ga), each linked to a ticket type.
   seatMap     Json?
@@ -265,6 +273,7 @@ model Order {
   totalCents      Int
   refundedCents   Int         @default(0)
   promoCode       String?
+  currency        String      @default("USD")
   status          OrderStatus @default(PENDING)
   provider        String // "stripe" | "mock"
   paymentRef      String?     @unique
