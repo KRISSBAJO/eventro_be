@@ -387,3 +387,19 @@ model MediaUpload {
 
   @@index([userId])
 }
+
+/// People who asked for drops and presales by email. `token` is the secret in their preferences/unsubscribe link.
+model Subscriber {
+  id             String    @id @default(cuid())
+  email          String    @unique
+  token          String    @unique
+  source         String    @default("footer") // where they signed up: footer, newsletter page…
+  interests      String[]  @default([]) // event categories; empty means everything
+  city           String? // city slug, for local drops
+  clientIp       String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  unsubscribedAt DateTime?
+
+  @@index([clientIp, createdAt])
+}

@@ -156,6 +156,7 @@ All routes are under `/api/v1`. Send `Authorization: Bearer <token>` from `/auth
 | Browse | `GET /events?q&category&city&from&to&maxPrice&sort&page`, `GET /events/:slug`, `GET /events/:slug/availability?qty`, `GET /events/:slug/sections/:id/seats`, `GET /venues`, `GET /venues/:slug` |
 | Checkout | `POST /holds`, `GET /holds/:id`, `DELETE /holds/:id`, `POST /quote`, `POST /orders`, `GET /orders/:id`, `POST /orders/:id/pay` (mock), `POST /orders/:id/verify` (Paystack), `POST /orders/:id/refund-requests`, `POST /webhooks/stripe`, `POST /webhooks/paystack` |
 | Places & money | `GET /geo/countries`, `GET /geo/countries/:code/regions`, `GET /geo/search?q&country`, `GET /geo/timezone?lat&lng`, `GET /geo/me`, `GET /geo/currencies`, `GET /fx/rates` |
+| Newsletter | `POST /newsletter` (sign up; returns a private preferences token only when it creates or reopens the subscription), `GET/PATCH/DELETE /newsletter/:token` (preferences and unsubscribe). Limited to 20 sign-ups per IP per hour. |
 | Tickets | `GET /me/tickets`, `GET /tickets/:id/qr`, `POST/DELETE /tickets/:id/transfer`, `POST /tickets/:id/accept`, `POST/DELETE /tickets/:id/listing` |
 | Media | `GET /media/config`, `POST /media/uploads`, `PUT /media/uploads/:id`, `POST /media/uploads/:id/complete`, `GET /media/uploads/:id`, `PUT /organizer/events/:id/media` |
 | Organizer | `POST/GET /organizer/orgs`, `PATCH /organizer/orgs/:orgId`, `GET …/orders/recent`, team `GET/POST /organizer/orgs/:orgId/team`, `PATCH/DELETE …/team/:memberId`, `POST /organizer/invites/accept`, payouts `GET /organizer/orgs/:orgId/payouts`, `PUT …/payout-settings`, `POST …/payouts/onboarding` |
@@ -167,7 +168,7 @@ Team roles: **ADMIN** (everything, including payouts and team), **MANAGER** (eve
 ## Not done yet
 
 - **Card payments in the browser:** with Stripe keys set, `POST /orders` returns a PaymentIntent, but the website doesn't load Stripe's card form yet, so it only completes test-mode (mock) payments today.
-- **Email** (receipts, transfer invites, password reset).
+- **Email** (receipts, transfer invites, password reset, and the newsletter itself: sign-ups and preferences are stored, but nothing sends the emails yet).
 - **Rate limiting** on auth and checkout. Put it behind a gateway, or add `@nestjs/throttler`.
 - **Resale purchases:** listing works, but buying a listed ticket doesn't yet.
 - **Cancelling a whole event** with bulk refunds.

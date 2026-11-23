@@ -16,6 +16,7 @@ import { AdminModule } from './admin/admin.module';
 import { MediaModule } from './media/media.module';
 import { GeoModule } from './geo/geo.module';
 import { FxModule } from './fx/fx.module';
+import { NewsletterModule } from './newsletter/newsletter.module';
 import { Payments } from './checkout/payments';
 
 @ApiTags('health')
@@ -52,6 +53,7 @@ class CoreModule {}
     MediaModule,
     GeoModule,
     FxModule,
+    NewsletterModule,
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_GUARD, useClass: AuthGuard }],
