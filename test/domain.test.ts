@@ -64,6 +64,31 @@ test('seat map: rejects bad input with readable errors', () => {
   assert.equal(validateSeatMap(null, new Set()).ok, false);
 });
 
+test('seat map: keeps rink surface, lounges and levels; rejects bad ones', () => {
+  const base = {
+    version: 1,
+    width: 1200,
+    height: 760,
+    stage: { x: 370, y: 270, w: 460, h: 220, label: 'RINK', kind: 'rink' },
+    areas: [{ id: 'LX', label: 'Lexus Lounge', kind: 'lounge', geometry: { x: 10, y: 10, w: 100, h: 40 }, extra: 'dropped' }],
+    sections: [{ id: '104', label: '104', level: 'Lower Level', ticketTypeId: 't', shape: 'rect', seating: 'reserved', rows: 4, seatsPerRow: 10, geometry: { x: 0, y: 0, w: 100, h: 50 } }],
+  };
+  const ok = validateSeatMap(base, new Set(['t']));
+  assert.equal(ok.ok, true);
+  const map = (ok as { map: { stage?: { kind?: string }; areas?: unknown[]; sections: { level?: string }[] } }).map;
+  assert.equal(map.stage?.kind, 'rink');
+  assert.deepEqual(map.areas, [{ id: 'LX', label: 'Lexus Lounge', kind: 'lounge', geometry: { x: 10, y: 10, w: 100, h: 40 } }]);
+  assert.equal(map.sections[0].level, 'Lower Level');
+
+  const bad = validateSeatMap({ ...base, stage: { ...base.stage, kind: 'pool' }, areas: [{ id: 'LX', label: '', kind: 'spa', geometry: { x: 0, y: 0, w: 0, h: 5 } }] }, new Set(['t']));
+  assert.equal(bad.ok, false);
+  const errors = (bad as { errors: string[] }).errors.join('\n');
+  assert.match(errors, /stage: kind must be one of/);
+  assert.match(errors, /area 1: label is required/);
+  assert.match(errors, /area 1: kind must be one of/);
+  assert.match(errors, /area 1: width and height must be positive/);
+});
+
 test('seats: rows are labelled A..Z then AA', () => {
   assert.equal(rowLabel(0), 'A');
   assert.equal(rowLabel(25), 'Z');

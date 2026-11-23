@@ -77,6 +77,9 @@ Fulfilment can safely run more than once. If a hold expired during payment and t
 
 - `shape`: `arc` (cx, cy, inner radius r0, outer radius r1, angles a0→a1 in degrees, 0° = right, clockwise) or `rect` (x, y, w, h, optional rotation).
 - `seating`: `reserved` (rows 1–200 × seatsPerRow 1–200; rows are labelled A, B, … Z, AA) or `ga` (capacity).
+- `level` (optional, per section): shown to fans as "Lower Level 104".
+- `stage.kind` (optional): `stage`, `rink`, `court` or `field`. The website draws the markings.
+- `areas` (optional, up to 100): places that can't be bought, `{ id, label, kind: lounge | bar | entrance | other, geometry: rect }`.
 - Saving a map **sets each linked ticket type's capacity** to the total of its sections. It's refused if that would be fewer than already sold, or if it removes a section that has sold seats.
 - `POST /organizer/events/:id/seat-map/template` with `{ "template": "arena", "floor", "lower", "upper" }` (ticket type ids) creates a full arena: stage, floor, 6 lower and 8 upper sections.
 - `GET /events/:slug` returns the map with an `available` count on every section, so the website can shade sections and show "12 left".

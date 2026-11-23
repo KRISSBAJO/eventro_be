@@ -18,14 +18,26 @@ export type Section = {
   rows?: number;
   seatsPerRow?: number;
   capacity?: number;
+  /** Seating level shown to fans, e.g. "Lower Level". */
+  level?: string;
   geometry: ArcGeometry | RectGeometry;
 };
+
+/** What sits in the middle of the venue. Drawn with its markings; never for sale. */
+export type SurfaceKind = 'stage' | 'rink' | 'court' | 'field';
+const SURFACE_KINDS: SurfaceKind[] = ['stage', 'rink', 'court', 'field'];
+
+/** Places on the map that can't be bought: lounges, bars, entrances, sound desks. */
+export type AreaKind = 'lounge' | 'bar' | 'entrance' | 'other';
+const AREA_KINDS: AreaKind[] = ['lounge', 'bar', 'entrance', 'other'];
+export type Area = { id: string; label: string; kind: AreaKind; geometry: RectGeometry };
 
 export type SeatMap = {
   version: 1;
   width: number;
   height: number;
-  stage?: RectGeometry & { label?: string };
+  stage?: RectGeometry & { label?: string; kind?: SurfaceKind };
+  areas?: Area[];
   sections: Section[];
 };
 
@@ -70,7 +82,37 @@ export function validateSeatMap(input: unknown, ticketTypeIds: Set<string>): Val
   if (m.stage !== undefined) {
     const s = m.stage as Record<string, unknown>;
     const r = s && typeof s === 'object' ? checkRect(s, 'stage', errors) : null;
-    if (r) stage = { ...r, ...(typeof s.label === 'string' ? { label: s.label.slice(0, 24) } : {}) };
+    if (s && s.kind !== undefined && !SURFACE_KINDS.includes(s.kind as SurfaceKind)) errors.push(`stage: kind must be one of ${SURFACE_KINDS.join(', ')}`);
+    if (r)
+      stage = {
+        ...r,
+        ...(typeof s.label === 'string' ? { label: s.label.slice(0, 24) } : {}),
+        ...(SURFACE_KINDS.includes(s.kind as SurfaceKind) ? { kind: s.kind as SurfaceKind } : {}),
+      };
+  }
+
+  const areas: Area[] = [];
+  if (m.areas !== undefined) {
+    if (!Array.isArray(m.areas)) errors.push('areas must be an array');
+    else {
+      if (m.areas.length > 100) errors.push('A seat map can have at most 100 areas');
+      const seenAreas = new Set<string>();
+      m.areas.forEach((raw, i) => {
+        const where = `area ${i + 1}`;
+        if (!raw || typeof raw !== 'object') return errors.push(`${where}: must be an object`);
+        const a = raw as Record<string, unknown>;
+        const id = typeof a.id === 'string' ? a.id : '';
+        if (!/^[A-Za-z0-9_-]{1,24}$/.test(id)) errors.push(`${where}: id must be 1-24 letters, numbers, - or _`);
+        else if (seenAreas.has(id)) errors.push(`${where}: duplicate id "${id}"`);
+        seenAreas.add(id);
+        const label = typeof a.label === 'string' ? a.label.trim().slice(0, 32) : '';
+        if (!label) errors.push(`${where}: label is required`);
+        if (!AREA_KINDS.includes(a.kind as AreaKind)) errors.push(`${where}: kind must be one of ${AREA_KINDS.join(', ')}`);
+        const g = a.geometry && typeof a.geometry === 'object' ? checkRect(a.geometry as Record<string, unknown>, where, errors) : null;
+        if (!g) errors.push(`${where}: needs a rect geometry`);
+        else if (id && label) areas.push({ id, label, kind: a.kind as AreaKind, geometry: g });
+      });
+    }
   }
 
   const seen = new Set<string>();
@@ -101,6 +143,7 @@ export function validateSeatMap(input: unknown, ticketTypeIds: Set<string>): Val
         ticketTypeId: tt,
         shape: s.shape as Section['shape'],
         seating: s.seating as Section['seating'],
+        ...(typeof s.level === 'string' && s.level.trim() ? { level: s.level.trim().slice(0, 24) } : {}),
         ...(s.seating === 'reserved' ? { rows: s.rows as number, seatsPerRow: s.seatsPerRow as number } : { capacity: s.capacity as number }),
         geometry,
       });
@@ -108,7 +151,10 @@ export function validateSeatMap(input: unknown, ticketTypeIds: Set<string>): Val
   });
 
   if (errors.length) return { ok: false, errors };
-  return { ok: true, map: { version: 1, width: m.width as number, height: m.height as number, ...(stage ? { stage } : {}), sections } };
+  return {
+    ok: true,
+    map: { version: 1, width: m.width as number, height: m.height as number, ...(stage ? { stage } : {}), ...(areas.length ? { areas } : {}), sections },
+  };
 }
 
 export const sectionCapacity = (s: Section) => (s.seating === 'reserved' ? (s.rows ?? 0) * (s.seatsPerRow ?? 0) : (s.capacity ?? 0));
