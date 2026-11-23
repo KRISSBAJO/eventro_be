@@ -1,0 +1,7194 @@
+{
+ "generatedFrom": "eventro website catalog",
+ "events": [
+  {
+   "slug": "nova-hart",
+   "title": "Nova Hart",
+   "subtitle": "Neon Hearts World Tour",
+   "category": "Concerts",
+   "startsAt": "2026-12-12T20:00:00",
+   "image": "https://images.unsplash.com/photo-1470229722913-7c0e2dbbafd3?auto=format&fit=crop&w=900&q=70",
+   "about": [
+    "Nova Hart brings the Neon Hearts World Tour to Riverside Arena for one night only: a two-hour set spanning the platinum debut, the new record, and a stripped-back acoustic encore in the round.",
+    "Expect a full live band, a 360° LED stage and the kind of singalong you feel in your chest for days."
+   ],
+   "doors": "6:30 PM",
+   "venue": {
+    "slug": "riverside-arena",
+    "name": "Riverside Arena",
+    "city": "New York, NY",
+    "address": "400 Riverside Ave, New York, NY 10027",
+    "lat": 40.724720000000005,
+    "lng": -73.9986
+   },
+   "tiers": [
+    {
+     "key": "upper",
+     "name": "Upper bowl",
+     "note": "Reserved seating",
+     "priceCents": 8900,
+     "left": 640
+    },
+    {
+     "key": "lower",
+     "name": "Lower bowl",
+     "note": "Reserved, closer to the stage",
+     "priceCents": 14700,
+     "left": 180
+    },
+    {
+     "key": "floor",
+     "name": "Floor GA",
+     "note": "Standing, closest to the stage",
+     "priceCents": 18200,
+     "left": 36
+    },
+    {
+     "key": "vip",
+     "name": "VIP package",
+     "note": "Premium seat, merch bundle, early entry",
+     "priceCents": 32000,
+     "left": 9
+    }
+   ],
+   "seatMap": {
+    "version": 1,
+    "width": 1300,
+    "height": 760,
+    "stage": {
+     "x": 100,
+     "y": 250,
+     "w": 100,
+     "h": 260,
+     "label": "STAGE",
+     "kind": "stage"
+    },
+    "areas": [
+     {
+      "id": "SOUND",
+      "label": "Sound desk",
+      "kind": "other",
+      "geometry": {
+       "x": 730,
+       "y": 345,
+       "w": 80,
+       "h": 70
+      }
+     }
+    ],
+    "sections": [
+     {
+      "id": "FL",
+      "label": "Floor",
+      "ticketTypeId": "floor",
+      "shape": "rect",
+      "seating": "ga",
+      "capacity": 1800,
+      "geometry": {
+       "x": 240,
+       "y": 250,
+       "w": 450,
+       "h": 260
+      }
+     },
+     {
+      "id": "101",
+      "label": "101",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 274,
+       "y": 130,
+       "w": 102,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "102",
+      "label": "102",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 384,
+       "y": 130,
+       "w": 102,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "103",
+      "label": "103",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 494,
+       "y": 130,
+       "w": 102,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "104",
+      "label": "104",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 604,
+       "y": 130,
+       "w": 102,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "105",
+      "label": "105",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 714,
+       "y": 130,
+       "w": 102,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "106",
+      "label": "106",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 824,
+       "y": 130,
+       "w": 102,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "107",
+      "label": "107",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 930,
+       "cy": 380,
+       "r0": 170,
+       "r1": 250,
+       "a0": -89.2,
+       "a1": -45.8
+      }
+     },
+     {
+      "id": "108",
+      "label": "108",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 930,
+       "cy": 380,
+       "r0": 170,
+       "r1": 250,
+       "a0": -44.2,
+       "a1": -0.8
+      }
+     },
+     {
+      "id": "109",
+      "label": "109",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 930,
+       "cy": 380,
+       "r0": 170,
+       "r1": 250,
+       "a0": 0.8,
+       "a1": 44.2
+      }
+     },
+     {
+      "id": "110",
+      "label": "110",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 930,
+       "cy": 380,
+       "r0": 170,
+       "r1": 250,
+       "a0": 45.8,
+       "a1": 89.2
+      }
+     },
+     {
+      "id": "111",
+      "label": "111",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 824,
+       "y": 550,
+       "w": 102,
+       "h": 80
+      }
+     },
+     {
+      "id": "112",
+      "label": "112",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 714,
+       "y": 550,
+       "w": 102,
+       "h": 80
+      }
+     },
+     {
+      "id": "113",
+      "label": "113",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 604,
+       "y": 550,
+       "w": 102,
+       "h": 80
+      }
+     },
+     {
+      "id": "114",
+      "label": "114",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 494,
+       "y": 550,
+       "w": 102,
+       "h": 80
+      }
+     },
+     {
+      "id": "115",
+      "label": "115",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 384,
+       "y": 550,
+       "w": 102,
+       "h": 80
+      }
+     },
+     {
+      "id": "116",
+      "label": "116",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 274,
+       "y": 550,
+       "w": 102,
+       "h": 80
+      }
+     },
+     {
+      "id": "201",
+      "label": "201",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 274,
+       "y": 40,
+       "w": 86.29,
+       "h": 70,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "202",
+      "label": "202",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 368.29,
+       "y": 40,
+       "w": 86.29,
+       "h": 70,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "203",
+      "label": "203",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 462.57,
+       "y": 40,
+       "w": 86.29,
+       "h": 70,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "204",
+      "label": "204",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 556.86,
+       "y": 40,
+       "w": 86.29,
+       "h": 70,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "205",
+      "label": "205",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 651.14,
+       "y": 40,
+       "w": 86.29,
+       "h": 70,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "206",
+      "label": "206",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 745.43,
+       "y": 40,
+       "w": 86.29,
+       "h": 70,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "207",
+      "label": "207",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 839.71,
+       "y": 40,
+       "w": 86.29,
+       "h": 70,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "208",
+      "label": "208",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 930,
+       "cy": 380,
+       "r0": 270,
+       "r1": 340,
+       "a0": -89.2,
+       "a1": -54.8
+      }
+     },
+     {
+      "id": "209",
+      "label": "209",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 930,
+       "cy": 380,
+       "r0": 270,
+       "r1": 340,
+       "a0": -53.2,
+       "a1": -18.8
+      }
+     },
+     {
+      "id": "210",
+      "label": "210",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 930,
+       "cy": 380,
+       "r0": 270,
+       "r1": 340,
+       "a0": -17.2,
+       "a1": 17.2
+      }
+     },
+     {
+      "id": "211",
+      "label": "211",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 930,
+       "cy": 380,
+       "r0": 270,
+       "r1": 340,
+       "a0": 18.8,
+       "a1": 53.2
+      }
+     },
+     {
+      "id": "212",
+      "label": "212",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 930,
+       "cy": 380,
+       "r0": 270,
+       "r1": 340,
+       "a0": 54.8,
+       "a1": 89.2
+      }
+     },
+     {
+      "id": "213",
+      "label": "213",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 839.71,
+       "y": 650,
+       "w": 86.29,
+       "h": 70
+      }
+     },
+     {
+      "id": "214",
+      "label": "214",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 745.43,
+       "y": 650,
+       "w": 86.29,
+       "h": 70
+      }
+     },
+     {
+      "id": "215",
+      "label": "215",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 651.14,
+       "y": 650,
+       "w": 86.29,
+       "h": 70
+      }
+     },
+     {
+      "id": "216",
+      "label": "216",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 556.86,
+       "y": 650,
+       "w": 86.29,
+       "h": 70
+      }
+     },
+     {
+      "id": "217",
+      "label": "217",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 462.57,
+       "y": 650,
+       "w": 86.29,
+       "h": 70
+      }
+     },
+     {
+      "id": "218",
+      "label": "218",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 368.29,
+       "y": 650,
+       "w": 86.29,
+       "h": 70
+      }
+     },
+     {
+      "id": "219",
+      "label": "219",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 274,
+       "y": 650,
+       "w": 86.29,
+       "h": 70
+      }
+     }
+    ]
+   }
+  },
+  {
+   "slug": "harbor-derby",
+   "title": "Harbor FC vs. Kingsport",
+   "subtitle": "Premier Cup · Matchday 14",
+   "category": "Sports",
+   "startsAt": "2026-12-06T15:00:00",
+   "image": "https://images.unsplash.com/photo-1574629810360-7efbbe195018?auto=format&fit=crop&w=900&q=70",
+   "about": [
+    "The Harbor derby is back. Kingsport arrive two points clear at the top of the table, and Harbor haven’t lost at home since August. Something has to give.",
+    "Arrive early for the pre-match fan zone with live music, local food stalls and the youth academy parade."
+   ],
+   "doors": "1:30 PM",
+   "venue": {
+    "slug": "harbor-stadium",
+    "name": "Harbor Stadium",
+    "city": "London, UK",
+    "address": "Harbor Stadium, Quay Road, London E14",
+    "lat": 51.4914,
+    "lng": -0.1398
+   },
+   "tiers": [
+    {
+     "key": "upper",
+     "name": "Upper tier",
+     "note": "Full view of the action",
+     "priceCents": 5400,
+     "left": 860
+    },
+    {
+     "key": "lower",
+     "name": "Lower tier",
+     "note": "Close to the field, sideline views",
+     "priceCents": 11300,
+     "left": 214
+    },
+    {
+     "key": "club",
+     "name": "Club level",
+     "note": "Padded seats, lounge, in-seat service",
+     "priceCents": 22700,
+     "left": 28
+    }
+   ],
+   "seatMap": {
+    "version": 1,
+    "width": 1200,
+    "height": 760,
+    "stage": {
+     "x": 440,
+     "y": 290,
+     "w": 320,
+     "h": 180,
+     "label": "FIELD",
+     "kind": "field"
+    },
+    "sections": [
+     {
+      "id": "101",
+      "label": "101",
+      "ticketTypeId": "lower",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 10,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "geometry": {
+       "cx": 600,
+       "cy": 380,
+       "r0": 205,
+       "r1": 285,
+       "a0": 248.1,
+       "a1": 269.4
+      }
+     },
+     {
+      "id": "102",
+      "label": "102",
+      "ticketTypeId": "lower",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 10,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "geometry": {
+       "cx": 600,
+       "cy": 380,
+       "r0": 205,
+       "r1": 285,
+       "a0": 225.6,
+       "a1": 246.9
+      }
+     },
+     {
+      "id": "103",
+      "label": "103",
+      "ticketTypeId": "lower",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 10,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "geometry": {
+       "cx": 600,
+       "cy": 380,
+       "r0": 205,
+       "r1": 285,
+       "a0": 203.1,
+       "a1": 224.4
+      }
+     },
+     {
+      "id": "104",
+      "label": "104",
+      "ticketTypeId": "lower",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 10,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "geometry": {
+       "cx": 600,
+       "cy": 380,
+       "r0": 205,
+       "r1": 285,
+       "a0": 180.6,
+       "a1": 201.9
+      }
+     },
+     {
+      "id": "105",
+      "label": "105",
+      "ticketTypeId": "lower",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 10,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "geometry": {
+       "cx": 600,
+       "cy": 380,
+       "r0": 205,
+       "r1": 285,
+       "a0": 158.1,
+       "a1": 179.4
+      }
+     },
+     {
+      "id": "106",
+      "label": "106",
+      "ticketTypeId": "lower",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 10,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "geometry": {
+       "cx": 600,
+       "cy": 380,
+       "r0": 205,
+       "r1": 285,
+       "a0": 135.6,
+       "a1": 156.9
+      }
+     },
+     {
+      "id": "107",
+      "label": "107",
+      "ticketTypeId": "lower",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 10,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "geometry": {
+       "cx": 600,
+       "cy": 380,
+       "r0": 205,
+       "r1": 285,
+       "a0": 113.1,
+       "a1": 134.4
+      }
+     },
+     {
+      "id": "108",
+      "label": "108",
+      "ticketTypeId": "lower",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 10,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "geometry": {
+       "cx": 600,
+       "cy": 380,
+       "r0": 205,
+       "r1": 285,
+       "a0": 90.6,
+       "a1": 111.9
+      }
+     },
+     {
+      "id": "109",
+      "label": "109",
+      "ticketTypeId": "lower",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 10,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "geometry": {
+       "cx": 600,
+       "cy": 380,
+       "r0": 205,
+       "r1": 285,
+       "a0": 68.1,
+       "a1": 89.4
+      }
+     },
+     {
+      "id": "110",
+      "label": "110",
+      "ticketTypeId": "lower",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 10,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "geometry": {
+       "cx": 600,
+       "cy": 380,
+       "r0": 205,
+       "r1": 285,
+       "a0": 45.6,
+       "a1": 66.9
+      }
+     },
+     {
+      "id": "111",
+      "label": "111",
+      "ticketTypeId": "lower",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 10,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "geometry": {
+       "cx": 600,
+       "cy": 380,
+       "r0": 205,
+       "r1": 285,
+       "a0": 23.1,
+       "a1": 44.4
+      }
+     },
+     {
+      "id": "112",
+      "label": "112",
+      "ticketTypeId": "lower",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 10,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "geometry": {
+       "cx": 600,
+       "cy": 380,
+       "r0": 205,
+       "r1": 285,
+       "a0": 0.6,
+       "a1": 21.9
+      }
+     },
+     {
+      "id": "113",
+      "label": "113",
+      "ticketTypeId": "lower",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 10,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "geometry": {
+       "cx": 600,
+       "cy": 380,
+       "r0": 205,
+       "r1": 285,
+       "a0": -21.9,
+       "a1": -0.6
+      }
+     },
+     {
+      "id": "114",
+      "label": "114",
+      "ticketTypeId": "lower",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 10,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "geometry": {
+       "cx": 600,
+       "cy": 380,
+       "r0": 205,
+       "r1": 285,
+       "a0": -44.4,
+       "a1": -23.1
+      }
+     },
+     {
+      "id": "115",
+      "label": "115",
+      "ticketTypeId": "lower",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 10,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "geometry": {
+       "cx": 600,
+       "cy": 380,
+       "r0": 205,
+       "r1": 285,
+       "a0": -66.9,
+       "a1": -45.6
+      }
+     },
+     {
+      "id": "116",
+      "label": "116",
+      "ticketTypeId": "lower",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 10,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "geometry": {
+       "cx": 600,
+       "cy": 380,
+       "r0": 205,
+       "r1": 285,
+       "a0": -89.4,
+       "a1": -68.1
+      }
+     },
+     {
+      "id": "201",
+      "label": "201",
+      "ticketTypeId": "upper",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 9,
+      "seatsPerRow": 20,
+      "level": "Upper Level",
+      "geometry": {
+       "cx": 600,
+       "cy": 380,
+       "r0": 300,
+       "r1": 370,
+       "a0": 252.5,
+       "a1": 269.5
+      }
+     },
+     {
+      "id": "202",
+      "label": "202",
+      "ticketTypeId": "upper",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 9,
+      "seatsPerRow": 20,
+      "level": "Upper Level",
+      "geometry": {
+       "cx": 600,
+       "cy": 380,
+       "r0": 300,
+       "r1": 370,
+       "a0": 234.5,
+       "a1": 251.5
+      }
+     },
+     {
+      "id": "203",
+      "label": "203",
+      "ticketTypeId": "upper",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 9,
+      "seatsPerRow": 20,
+      "level": "Upper Level",
+      "geometry": {
+       "cx": 600,
+       "cy": 380,
+       "r0": 300,
+       "r1": 370,
+       "a0": 216.5,
+       "a1": 233.5
+      }
+     },
+     {
+      "id": "204",
+      "label": "204",
+      "ticketTypeId": "upper",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 9,
+      "seatsPerRow": 20,
+      "level": "Upper Level",
+      "geometry": {
+       "cx": 600,
+       "cy": 380,
+       "r0": 300,
+       "r1": 370,
+       "a0": 198.5,
+       "a1": 215.5
+      }
+     },
+     {
+      "id": "205",
+      "label": "205",
+      "ticketTypeId": "upper",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 9,
+      "seatsPerRow": 20,
+      "level": "Upper Level",
+      "geometry": {
+       "cx": 600,
+       "cy": 380,
+       "r0": 300,
+       "r1": 370,
+       "a0": 180.5,
+       "a1": 197.5
+      }
+     },
+     {
+      "id": "206",
+      "label": "206",
+      "ticketTypeId": "upper",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 9,
+      "seatsPerRow": 20,
+      "level": "Upper Level",
+      "geometry": {
+       "cx": 600,
+       "cy": 380,
+       "r0": 300,
+       "r1": 370,
+       "a0": 162.5,
+       "a1": 179.5
+      }
+     },
+     {
+      "id": "207",
+      "label": "207",
+      "ticketTypeId": "upper",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 9,
+      "seatsPerRow": 20,
+      "level": "Upper Level",
+      "geometry": {
+       "cx": 600,
+       "cy": 380,
+       "r0": 300,
+       "r1": 370,
+       "a0": 144.5,
+       "a1": 161.5
+      }
+     },
+     {
+      "id": "208",
+      "label": "208",
+      "ticketTypeId": "upper",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 9,
+      "seatsPerRow": 20,
+      "level": "Upper Level",
+      "geometry": {
+       "cx": 600,
+       "cy": 380,
+       "r0": 300,
+       "r1": 370,
+       "a0": 126.5,
+       "a1": 143.5
+      }
+     },
+     {
+      "id": "209",
+      "label": "209",
+      "ticketTypeId": "upper",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 9,
+      "seatsPerRow": 20,
+      "level": "Upper Level",
+      "geometry": {
+       "cx": 600,
+       "cy": 380,
+       "r0": 300,
+       "r1": 370,
+       "a0": 108.5,
+       "a1": 125.5
+      }
+     },
+     {
+      "id": "210",
+      "label": "210",
+      "ticketTypeId": "upper",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 9,
+      "seatsPerRow": 20,
+      "level": "Upper Level",
+      "geometry": {
+       "cx": 600,
+       "cy": 380,
+       "r0": 300,
+       "r1": 370,
+       "a0": 90.5,
+       "a1": 107.5
+      }
+     },
+     {
+      "id": "211",
+      "label": "211",
+      "ticketTypeId": "upper",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 9,
+      "seatsPerRow": 20,
+      "level": "Upper Level",
+      "geometry": {
+       "cx": 600,
+       "cy": 380,
+       "r0": 300,
+       "r1": 370,
+       "a0": 72.5,
+       "a1": 89.5
+      }
+     },
+     {
+      "id": "212",
+      "label": "212",
+      "ticketTypeId": "upper",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 9,
+      "seatsPerRow": 20,
+      "level": "Upper Level",
+      "geometry": {
+       "cx": 600,
+       "cy": 380,
+       "r0": 300,
+       "r1": 370,
+       "a0": 54.5,
+       "a1": 71.5
+      }
+     },
+     {
+      "id": "213",
+      "label": "213",
+      "ticketTypeId": "upper",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 9,
+      "seatsPerRow": 20,
+      "level": "Upper Level",
+      "geometry": {
+       "cx": 600,
+       "cy": 380,
+       "r0": 300,
+       "r1": 370,
+       "a0": 36.5,
+       "a1": 53.5
+      }
+     },
+     {
+      "id": "214",
+      "label": "214",
+      "ticketTypeId": "upper",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 9,
+      "seatsPerRow": 20,
+      "level": "Upper Level",
+      "geometry": {
+       "cx": 600,
+       "cy": 380,
+       "r0": 300,
+       "r1": 370,
+       "a0": 18.5,
+       "a1": 35.5
+      }
+     },
+     {
+      "id": "215",
+      "label": "215",
+      "ticketTypeId": "upper",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 9,
+      "seatsPerRow": 20,
+      "level": "Upper Level",
+      "geometry": {
+       "cx": 600,
+       "cy": 380,
+       "r0": 300,
+       "r1": 370,
+       "a0": 0.5,
+       "a1": 17.5
+      }
+     },
+     {
+      "id": "216",
+      "label": "216",
+      "ticketTypeId": "upper",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 9,
+      "seatsPerRow": 20,
+      "level": "Upper Level",
+      "geometry": {
+       "cx": 600,
+       "cy": 380,
+       "r0": 300,
+       "r1": 370,
+       "a0": -17.5,
+       "a1": -0.5
+      }
+     },
+     {
+      "id": "217",
+      "label": "217",
+      "ticketTypeId": "upper",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 9,
+      "seatsPerRow": 20,
+      "level": "Upper Level",
+      "geometry": {
+       "cx": 600,
+       "cy": 380,
+       "r0": 300,
+       "r1": 370,
+       "a0": -35.5,
+       "a1": -18.5
+      }
+     },
+     {
+      "id": "218",
+      "label": "218",
+      "ticketTypeId": "upper",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 9,
+      "seatsPerRow": 20,
+      "level": "Upper Level",
+      "geometry": {
+       "cx": 600,
+       "cy": 380,
+       "r0": 300,
+       "r1": 370,
+       "a0": -53.5,
+       "a1": -36.5
+      }
+     },
+     {
+      "id": "219",
+      "label": "219",
+      "ticketTypeId": "upper",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 9,
+      "seatsPerRow": 20,
+      "level": "Upper Level",
+      "geometry": {
+       "cx": 600,
+       "cy": 380,
+       "r0": 300,
+       "r1": 370,
+       "a0": -71.5,
+       "a1": -54.5
+      }
+     },
+     {
+      "id": "220",
+      "label": "220",
+      "ticketTypeId": "upper",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 9,
+      "seatsPerRow": 20,
+      "level": "Upper Level",
+      "geometry": {
+       "cx": 600,
+       "cy": 380,
+       "r0": 300,
+       "r1": 370,
+       "a0": -89.5,
+       "a1": -72.5
+      }
+     }
+    ]
+   }
+  },
+  {
+   "slug": "solstice",
+   "title": "Solstice Festival",
+   "subtitle": "3 days · 60+ artists",
+   "category": "Festivals",
+   "startsAt": "2027-03-19T12:00:00",
+   "image": "https://images.unsplash.com/photo-1506157786151-b8491531f063?auto=format&fit=crop&w=900&q=70",
+   "about": [
+    "Three days, four stages and sixty-plus artists on the shore of Lake Austin. Solstice is the season opener for festival people: sunrise sets, late-night tents and a lineup that rewards wandering.",
+    "Passes cover all three days. Camping and shuttle add-ons are available at checkout."
+   ],
+   "doors": "12:00 PM daily",
+   "venue": {
+    "slug": "lakeshore-grounds",
+    "name": "Lakeshore Grounds",
+    "city": "Austin, TX",
+    "address": "Lakeshore Grounds, 2100 Lakeshore Dr, Austin, TX",
+    "lat": 30.252399999999998,
+    "lng": -97.7401
+   },
+   "tiers": [
+    {
+     "key": "ga",
+     "name": "3-Day GA",
+     "note": "All stages, all three days",
+     "priceCents": 17900,
+     "left": 1240
+    },
+    {
+     "key": "ga-plus",
+     "name": "3-Day GA+",
+     "note": "Shaded lounge, faster entry, private restrooms",
+     "priceCents": 30400,
+     "left": 310
+    },
+    {
+     "key": "vip",
+     "name": "3-Day VIP",
+     "note": "Front-of-stage viewing, artist lounge",
+     "priceCents": 57300,
+     "left": 42
+    }
+   ],
+   "seatMap": {
+    "version": 1,
+    "width": 1200,
+    "height": 760,
+    "stage": {
+     "x": 420,
+     "y": 36,
+     "w": 360,
+     "h": 100,
+     "label": "MAIN STAGE",
+     "kind": "stage"
+    },
+    "areas": [
+     {
+      "id": "FOOD",
+      "label": "Food court",
+      "kind": "bar",
+      "geometry": {
+       "x": 170,
+       "y": 640,
+       "w": 290,
+       "h": 80
+      }
+     },
+     {
+      "id": "BARS",
+      "label": "Bars",
+      "kind": "bar",
+      "geometry": {
+       "x": 480,
+       "y": 640,
+       "w": 200,
+       "h": 80
+      }
+     },
+     {
+      "id": "GATE",
+      "label": "Entrance",
+      "kind": "entrance",
+      "geometry": {
+       "x": 700,
+       "y": 640,
+       "w": 330,
+       "h": 80
+      }
+     },
+     {
+      "id": "TOWER",
+      "label": "Sound tower",
+      "kind": "other",
+      "geometry": {
+       "x": 560,
+       "y": 470,
+       "w": 80,
+       "h": 60
+      }
+     }
+    ],
+    "sections": [
+     {
+      "id": "GA",
+      "label": "Festival field",
+      "ticketTypeId": "ga",
+      "shape": "rect",
+      "seating": "ga",
+      "capacity": 6000,
+      "geometry": {
+       "x": 170,
+       "y": 160,
+       "w": 860,
+       "h": 460
+      }
+     },
+     {
+      "id": "PLUS",
+      "label": "GA+ lounge",
+      "ticketTypeId": "ga-plus",
+      "shape": "rect",
+      "seating": "ga",
+      "capacity": 800,
+      "geometry": {
+       "x": 30,
+       "y": 200,
+       "w": 120,
+       "h": 380
+      }
+     },
+     {
+      "id": "VIP",
+      "label": "VIP deck",
+      "ticketTypeId": "vip",
+      "shape": "rect",
+      "seating": "ga",
+      "capacity": 300,
+      "geometry": {
+       "x": 1050,
+       "y": 200,
+       "w": 120,
+       "h": 380
+      }
+     }
+    ]
+   }
+  },
+  {
+   "slug": "dana-okafor",
+   "title": "Dana Okafor",
+   "subtitle": "Overthinking It — Live",
+   "category": "Comedy",
+   "startsAt": "2026-12-04T21:30:00",
+   "image": "https://images.unsplash.com/photo-1585699324551-f6c309eedeca?auto=format&fit=crop&w=900&q=70",
+   "about": [
+    "Dana Okafor’s first full-length hour, about family group chats, therapy homework and the art of leaving a party without saying goodbye.",
+    "Phones are locked in pouches for the show, so the jokes stay in the room."
+   ],
+   "doors": "8:45 PM",
+   "venue": {
+    "slug": "the-velvet-room",
+    "name": "The Velvet Room",
+    "city": "Toronto, ON",
+    "address": "The Velvet Room, 88 Queen St W, Toronto, ON",
+    "lat": 43.692319999999995,
+    "lng": -79.51480000000001
+   },
+   "tiers": [
+    {
+     "key": "ga",
+     "name": "General admission",
+     "note": "First come, first seated",
+     "priceCents": 4200,
+     "left": 64
+    },
+    {
+     "key": "front",
+     "name": "Front tables",
+     "note": "Reserved, first three rows",
+     "priceCents": 6700,
+     "left": 12
+    }
+   ],
+   "seatMap": {
+    "version": 1,
+    "width": 1200,
+    "height": 760,
+    "stage": {
+     "x": 420,
+     "y": 50,
+     "w": 360,
+     "h": 90,
+     "label": "STAGE",
+     "kind": "stage"
+    },
+    "areas": [
+     {
+      "id": "BAR",
+      "label": "Bar",
+      "kind": "bar",
+      "geometry": {
+       "x": 960,
+       "y": 220,
+       "w": 160,
+       "h": 250
+      }
+     },
+     {
+      "id": "DOOR",
+      "label": "Entrance",
+      "kind": "entrance",
+      "geometry": {
+       "x": 1000,
+       "y": 560,
+       "w": 120,
+       "h": 120
+      }
+     }
+    ],
+    "sections": [
+     {
+      "id": "GA",
+      "label": "Floor",
+      "ticketTypeId": "ga",
+      "shape": "rect",
+      "seating": "ga",
+      "capacity": 900,
+      "geometry": {
+       "x": 300,
+       "y": 180,
+       "w": 600,
+       "h": 330
+      }
+     },
+     {
+      "id": "BT",
+      "label": "Bar terrace",
+      "ticketTypeId": "ga",
+      "shape": "rect",
+      "seating": "ga",
+      "capacity": 150,
+      "geometry": {
+       "x": 80,
+       "y": 220,
+       "w": 170,
+       "h": 250
+      }
+     },
+     {
+      "id": "VIP",
+      "label": "VIP balcony",
+      "ticketTypeId": "front",
+      "shape": "rect",
+      "seating": "reserved",
+      "rows": 4,
+      "seatsPerRow": 30,
+      "geometry": {
+       "x": 300,
+       "y": 560,
+       "w": 600,
+       "h": 120
+      }
+     },
+     {
+      "id": "S1",
+      "label": "Suite 1",
+      "ticketTypeId": "front",
+      "shape": "rect",
+      "seating": "ga",
+      "capacity": 12,
+      "geometry": {
+       "x": 80,
+       "y": 500,
+       "w": 170,
+       "h": 54
+      }
+     },
+     {
+      "id": "S2",
+      "label": "Suite 2",
+      "ticketTypeId": "front",
+      "shape": "rect",
+      "seating": "ga",
+      "capacity": 12,
+      "geometry": {
+       "x": 80,
+       "y": 562,
+       "w": 170,
+       "h": 54
+      }
+     },
+     {
+      "id": "S3",
+      "label": "Suite 3",
+      "ticketTypeId": "front",
+      "shape": "rect",
+      "seating": "ga",
+      "capacity": 12,
+      "geometry": {
+       "x": 80,
+       "y": 624,
+       "w": 170,
+       "h": 54
+      }
+     }
+    ]
+   }
+  },
+  {
+   "slug": "metro-hoops",
+   "title": "Metro Hawks vs. Bay Comets",
+   "subtitle": "Regular season",
+   "category": "Sports",
+   "startsAt": "2026-12-09T19:30:00",
+   "image": "https://images.unsplash.com/photo-1546519638-68e109498ffc?auto=format&fit=crop&w=900&q=70",
+   "about": [
+    "The Hawks host the Comets in a rematch of last spring’s conference semifinal. Doors open early for warm-ups and the kids’ shooting clinic."
+   ],
+   "doors": "6:00 PM",
+   "venue": {
+    "slug": "central-court",
+    "name": "Central Court",
+    "city": "Chicago, IL",
+    "address": "Central Court, 1901 W Madison St, Chicago, IL",
+    "lat": 41.90218,
+    "lng": -87.6774
+   },
+   "tiers": [
+    {
+     "key": "upper",
+     "name": "Upper tier",
+     "note": "Full view of the action",
+     "priceCents": 3800,
+     "left": 860
+    },
+    {
+     "key": "lower",
+     "name": "Lower tier",
+     "note": "Close to the field, sideline views",
+     "priceCents": 8000,
+     "left": 214
+    },
+    {
+     "key": "club",
+     "name": "Club level",
+     "note": "Padded seats, lounge, in-seat service",
+     "priceCents": 16000,
+     "left": 28
+    }
+   ],
+   "seatMap": {
+    "version": 1,
+    "width": 1200,
+    "height": 760,
+    "stage": {
+     "x": 390,
+     "y": 280,
+     "w": 420,
+     "h": 200,
+     "label": "COURT",
+     "kind": "court"
+    },
+    "areas": [
+     {
+      "id": "HOME",
+      "label": "Home bench",
+      "kind": "other",
+      "geometry": {
+       "x": 470,
+       "y": 222,
+       "w": 110,
+       "h": 30
+      }
+     },
+     {
+      "id": "AWAY",
+      "label": "Away bench",
+      "kind": "other",
+      "geometry": {
+       "x": 620,
+       "y": 222,
+       "w": 110,
+       "h": 30
+      }
+     }
+    ],
+    "sections": [
+     {
+      "id": "101",
+      "label": "101",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 404,
+       "y": 140,
+       "w": 92,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "102",
+      "label": "102",
+      "ticketTypeId": "club",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 504,
+       "y": 140,
+       "w": 92,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "103",
+      "label": "103",
+      "ticketTypeId": "club",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 604,
+       "y": 140,
+       "w": 92,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "104",
+      "label": "104",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 704,
+       "y": 140,
+       "w": 92,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "105",
+      "label": "105",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 800,
+       "cy": 380,
+       "r0": 160,
+       "r1": 240,
+       "a0": -89.2,
+       "a1": -45.8
+      }
+     },
+     {
+      "id": "106",
+      "label": "106",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 800,
+       "cy": 380,
+       "r0": 160,
+       "r1": 240,
+       "a0": -44.2,
+       "a1": -0.8
+      }
+     },
+     {
+      "id": "107",
+      "label": "107",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 800,
+       "cy": 380,
+       "r0": 160,
+       "r1": 240,
+       "a0": 0.8,
+       "a1": 44.2
+      }
+     },
+     {
+      "id": "108",
+      "label": "108",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 800,
+       "cy": 380,
+       "r0": 160,
+       "r1": 240,
+       "a0": 45.8,
+       "a1": 89.2
+      }
+     },
+     {
+      "id": "109",
+      "label": "109",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 704,
+       "y": 540,
+       "w": 92,
+       "h": 80
+      }
+     },
+     {
+      "id": "110",
+      "label": "110",
+      "ticketTypeId": "club",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 604,
+       "y": 540,
+       "w": 92,
+       "h": 80
+      }
+     },
+     {
+      "id": "111",
+      "label": "111",
+      "ticketTypeId": "club",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 504,
+       "y": 540,
+       "w": 92,
+       "h": 80
+      }
+     },
+     {
+      "id": "112",
+      "label": "112",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 404,
+       "y": 540,
+       "w": 92,
+       "h": 80
+      }
+     },
+     {
+      "id": "113",
+      "label": "113",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 400,
+       "cy": 380,
+       "r0": 160,
+       "r1": 240,
+       "a0": 90.8,
+       "a1": 134.2
+      }
+     },
+     {
+      "id": "114",
+      "label": "114",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 400,
+       "cy": 380,
+       "r0": 160,
+       "r1": 240,
+       "a0": 135.8,
+       "a1": 179.2
+      }
+     },
+     {
+      "id": "115",
+      "label": "115",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 400,
+       "cy": 380,
+       "r0": 160,
+       "r1": 240,
+       "a0": 180.8,
+       "a1": 224.2
+      }
+     },
+     {
+      "id": "116",
+      "label": "116",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 400,
+       "cy": 380,
+       "r0": 160,
+       "r1": 240,
+       "a0": 225.8,
+       "a1": 269.2
+      }
+     },
+     {
+      "id": "201",
+      "label": "201",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 404,
+       "y": 40,
+       "w": 72,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "202",
+      "label": "202",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 484,
+       "y": 40,
+       "w": 72,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "203",
+      "label": "203",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 564,
+       "y": 40,
+       "w": 72,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "204",
+      "label": "204",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 644,
+       "y": 40,
+       "w": 72,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "205",
+      "label": "205",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 724,
+       "y": 40,
+       "w": 72,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "206",
+      "label": "206",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 800,
+       "cy": 380,
+       "r0": 260,
+       "r1": 340,
+       "a0": -89.2,
+       "a1": -54.8
+      }
+     },
+     {
+      "id": "207",
+      "label": "207",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 800,
+       "cy": 380,
+       "r0": 260,
+       "r1": 340,
+       "a0": -53.2,
+       "a1": -18.8
+      }
+     },
+     {
+      "id": "208",
+      "label": "208",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 800,
+       "cy": 380,
+       "r0": 260,
+       "r1": 340,
+       "a0": -17.2,
+       "a1": 17.2
+      }
+     },
+     {
+      "id": "209",
+      "label": "209",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 800,
+       "cy": 380,
+       "r0": 260,
+       "r1": 340,
+       "a0": 18.8,
+       "a1": 53.2
+      }
+     },
+     {
+      "id": "210",
+      "label": "210",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 800,
+       "cy": 380,
+       "r0": 260,
+       "r1": 340,
+       "a0": 54.8,
+       "a1": 89.2
+      }
+     },
+     {
+      "id": "211",
+      "label": "211",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 724,
+       "y": 640,
+       "w": 72,
+       "h": 80
+      }
+     },
+     {
+      "id": "212",
+      "label": "212",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 644,
+       "y": 640,
+       "w": 72,
+       "h": 80
+      }
+     },
+     {
+      "id": "213",
+      "label": "213",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 564,
+       "y": 640,
+       "w": 72,
+       "h": 80
+      }
+     },
+     {
+      "id": "214",
+      "label": "214",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 484,
+       "y": 640,
+       "w": 72,
+       "h": 80
+      }
+     },
+     {
+      "id": "215",
+      "label": "215",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 404,
+       "y": 640,
+       "w": 72,
+       "h": 80
+      }
+     },
+     {
+      "id": "216",
+      "label": "216",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 400,
+       "cy": 380,
+       "r0": 260,
+       "r1": 340,
+       "a0": 90.8,
+       "a1": 125.2
+      }
+     },
+     {
+      "id": "217",
+      "label": "217",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 400,
+       "cy": 380,
+       "r0": 260,
+       "r1": 340,
+       "a0": 126.8,
+       "a1": 161.2
+      }
+     },
+     {
+      "id": "218",
+      "label": "218",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 400,
+       "cy": 380,
+       "r0": 260,
+       "r1": 340,
+       "a0": 162.8,
+       "a1": 197.2
+      }
+     },
+     {
+      "id": "219",
+      "label": "219",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 400,
+       "cy": 380,
+       "r0": 260,
+       "r1": 340,
+       "a0": 198.8,
+       "a1": 233.2
+      }
+     },
+     {
+      "id": "220",
+      "label": "220",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 400,
+       "cy": 380,
+       "r0": 260,
+       "r1": 340,
+       "a0": 234.8,
+       "a1": 269.2
+      }
+     }
+    ]
+   }
+  },
+  {
+   "slug": "the-lantern",
+   "title": "The Lantern",
+   "subtitle": "A new musical",
+   "category": "Theater",
+   "startsAt": "2026-12-18T19:00:00",
+   "image": "https://images.unsplash.com/photo-1503095396549-807759245b35?auto=format&fit=crop&w=900&q=70",
+   "about": [
+    "A lighthouse keeper, a storm, and a stranger who washes ashore with no memory. The Lantern is the West End’s most talked-about new musical, in its final weeks before the transfer."
+   ],
+   "doors": "6:15 PM",
+   "venue": {
+    "slug": "paramount-hall",
+    "name": "Paramount Hall",
+    "city": "London, UK",
+    "address": "Paramount Hall, 14 Strand, London WC2",
+    "lat": 51.53196,
+    "lng": -0.2152
+   },
+   "tiers": [
+    {
+     "key": "upper",
+     "name": "Upper bowl",
+     "note": "Reserved seating",
+     "priceCents": 6500,
+     "left": 640
+    },
+    {
+     "key": "lower",
+     "name": "Lower bowl",
+     "note": "Reserved, closer to the stage",
+     "priceCents": 10700,
+     "left": 180
+    },
+    {
+     "key": "floor",
+     "name": "Floor GA",
+     "note": "Standing, closest to the stage",
+     "priceCents": 13300,
+     "left": 36
+    },
+    {
+     "key": "vip",
+     "name": "VIP package",
+     "note": "Premium seat, merch bundle, early entry",
+     "priceCents": 23400,
+     "left": 9
+    }
+   ],
+   "seatMap": {
+    "version": 1,
+    "width": 1200,
+    "height": 760,
+    "stage": {
+     "x": 400,
+     "y": 40,
+     "w": 400,
+     "h": 90,
+     "label": "STAGE",
+     "kind": "stage"
+    },
+    "sections": [
+     {
+      "id": "OL",
+      "label": "Left",
+      "level": "Orchestra",
+      "ticketTypeId": "lower",
+      "shape": "rect",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 8,
+      "geometry": {
+       "x": 262,
+       "y": 196,
+       "w": 150,
+       "h": 230,
+       "rotation": -14
+      }
+     },
+     {
+      "id": "OC",
+      "label": "Centre",
+      "level": "Orchestra",
+      "ticketTypeId": "lower",
+      "shape": "rect",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 16,
+      "geometry": {
+       "x": 440,
+       "y": 180,
+       "w": 320,
+       "h": 240
+      }
+     },
+     {
+      "id": "OR",
+      "label": "Right",
+      "level": "Orchestra",
+      "ticketTypeId": "lower",
+      "shape": "rect",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 8,
+      "geometry": {
+       "x": 788,
+       "y": 196,
+       "w": 150,
+       "h": 230,
+       "rotation": 14
+      }
+     },
+     {
+      "id": "M1",
+      "label": "M1",
+      "ticketTypeId": "floor",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 8,
+      "seatsPerRow": 18,
+      "level": "Mezzanine",
+      "geometry": {
+       "cx": 600,
+       "cy": 90,
+       "r0": 400,
+       "r1": 500,
+       "a0": 122,
+       "a1": 141.2
+      }
+     },
+     {
+      "id": "M2",
+      "label": "M2",
+      "ticketTypeId": "floor",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 8,
+      "seatsPerRow": 18,
+      "level": "Mezzanine",
+      "geometry": {
+       "cx": 600,
+       "cy": 90,
+       "r0": 400,
+       "r1": 500,
+       "a0": 101.2,
+       "a1": 120.4
+      }
+     },
+     {
+      "id": "M3",
+      "label": "M3",
+      "ticketTypeId": "floor",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 8,
+      "seatsPerRow": 18,
+      "level": "Mezzanine",
+      "geometry": {
+       "cx": 600,
+       "cy": 90,
+       "r0": 400,
+       "r1": 500,
+       "a0": 80.4,
+       "a1": 99.6
+      }
+     },
+     {
+      "id": "M4",
+      "label": "M4",
+      "ticketTypeId": "floor",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 8,
+      "seatsPerRow": 18,
+      "level": "Mezzanine",
+      "geometry": {
+       "cx": 600,
+       "cy": 90,
+       "r0": 400,
+       "r1": 500,
+       "a0": 59.6,
+       "a1": 78.8
+      }
+     },
+     {
+      "id": "M5",
+      "label": "M5",
+      "ticketTypeId": "floor",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 8,
+      "seatsPerRow": 18,
+      "level": "Mezzanine",
+      "geometry": {
+       "cx": 600,
+       "cy": 90,
+       "r0": 400,
+       "r1": 500,
+       "a0": 38.8,
+       "a1": 58
+      }
+     },
+     {
+      "id": "B1",
+      "label": "B1",
+      "ticketTypeId": "upper",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 10,
+      "seatsPerRow": 22,
+      "level": "Balcony",
+      "geometry": {
+       "cx": 600,
+       "cy": 90,
+       "r0": 520,
+       "r1": 640,
+       "a0": 119.6,
+       "a1": 137.2
+      }
+     },
+     {
+      "id": "B2",
+      "label": "B2",
+      "ticketTypeId": "upper",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 10,
+      "seatsPerRow": 22,
+      "level": "Balcony",
+      "geometry": {
+       "cx": 600,
+       "cy": 90,
+       "r0": 520,
+       "r1": 640,
+       "a0": 100.4,
+       "a1": 118
+      }
+     },
+     {
+      "id": "B3",
+      "label": "B3",
+      "ticketTypeId": "upper",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 10,
+      "seatsPerRow": 22,
+      "level": "Balcony",
+      "geometry": {
+       "cx": 600,
+       "cy": 90,
+       "r0": 520,
+       "r1": 640,
+       "a0": 81.2,
+       "a1": 98.8
+      }
+     },
+     {
+      "id": "B4",
+      "label": "B4",
+      "ticketTypeId": "upper",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 10,
+      "seatsPerRow": 22,
+      "level": "Balcony",
+      "geometry": {
+       "cx": 600,
+       "cy": 90,
+       "r0": 520,
+       "r1": 640,
+       "a0": 62,
+       "a1": 79.6
+      }
+     },
+     {
+      "id": "B5",
+      "label": "B5",
+      "ticketTypeId": "upper",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 10,
+      "seatsPerRow": 22,
+      "level": "Balcony",
+      "geometry": {
+       "cx": 600,
+       "cy": 90,
+       "r0": 520,
+       "r1": 640,
+       "a0": 42.8,
+       "a1": 60.4
+      }
+     }
+    ]
+   }
+  },
+  {
+   "slug": "kairo",
+   "title": "KAIRO",
+   "subtitle": "Afterglow Club Tour",
+   "category": "Concerts",
+   "startsAt": "2026-12-27T22:00:00",
+   "image": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?auto=format&fit=crop&w=900&q=70",
+   "about": [
+    "KAIRO takes the Afterglow Club Tour home to Lagos for a late-night, lights-down warehouse set. Four hours, one room, no breaks."
+   ],
+   "doors": "9:30 PM",
+   "venue": {
+    "slug": "warehouse-9",
+    "name": "Warehouse 9",
+    "city": "Lagos, NG",
+    "address": "Warehouse 9, Ozumba Mbadiwe Ave, Victoria Island, Lagos",
+    "lat": 6.5272,
+    "lng": 3.4061
+   },
+   "tiers": [
+    {
+     "key": "upper",
+     "name": "Upper bowl",
+     "note": "Reserved seating",
+     "priceCents": 3500,
+     "left": 640
+    },
+    {
+     "key": "lower",
+     "name": "Lower bowl",
+     "note": "Reserved, closer to the stage",
+     "priceCents": 5800,
+     "left": 180
+    },
+    {
+     "key": "floor",
+     "name": "Floor GA",
+     "note": "Standing, closest to the stage",
+     "priceCents": 7200,
+     "left": 36
+    },
+    {
+     "key": "vip",
+     "name": "VIP package",
+     "note": "Premium seat, merch bundle, early entry",
+     "priceCents": 12600,
+     "left": 9
+    }
+   ],
+   "seatMap": {
+    "version": 1,
+    "width": 1300,
+    "height": 760,
+    "stage": {
+     "x": 100,
+     "y": 250,
+     "w": 100,
+     "h": 260,
+     "label": "STAGE",
+     "kind": "stage"
+    },
+    "areas": [
+     {
+      "id": "SOUND",
+      "label": "Sound desk",
+      "kind": "other",
+      "geometry": {
+       "x": 730,
+       "y": 345,
+       "w": 80,
+       "h": 70
+      }
+     }
+    ],
+    "sections": [
+     {
+      "id": "FL",
+      "label": "Floor",
+      "ticketTypeId": "floor",
+      "shape": "rect",
+      "seating": "ga",
+      "capacity": 1800,
+      "geometry": {
+       "x": 240,
+       "y": 250,
+       "w": 450,
+       "h": 260
+      }
+     },
+     {
+      "id": "101",
+      "label": "101",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 274,
+       "y": 130,
+       "w": 102,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "102",
+      "label": "102",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 384,
+       "y": 130,
+       "w": 102,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "103",
+      "label": "103",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 494,
+       "y": 130,
+       "w": 102,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "104",
+      "label": "104",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 604,
+       "y": 130,
+       "w": 102,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "105",
+      "label": "105",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 714,
+       "y": 130,
+       "w": 102,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "106",
+      "label": "106",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 824,
+       "y": 130,
+       "w": 102,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "107",
+      "label": "107",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 930,
+       "cy": 380,
+       "r0": 170,
+       "r1": 250,
+       "a0": -89.2,
+       "a1": -45.8
+      }
+     },
+     {
+      "id": "108",
+      "label": "108",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 930,
+       "cy": 380,
+       "r0": 170,
+       "r1": 250,
+       "a0": -44.2,
+       "a1": -0.8
+      }
+     },
+     {
+      "id": "109",
+      "label": "109",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 930,
+       "cy": 380,
+       "r0": 170,
+       "r1": 250,
+       "a0": 0.8,
+       "a1": 44.2
+      }
+     },
+     {
+      "id": "110",
+      "label": "110",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 930,
+       "cy": 380,
+       "r0": 170,
+       "r1": 250,
+       "a0": 45.8,
+       "a1": 89.2
+      }
+     },
+     {
+      "id": "111",
+      "label": "111",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 824,
+       "y": 550,
+       "w": 102,
+       "h": 80
+      }
+     },
+     {
+      "id": "112",
+      "label": "112",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 714,
+       "y": 550,
+       "w": 102,
+       "h": 80
+      }
+     },
+     {
+      "id": "113",
+      "label": "113",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 604,
+       "y": 550,
+       "w": 102,
+       "h": 80
+      }
+     },
+     {
+      "id": "114",
+      "label": "114",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 494,
+       "y": 550,
+       "w": 102,
+       "h": 80
+      }
+     },
+     {
+      "id": "115",
+      "label": "115",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 384,
+       "y": 550,
+       "w": 102,
+       "h": 80
+      }
+     },
+     {
+      "id": "116",
+      "label": "116",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 274,
+       "y": 550,
+       "w": 102,
+       "h": 80
+      }
+     },
+     {
+      "id": "201",
+      "label": "201",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 274,
+       "y": 40,
+       "w": 86.29,
+       "h": 70,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "202",
+      "label": "202",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 368.29,
+       "y": 40,
+       "w": 86.29,
+       "h": 70,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "203",
+      "label": "203",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 462.57,
+       "y": 40,
+       "w": 86.29,
+       "h": 70,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "204",
+      "label": "204",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 556.86,
+       "y": 40,
+       "w": 86.29,
+       "h": 70,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "205",
+      "label": "205",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 651.14,
+       "y": 40,
+       "w": 86.29,
+       "h": 70,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "206",
+      "label": "206",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 745.43,
+       "y": 40,
+       "w": 86.29,
+       "h": 70,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "207",
+      "label": "207",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 839.71,
+       "y": 40,
+       "w": 86.29,
+       "h": 70,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "208",
+      "label": "208",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 930,
+       "cy": 380,
+       "r0": 270,
+       "r1": 340,
+       "a0": -89.2,
+       "a1": -54.8
+      }
+     },
+     {
+      "id": "209",
+      "label": "209",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 930,
+       "cy": 380,
+       "r0": 270,
+       "r1": 340,
+       "a0": -53.2,
+       "a1": -18.8
+      }
+     },
+     {
+      "id": "210",
+      "label": "210",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 930,
+       "cy": 380,
+       "r0": 270,
+       "r1": 340,
+       "a0": -17.2,
+       "a1": 17.2
+      }
+     },
+     {
+      "id": "211",
+      "label": "211",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 930,
+       "cy": 380,
+       "r0": 270,
+       "r1": 340,
+       "a0": 18.8,
+       "a1": 53.2
+      }
+     },
+     {
+      "id": "212",
+      "label": "212",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 930,
+       "cy": 380,
+       "r0": 270,
+       "r1": 340,
+       "a0": 54.8,
+       "a1": 89.2
+      }
+     },
+     {
+      "id": "213",
+      "label": "213",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 839.71,
+       "y": 650,
+       "w": 86.29,
+       "h": 70
+      }
+     },
+     {
+      "id": "214",
+      "label": "214",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 745.43,
+       "y": 650,
+       "w": 86.29,
+       "h": 70
+      }
+     },
+     {
+      "id": "215",
+      "label": "215",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 651.14,
+       "y": 650,
+       "w": 86.29,
+       "h": 70
+      }
+     },
+     {
+      "id": "216",
+      "label": "216",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 556.86,
+       "y": 650,
+       "w": 86.29,
+       "h": 70
+      }
+     },
+     {
+      "id": "217",
+      "label": "217",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 462.57,
+       "y": 650,
+       "w": 86.29,
+       "h": 70
+      }
+     },
+     {
+      "id": "218",
+      "label": "218",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 368.29,
+       "y": 650,
+       "w": 86.29,
+       "h": 70
+      }
+     },
+     {
+      "id": "219",
+      "label": "219",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 274,
+       "y": 650,
+       "w": 86.29,
+       "h": 70
+      }
+     }
+    ]
+   }
+  },
+  {
+   "slug": "ice-gala",
+   "title": "Winter Ice Gala",
+   "subtitle": "Family holiday show",
+   "category": "Family",
+   "startsAt": "2026-12-21T14:00:00",
+   "image": "https://images.unsplash.com/photo-1511795409834-ef04bbd61622?auto=format&fit=crop&w=900&q=70",
+   "about": [
+    "The Winter Ice Gala turns Northgate Center into a frozen storybook, with Olympic skaters, aerialists and a snowfall finale over the rink."
+   ],
+   "doors": "1:15 PM",
+   "venue": {
+    "slug": "northgate-center",
+    "name": "Northgate Center",
+    "city": "Denver, CO",
+    "address": "Northgate Center, 500 Northgate Blvd, Denver, CO",
+    "lat": 39.76576,
+    "lng": -105.0134
+   },
+   "tiers": [
+    {
+     "key": "std",
+     "name": "Standard",
+     "note": "Reserved seating",
+     "priceCents": 2900,
+     "left": 520
+    },
+    {
+     "key": "rink",
+     "name": "Rinkside",
+     "note": "First two rows, meet the skaters",
+     "priceCents": 7500,
+     "left": 18
+    },
+    {
+     "key": "family",
+     "name": "Family 4-pack",
+     "note": "Four seats together, snacks included",
+     "priceCents": 9900,
+     "left": 90
+    }
+   ],
+   "seatMap": {
+    "version": 1,
+    "width": 1200,
+    "height": 760,
+    "stage": {
+     "x": 370,
+     "y": 270,
+     "w": 460,
+     "h": 220,
+     "label": "RINK",
+     "kind": "rink"
+    },
+    "areas": [
+     {
+      "id": "HOME",
+      "label": "Home bench",
+      "kind": "other",
+      "geometry": {
+       "x": 470,
+       "y": 222,
+       "w": 110,
+       "h": 30
+      }
+     },
+     {
+      "id": "AWAY",
+      "label": "Away bench",
+      "kind": "other",
+      "geometry": {
+       "x": 620,
+       "y": 222,
+       "w": 110,
+       "h": 30
+      }
+     }
+    ],
+    "sections": [
+     {
+      "id": "101",
+      "label": "101",
+      "ticketTypeId": "std",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 404,
+       "y": 140,
+       "w": 92,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "102",
+      "label": "102",
+      "ticketTypeId": "rink",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 504,
+       "y": 140,
+       "w": 92,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "103",
+      "label": "103",
+      "ticketTypeId": "rink",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 604,
+       "y": 140,
+       "w": 92,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "104",
+      "label": "104",
+      "ticketTypeId": "std",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 704,
+       "y": 140,
+       "w": 92,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "105",
+      "label": "105",
+      "ticketTypeId": "std",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 800,
+       "cy": 380,
+       "r0": 160,
+       "r1": 240,
+       "a0": -89.2,
+       "a1": -45.8
+      }
+     },
+     {
+      "id": "106",
+      "label": "106",
+      "ticketTypeId": "std",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 800,
+       "cy": 380,
+       "r0": 160,
+       "r1": 240,
+       "a0": -44.2,
+       "a1": -0.8
+      }
+     },
+     {
+      "id": "107",
+      "label": "107",
+      "ticketTypeId": "std",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 800,
+       "cy": 380,
+       "r0": 160,
+       "r1": 240,
+       "a0": 0.8,
+       "a1": 44.2
+      }
+     },
+     {
+      "id": "108",
+      "label": "108",
+      "ticketTypeId": "std",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 800,
+       "cy": 380,
+       "r0": 160,
+       "r1": 240,
+       "a0": 45.8,
+       "a1": 89.2
+      }
+     },
+     {
+      "id": "109",
+      "label": "109",
+      "ticketTypeId": "std",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 704,
+       "y": 540,
+       "w": 92,
+       "h": 80
+      }
+     },
+     {
+      "id": "110",
+      "label": "110",
+      "ticketTypeId": "rink",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 604,
+       "y": 540,
+       "w": 92,
+       "h": 80
+      }
+     },
+     {
+      "id": "111",
+      "label": "111",
+      "ticketTypeId": "rink",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 504,
+       "y": 540,
+       "w": 92,
+       "h": 80
+      }
+     },
+     {
+      "id": "112",
+      "label": "112",
+      "ticketTypeId": "std",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 404,
+       "y": 540,
+       "w": 92,
+       "h": 80
+      }
+     },
+     {
+      "id": "113",
+      "label": "113",
+      "ticketTypeId": "std",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 400,
+       "cy": 380,
+       "r0": 160,
+       "r1": 240,
+       "a0": 90.8,
+       "a1": 134.2
+      }
+     },
+     {
+      "id": "114",
+      "label": "114",
+      "ticketTypeId": "std",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 400,
+       "cy": 380,
+       "r0": 160,
+       "r1": 240,
+       "a0": 135.8,
+       "a1": 179.2
+      }
+     },
+     {
+      "id": "115",
+      "label": "115",
+      "ticketTypeId": "std",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 400,
+       "cy": 380,
+       "r0": 160,
+       "r1": 240,
+       "a0": 180.8,
+       "a1": 224.2
+      }
+     },
+     {
+      "id": "116",
+      "label": "116",
+      "ticketTypeId": "std",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 400,
+       "cy": 380,
+       "r0": 160,
+       "r1": 240,
+       "a0": 225.8,
+       "a1": 269.2
+      }
+     },
+     {
+      "id": "201",
+      "label": "201",
+      "ticketTypeId": "std",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 404,
+       "y": 40,
+       "w": 72,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "202",
+      "label": "202",
+      "ticketTypeId": "std",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 484,
+       "y": 40,
+       "w": 72,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "203",
+      "label": "203",
+      "ticketTypeId": "std",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 564,
+       "y": 40,
+       "w": 72,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "204",
+      "label": "204",
+      "ticketTypeId": "std",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 644,
+       "y": 40,
+       "w": 72,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "205",
+      "label": "205",
+      "ticketTypeId": "std",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 724,
+       "y": 40,
+       "w": 72,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "206",
+      "label": "206",
+      "ticketTypeId": "std",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 800,
+       "cy": 380,
+       "r0": 260,
+       "r1": 340,
+       "a0": -89.2,
+       "a1": -54.8
+      }
+     },
+     {
+      "id": "207",
+      "label": "207",
+      "ticketTypeId": "std",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 800,
+       "cy": 380,
+       "r0": 260,
+       "r1": 340,
+       "a0": -53.2,
+       "a1": -18.8
+      }
+     },
+     {
+      "id": "208",
+      "label": "208",
+      "ticketTypeId": "std",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 800,
+       "cy": 380,
+       "r0": 260,
+       "r1": 340,
+       "a0": -17.2,
+       "a1": 17.2
+      }
+     },
+     {
+      "id": "209",
+      "label": "209",
+      "ticketTypeId": "std",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 800,
+       "cy": 380,
+       "r0": 260,
+       "r1": 340,
+       "a0": 18.8,
+       "a1": 53.2
+      }
+     },
+     {
+      "id": "210",
+      "label": "210",
+      "ticketTypeId": "std",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 800,
+       "cy": 380,
+       "r0": 260,
+       "r1": 340,
+       "a0": 54.8,
+       "a1": 89.2
+      }
+     },
+     {
+      "id": "211",
+      "label": "211",
+      "ticketTypeId": "std",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 724,
+       "y": 640,
+       "w": 72,
+       "h": 80
+      }
+     },
+     {
+      "id": "212",
+      "label": "212",
+      "ticketTypeId": "std",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 644,
+       "y": 640,
+       "w": 72,
+       "h": 80
+      }
+     },
+     {
+      "id": "213",
+      "label": "213",
+      "ticketTypeId": "std",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 564,
+       "y": 640,
+       "w": 72,
+       "h": 80
+      }
+     },
+     {
+      "id": "214",
+      "label": "214",
+      "ticketTypeId": "std",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 484,
+       "y": 640,
+       "w": 72,
+       "h": 80
+      }
+     },
+     {
+      "id": "215",
+      "label": "215",
+      "ticketTypeId": "std",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 404,
+       "y": 640,
+       "w": 72,
+       "h": 80
+      }
+     },
+     {
+      "id": "216",
+      "label": "216",
+      "ticketTypeId": "std",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 400,
+       "cy": 380,
+       "r0": 260,
+       "r1": 340,
+       "a0": 90.8,
+       "a1": 125.2
+      }
+     },
+     {
+      "id": "217",
+      "label": "217",
+      "ticketTypeId": "std",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 400,
+       "cy": 380,
+       "r0": 260,
+       "r1": 340,
+       "a0": 126.8,
+       "a1": 161.2
+      }
+     },
+     {
+      "id": "218",
+      "label": "218",
+      "ticketTypeId": "std",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 400,
+       "cy": 380,
+       "r0": 260,
+       "r1": 340,
+       "a0": 162.8,
+       "a1": 197.2
+      }
+     },
+     {
+      "id": "219",
+      "label": "219",
+      "ticketTypeId": "std",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 400,
+       "cy": 380,
+       "r0": 260,
+       "r1": 340,
+       "a0": 198.8,
+       "a1": 233.2
+      }
+     },
+     {
+      "id": "220",
+      "label": "220",
+      "ticketTypeId": "std",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 400,
+       "cy": 380,
+       "r0": 260,
+       "r1": 340,
+       "a0": 234.8,
+       "a1": 269.2
+      }
+     }
+    ]
+   }
+  },
+  {
+   "slug": "the-wild-coast",
+   "title": "The Wild Coast",
+   "subtitle": "Sunset Sessions",
+   "category": "Concerts",
+   "startsAt": "2027-01-15T19:30:00",
+   "image": "https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?auto=format&fit=crop&w=900&q=70",
+   "about": [
+    "The Wild Coast close out their Sunset Sessions on the water at Pier 40: a golden-hour set built for warm evenings and slow dancing."
+   ],
+   "doors": "6:00 PM",
+   "venue": {
+    "slug": "pier-40-amphitheatre",
+    "name": "Pier 40 Amphitheatre",
+    "city": "Los Angeles, CA",
+    "address": "Pier 40 Amphitheatre, Ocean Front Walk, Los Angeles, CA",
+    "lat": 34.01964,
+    "lng": -118.38080000000001
+   },
+   "tiers": [
+    {
+     "key": "upper",
+     "name": "Upper bowl",
+     "note": "Reserved seating",
+     "priceCents": 5800,
+     "left": 640
+    },
+    {
+     "key": "lower",
+     "name": "Lower bowl",
+     "note": "Reserved, closer to the stage",
+     "priceCents": 9600,
+     "left": 180
+    },
+    {
+     "key": "floor",
+     "name": "Floor GA",
+     "note": "Standing, closest to the stage",
+     "priceCents": 11900,
+     "left": 36
+    },
+    {
+     "key": "vip",
+     "name": "VIP package",
+     "note": "Premium seat, merch bundle, early entry",
+     "priceCents": 20900,
+     "left": 9
+    }
+   ],
+   "seatMap": {
+    "version": 1,
+    "width": 1300,
+    "height": 760,
+    "stage": {
+     "x": 100,
+     "y": 250,
+     "w": 100,
+     "h": 260,
+     "label": "STAGE",
+     "kind": "stage"
+    },
+    "areas": [
+     {
+      "id": "SOUND",
+      "label": "Sound desk",
+      "kind": "other",
+      "geometry": {
+       "x": 730,
+       "y": 345,
+       "w": 80,
+       "h": 70
+      }
+     }
+    ],
+    "sections": [
+     {
+      "id": "FL",
+      "label": "Floor",
+      "ticketTypeId": "floor",
+      "shape": "rect",
+      "seating": "ga",
+      "capacity": 1800,
+      "geometry": {
+       "x": 240,
+       "y": 250,
+       "w": 450,
+       "h": 260
+      }
+     },
+     {
+      "id": "101",
+      "label": "101",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 274,
+       "y": 130,
+       "w": 102,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "102",
+      "label": "102",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 384,
+       "y": 130,
+       "w": 102,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "103",
+      "label": "103",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 494,
+       "y": 130,
+       "w": 102,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "104",
+      "label": "104",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 604,
+       "y": 130,
+       "w": 102,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "105",
+      "label": "105",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 714,
+       "y": 130,
+       "w": 102,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "106",
+      "label": "106",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 824,
+       "y": 130,
+       "w": 102,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "107",
+      "label": "107",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 930,
+       "cy": 380,
+       "r0": 170,
+       "r1": 250,
+       "a0": -89.2,
+       "a1": -45.8
+      }
+     },
+     {
+      "id": "108",
+      "label": "108",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 930,
+       "cy": 380,
+       "r0": 170,
+       "r1": 250,
+       "a0": -44.2,
+       "a1": -0.8
+      }
+     },
+     {
+      "id": "109",
+      "label": "109",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 930,
+       "cy": 380,
+       "r0": 170,
+       "r1": 250,
+       "a0": 0.8,
+       "a1": 44.2
+      }
+     },
+     {
+      "id": "110",
+      "label": "110",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 930,
+       "cy": 380,
+       "r0": 170,
+       "r1": 250,
+       "a0": 45.8,
+       "a1": 89.2
+      }
+     },
+     {
+      "id": "111",
+      "label": "111",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 824,
+       "y": 550,
+       "w": 102,
+       "h": 80
+      }
+     },
+     {
+      "id": "112",
+      "label": "112",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 714,
+       "y": 550,
+       "w": 102,
+       "h": 80
+      }
+     },
+     {
+      "id": "113",
+      "label": "113",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 604,
+       "y": 550,
+       "w": 102,
+       "h": 80
+      }
+     },
+     {
+      "id": "114",
+      "label": "114",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 494,
+       "y": 550,
+       "w": 102,
+       "h": 80
+      }
+     },
+     {
+      "id": "115",
+      "label": "115",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 384,
+       "y": 550,
+       "w": 102,
+       "h": 80
+      }
+     },
+     {
+      "id": "116",
+      "label": "116",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 274,
+       "y": 550,
+       "w": 102,
+       "h": 80
+      }
+     },
+     {
+      "id": "201",
+      "label": "201",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 274,
+       "y": 40,
+       "w": 86.29,
+       "h": 70,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "202",
+      "label": "202",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 368.29,
+       "y": 40,
+       "w": 86.29,
+       "h": 70,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "203",
+      "label": "203",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 462.57,
+       "y": 40,
+       "w": 86.29,
+       "h": 70,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "204",
+      "label": "204",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 556.86,
+       "y": 40,
+       "w": 86.29,
+       "h": 70,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "205",
+      "label": "205",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 651.14,
+       "y": 40,
+       "w": 86.29,
+       "h": 70,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "206",
+      "label": "206",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 745.43,
+       "y": 40,
+       "w": 86.29,
+       "h": 70,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "207",
+      "label": "207",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 839.71,
+       "y": 40,
+       "w": 86.29,
+       "h": 70,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "208",
+      "label": "208",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 930,
+       "cy": 380,
+       "r0": 270,
+       "r1": 340,
+       "a0": -89.2,
+       "a1": -54.8
+      }
+     },
+     {
+      "id": "209",
+      "label": "209",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 930,
+       "cy": 380,
+       "r0": 270,
+       "r1": 340,
+       "a0": -53.2,
+       "a1": -18.8
+      }
+     },
+     {
+      "id": "210",
+      "label": "210",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 930,
+       "cy": 380,
+       "r0": 270,
+       "r1": 340,
+       "a0": -17.2,
+       "a1": 17.2
+      }
+     },
+     {
+      "id": "211",
+      "label": "211",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 930,
+       "cy": 380,
+       "r0": 270,
+       "r1": 340,
+       "a0": 18.8,
+       "a1": 53.2
+      }
+     },
+     {
+      "id": "212",
+      "label": "212",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 930,
+       "cy": 380,
+       "r0": 270,
+       "r1": 340,
+       "a0": 54.8,
+       "a1": 89.2
+      }
+     },
+     {
+      "id": "213",
+      "label": "213",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 839.71,
+       "y": 650,
+       "w": 86.29,
+       "h": 70
+      }
+     },
+     {
+      "id": "214",
+      "label": "214",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 745.43,
+       "y": 650,
+       "w": 86.29,
+       "h": 70
+      }
+     },
+     {
+      "id": "215",
+      "label": "215",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 651.14,
+       "y": 650,
+       "w": 86.29,
+       "h": 70
+      }
+     },
+     {
+      "id": "216",
+      "label": "216",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 556.86,
+       "y": 650,
+       "w": 86.29,
+       "h": 70
+      }
+     },
+     {
+      "id": "217",
+      "label": "217",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 462.57,
+       "y": 650,
+       "w": 86.29,
+       "h": 70
+      }
+     },
+     {
+      "id": "218",
+      "label": "218",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 368.29,
+       "y": 650,
+       "w": 86.29,
+       "h": 70
+      }
+     },
+     {
+      "id": "219",
+      "label": "219",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 274,
+       "y": 650,
+       "w": 86.29,
+       "h": 70
+      }
+     }
+    ]
+   }
+  },
+  {
+   "slug": "eko-laughs",
+   "title": "Eko Laughs Live",
+   "subtitle": "Six comedians, one wild night",
+   "category": "Comedy",
+   "startsAt": "2026-12-19T19:30:00",
+   "image": "https://images.unsplash.com/photo-1527224538127-2104bb71c51b?auto=format&fit=crop&w=900&q=70",
+   "about": [
+    "Lagos’ biggest comedy night is back: six of the city’s sharpest stand-ups, one host who refuses to behave, and a crowd that heckles with love."
+   ],
+   "doors": "6:30 PM",
+   "venue": {
+    "slug": "lagoon-arts-theatre",
+    "name": "Lagoon Arts Theatre",
+    "city": "Lagos, NG",
+    "address": "Lagoon Arts Theatre, Awolowo Rd, Ikoyi, Lagos",
+    "lat": 6.53736,
+    "lng": 3.3546
+   },
+   "tiers": [
+    {
+     "key": "ga",
+     "name": "General admission",
+     "note": "First come, first seated",
+     "priceCents": 2400,
+     "left": 64
+    },
+    {
+     "key": "front",
+     "name": "Front tables",
+     "note": "Reserved, first three rows",
+     "priceCents": 3800,
+     "left": 12
+    }
+   ],
+   "seatMap": {
+    "version": 1,
+    "width": 1200,
+    "height": 760,
+    "stage": {
+     "x": 420,
+     "y": 50,
+     "w": 360,
+     "h": 90,
+     "label": "STAGE",
+     "kind": "stage"
+    },
+    "areas": [
+     {
+      "id": "BAR",
+      "label": "Bar",
+      "kind": "bar",
+      "geometry": {
+       "x": 960,
+       "y": 220,
+       "w": 160,
+       "h": 250
+      }
+     },
+     {
+      "id": "DOOR",
+      "label": "Entrance",
+      "kind": "entrance",
+      "geometry": {
+       "x": 1000,
+       "y": 560,
+       "w": 120,
+       "h": 120
+      }
+     }
+    ],
+    "sections": [
+     {
+      "id": "GA",
+      "label": "Floor",
+      "ticketTypeId": "ga",
+      "shape": "rect",
+      "seating": "ga",
+      "capacity": 900,
+      "geometry": {
+       "x": 300,
+       "y": 180,
+       "w": 600,
+       "h": 330
+      }
+     },
+     {
+      "id": "BT",
+      "label": "Bar terrace",
+      "ticketTypeId": "ga",
+      "shape": "rect",
+      "seating": "ga",
+      "capacity": 150,
+      "geometry": {
+       "x": 80,
+       "y": 220,
+       "w": 170,
+       "h": 250
+      }
+     },
+     {
+      "id": "VIP",
+      "label": "VIP balcony",
+      "ticketTypeId": "front",
+      "shape": "rect",
+      "seating": "reserved",
+      "rows": 4,
+      "seatsPerRow": 30,
+      "geometry": {
+       "x": 300,
+       "y": 560,
+       "w": 600,
+       "h": 120
+      }
+     },
+     {
+      "id": "S1",
+      "label": "Suite 1",
+      "ticketTypeId": "front",
+      "shape": "rect",
+      "seating": "ga",
+      "capacity": 12,
+      "geometry": {
+       "x": 80,
+       "y": 500,
+       "w": 170,
+       "h": 54
+      }
+     },
+     {
+      "id": "S2",
+      "label": "Suite 2",
+      "ticketTypeId": "front",
+      "shape": "rect",
+      "seating": "ga",
+      "capacity": 12,
+      "geometry": {
+       "x": 80,
+       "y": 562,
+       "w": 170,
+       "h": 54
+      }
+     },
+     {
+      "id": "S3",
+      "label": "Suite 3",
+      "ticketTypeId": "front",
+      "shape": "rect",
+      "seating": "ga",
+      "capacity": 12,
+      "geometry": {
+       "x": 80,
+       "y": 624,
+       "w": 170,
+       "h": 54
+      }
+     }
+    ]
+   }
+  },
+  {
+   "slug": "midnight-orchestra",
+   "title": "The Midnight Orchestra",
+   "subtitle": "Film scores by candlelight",
+   "category": "Concerts",
+   "startsAt": "2027-01-23T20:00:00",
+   "image": "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?auto=format&fit=crop&w=900&q=70",
+   "about": [
+    "A 60-piece orchestra plays the great film scores of the last forty years, lit only by a thousand candles.",
+    "Arrive early to hear the open rehearsal in the foyer."
+   ],
+   "doors": "7:00 PM",
+   "venue": {
+    "slug": "thameside-concert-hall",
+    "name": "Thameside Concert Hall",
+    "city": "London, UK",
+    "address": "Thameside Concert Hall, 1 Riverside Walk, London SE1",
+    "lat": 51.4698,
+    "lng": -0.09839999999999999
+   },
+   "tiers": [
+    {
+     "key": "upper",
+     "name": "Upper bowl",
+     "note": "Reserved seating",
+     "priceCents": 4800,
+     "left": 640
+    },
+    {
+     "key": "lower",
+     "name": "Lower bowl",
+     "note": "Reserved, closer to the stage",
+     "priceCents": 7900,
+     "left": 180
+    },
+    {
+     "key": "floor",
+     "name": "Floor GA",
+     "note": "Standing, closest to the stage",
+     "priceCents": 9800,
+     "left": 36
+    },
+    {
+     "key": "vip",
+     "name": "VIP package",
+     "note": "Premium seat, merch bundle, early entry",
+     "priceCents": 17300,
+     "left": 9
+    }
+   ],
+   "seatMap": {
+    "version": 1,
+    "width": 1300,
+    "height": 760,
+    "stage": {
+     "x": 100,
+     "y": 250,
+     "w": 100,
+     "h": 260,
+     "label": "STAGE",
+     "kind": "stage"
+    },
+    "areas": [
+     {
+      "id": "SOUND",
+      "label": "Sound desk",
+      "kind": "other",
+      "geometry": {
+       "x": 730,
+       "y": 345,
+       "w": 80,
+       "h": 70
+      }
+     }
+    ],
+    "sections": [
+     {
+      "id": "FL",
+      "label": "Floor",
+      "ticketTypeId": "floor",
+      "shape": "rect",
+      "seating": "ga",
+      "capacity": 1800,
+      "geometry": {
+       "x": 240,
+       "y": 250,
+       "w": 450,
+       "h": 260
+      }
+     },
+     {
+      "id": "101",
+      "label": "101",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 274,
+       "y": 130,
+       "w": 102,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "102",
+      "label": "102",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 384,
+       "y": 130,
+       "w": 102,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "103",
+      "label": "103",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 494,
+       "y": 130,
+       "w": 102,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "104",
+      "label": "104",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 604,
+       "y": 130,
+       "w": 102,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "105",
+      "label": "105",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 714,
+       "y": 130,
+       "w": 102,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "106",
+      "label": "106",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 824,
+       "y": 130,
+       "w": 102,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "107",
+      "label": "107",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 930,
+       "cy": 380,
+       "r0": 170,
+       "r1": 250,
+       "a0": -89.2,
+       "a1": -45.8
+      }
+     },
+     {
+      "id": "108",
+      "label": "108",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 930,
+       "cy": 380,
+       "r0": 170,
+       "r1": 250,
+       "a0": -44.2,
+       "a1": -0.8
+      }
+     },
+     {
+      "id": "109",
+      "label": "109",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 930,
+       "cy": 380,
+       "r0": 170,
+       "r1": 250,
+       "a0": 0.8,
+       "a1": 44.2
+      }
+     },
+     {
+      "id": "110",
+      "label": "110",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 930,
+       "cy": 380,
+       "r0": 170,
+       "r1": 250,
+       "a0": 45.8,
+       "a1": 89.2
+      }
+     },
+     {
+      "id": "111",
+      "label": "111",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 824,
+       "y": 550,
+       "w": 102,
+       "h": 80
+      }
+     },
+     {
+      "id": "112",
+      "label": "112",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 714,
+       "y": 550,
+       "w": 102,
+       "h": 80
+      }
+     },
+     {
+      "id": "113",
+      "label": "113",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 604,
+       "y": 550,
+       "w": 102,
+       "h": 80
+      }
+     },
+     {
+      "id": "114",
+      "label": "114",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 494,
+       "y": 550,
+       "w": 102,
+       "h": 80
+      }
+     },
+     {
+      "id": "115",
+      "label": "115",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 384,
+       "y": 550,
+       "w": 102,
+       "h": 80
+      }
+     },
+     {
+      "id": "116",
+      "label": "116",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 20,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 274,
+       "y": 550,
+       "w": 102,
+       "h": 80
+      }
+     },
+     {
+      "id": "201",
+      "label": "201",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 274,
+       "y": 40,
+       "w": 86.29,
+       "h": 70,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "202",
+      "label": "202",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 368.29,
+       "y": 40,
+       "w": 86.29,
+       "h": 70,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "203",
+      "label": "203",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 462.57,
+       "y": 40,
+       "w": 86.29,
+       "h": 70,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "204",
+      "label": "204",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 556.86,
+       "y": 40,
+       "w": 86.29,
+       "h": 70,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "205",
+      "label": "205",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 651.14,
+       "y": 40,
+       "w": 86.29,
+       "h": 70,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "206",
+      "label": "206",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 745.43,
+       "y": 40,
+       "w": 86.29,
+       "h": 70,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "207",
+      "label": "207",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 839.71,
+       "y": 40,
+       "w": 86.29,
+       "h": 70,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "208",
+      "label": "208",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 930,
+       "cy": 380,
+       "r0": 270,
+       "r1": 340,
+       "a0": -89.2,
+       "a1": -54.8
+      }
+     },
+     {
+      "id": "209",
+      "label": "209",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 930,
+       "cy": 380,
+       "r0": 270,
+       "r1": 340,
+       "a0": -53.2,
+       "a1": -18.8
+      }
+     },
+     {
+      "id": "210",
+      "label": "210",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 930,
+       "cy": 380,
+       "r0": 270,
+       "r1": 340,
+       "a0": -17.2,
+       "a1": 17.2
+      }
+     },
+     {
+      "id": "211",
+      "label": "211",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 930,
+       "cy": 380,
+       "r0": 270,
+       "r1": 340,
+       "a0": 18.8,
+       "a1": 53.2
+      }
+     },
+     {
+      "id": "212",
+      "label": "212",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 930,
+       "cy": 380,
+       "r0": 270,
+       "r1": 340,
+       "a0": 54.8,
+       "a1": 89.2
+      }
+     },
+     {
+      "id": "213",
+      "label": "213",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 839.71,
+       "y": 650,
+       "w": 86.29,
+       "h": 70
+      }
+     },
+     {
+      "id": "214",
+      "label": "214",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 745.43,
+       "y": 650,
+       "w": 86.29,
+       "h": 70
+      }
+     },
+     {
+      "id": "215",
+      "label": "215",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 651.14,
+       "y": 650,
+       "w": 86.29,
+       "h": 70
+      }
+     },
+     {
+      "id": "216",
+      "label": "216",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 556.86,
+       "y": 650,
+       "w": 86.29,
+       "h": 70
+      }
+     },
+     {
+      "id": "217",
+      "label": "217",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 462.57,
+       "y": 650,
+       "w": 86.29,
+       "h": 70
+      }
+     },
+     {
+      "id": "218",
+      "label": "218",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 368.29,
+       "y": 650,
+       "w": 86.29,
+       "h": 70
+      }
+     },
+     {
+      "id": "219",
+      "label": "219",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 24,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 274,
+       "y": 650,
+       "w": 86.29,
+       "h": 70
+      }
+     }
+    ]
+   }
+  },
+  {
+   "slug": "austin-bolts",
+   "title": "Austin Bolts vs. Denver Peaks",
+   "subtitle": "Season opener",
+   "category": "Sports",
+   "startsAt": "2027-02-28T18:00:00",
+   "image": "https://images.unsplash.com/photo-1522778119026-d647f0596c20?auto=format&fit=crop&w=900&q=70",
+   "about": [
+    "The Bolts open the season at home against the Peaks. Expect fireworks at kickoff and a sold-out supporters’ end."
+   ],
+   "doors": "4:30 PM",
+   "venue": {
+    "slug": "riverbend-park",
+    "name": "Riverbend Park",
+    "city": "Austin, TX",
+    "address": "Riverbend Park, 3000 E Riverside Dr, Austin, TX",
+    "lat": 30.26128,
+    "lng": -97.84819999999999
+   },
+   "tiers": [
+    {
+     "key": "upper",
+     "name": "Upper tier",
+     "note": "Full view of the action",
+     "priceCents": 3200,
+     "left": 860
+    },
+    {
+     "key": "lower",
+     "name": "Lower tier",
+     "note": "Close to the field, sideline views",
+     "priceCents": 6700,
+     "left": 214
+    },
+    {
+     "key": "club",
+     "name": "Club level",
+     "note": "Padded seats, lounge, in-seat service",
+     "priceCents": 13400,
+     "left": 28
+    }
+   ],
+   "seatMap": {
+    "version": 1,
+    "width": 1200,
+    "height": 760,
+    "stage": {
+     "x": 390,
+     "y": 280,
+     "w": 420,
+     "h": 200,
+     "label": "COURT",
+     "kind": "court"
+    },
+    "areas": [
+     {
+      "id": "HOME",
+      "label": "Home bench",
+      "kind": "other",
+      "geometry": {
+       "x": 470,
+       "y": 222,
+       "w": 110,
+       "h": 30
+      }
+     },
+     {
+      "id": "AWAY",
+      "label": "Away bench",
+      "kind": "other",
+      "geometry": {
+       "x": 620,
+       "y": 222,
+       "w": 110,
+       "h": 30
+      }
+     }
+    ],
+    "sections": [
+     {
+      "id": "101",
+      "label": "101",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 404,
+       "y": 140,
+       "w": 92,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "102",
+      "label": "102",
+      "ticketTypeId": "club",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 504,
+       "y": 140,
+       "w": 92,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "103",
+      "label": "103",
+      "ticketTypeId": "club",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 604,
+       "y": 140,
+       "w": 92,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "104",
+      "label": "104",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 704,
+       "y": 140,
+       "w": 92,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "105",
+      "label": "105",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 800,
+       "cy": 380,
+       "r0": 160,
+       "r1": 240,
+       "a0": -89.2,
+       "a1": -45.8
+      }
+     },
+     {
+      "id": "106",
+      "label": "106",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 800,
+       "cy": 380,
+       "r0": 160,
+       "r1": 240,
+       "a0": -44.2,
+       "a1": -0.8
+      }
+     },
+     {
+      "id": "107",
+      "label": "107",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 800,
+       "cy": 380,
+       "r0": 160,
+       "r1": 240,
+       "a0": 0.8,
+       "a1": 44.2
+      }
+     },
+     {
+      "id": "108",
+      "label": "108",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 800,
+       "cy": 380,
+       "r0": 160,
+       "r1": 240,
+       "a0": 45.8,
+       "a1": 89.2
+      }
+     },
+     {
+      "id": "109",
+      "label": "109",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 704,
+       "y": 540,
+       "w": 92,
+       "h": 80
+      }
+     },
+     {
+      "id": "110",
+      "label": "110",
+      "ticketTypeId": "club",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 604,
+       "y": 540,
+       "w": 92,
+       "h": 80
+      }
+     },
+     {
+      "id": "111",
+      "label": "111",
+      "ticketTypeId": "club",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 504,
+       "y": 540,
+       "w": 92,
+       "h": 80
+      }
+     },
+     {
+      "id": "112",
+      "label": "112",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 404,
+       "y": 540,
+       "w": 92,
+       "h": 80
+      }
+     },
+     {
+      "id": "113",
+      "label": "113",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 400,
+       "cy": 380,
+       "r0": 160,
+       "r1": 240,
+       "a0": 90.8,
+       "a1": 134.2
+      }
+     },
+     {
+      "id": "114",
+      "label": "114",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 400,
+       "cy": 380,
+       "r0": 160,
+       "r1": 240,
+       "a0": 135.8,
+       "a1": 179.2
+      }
+     },
+     {
+      "id": "115",
+      "label": "115",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 400,
+       "cy": 380,
+       "r0": 160,
+       "r1": 240,
+       "a0": 180.8,
+       "a1": 224.2
+      }
+     },
+     {
+      "id": "116",
+      "label": "116",
+      "ticketTypeId": "lower",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 18,
+      "level": "Lower Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 400,
+       "cy": 380,
+       "r0": 160,
+       "r1": 240,
+       "a0": 225.8,
+       "a1": 269.2
+      }
+     },
+     {
+      "id": "201",
+      "label": "201",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 404,
+       "y": 40,
+       "w": 72,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "202",
+      "label": "202",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 484,
+       "y": 40,
+       "w": 72,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "203",
+      "label": "203",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 564,
+       "y": 40,
+       "w": 72,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "204",
+      "label": "204",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 644,
+       "y": 40,
+       "w": 72,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "205",
+      "label": "205",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 724,
+       "y": 40,
+       "w": 72,
+       "h": 80,
+       "rotation": 180
+      }
+     },
+     {
+      "id": "206",
+      "label": "206",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 800,
+       "cy": 380,
+       "r0": 260,
+       "r1": 340,
+       "a0": -89.2,
+       "a1": -54.8
+      }
+     },
+     {
+      "id": "207",
+      "label": "207",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 800,
+       "cy": 380,
+       "r0": 260,
+       "r1": 340,
+       "a0": -53.2,
+       "a1": -18.8
+      }
+     },
+     {
+      "id": "208",
+      "label": "208",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 800,
+       "cy": 380,
+       "r0": 260,
+       "r1": 340,
+       "a0": -17.2,
+       "a1": 17.2
+      }
+     },
+     {
+      "id": "209",
+      "label": "209",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 800,
+       "cy": 380,
+       "r0": 260,
+       "r1": 340,
+       "a0": 18.8,
+       "a1": 53.2
+      }
+     },
+     {
+      "id": "210",
+      "label": "210",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 800,
+       "cy": 380,
+       "r0": 260,
+       "r1": 340,
+       "a0": 54.8,
+       "a1": 89.2
+      }
+     },
+     {
+      "id": "211",
+      "label": "211",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 724,
+       "y": 640,
+       "w": 72,
+       "h": 80
+      }
+     },
+     {
+      "id": "212",
+      "label": "212",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 644,
+       "y": 640,
+       "w": 72,
+       "h": 80
+      }
+     },
+     {
+      "id": "213",
+      "label": "213",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 564,
+       "y": 640,
+       "w": 72,
+       "h": 80
+      }
+     },
+     {
+      "id": "214",
+      "label": "214",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 484,
+       "y": 640,
+       "w": 72,
+       "h": 80
+      }
+     },
+     {
+      "id": "215",
+      "label": "215",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "rect",
+      "geometry": {
+       "x": 404,
+       "y": 640,
+       "w": 72,
+       "h": 80
+      }
+     },
+     {
+      "id": "216",
+      "label": "216",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 400,
+       "cy": 380,
+       "r0": 260,
+       "r1": 340,
+       "a0": 90.8,
+       "a1": 125.2
+      }
+     },
+     {
+      "id": "217",
+      "label": "217",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 400,
+       "cy": 380,
+       "r0": 260,
+       "r1": 340,
+       "a0": 126.8,
+       "a1": 161.2
+      }
+     },
+     {
+      "id": "218",
+      "label": "218",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 400,
+       "cy": 380,
+       "r0": 260,
+       "r1": 340,
+       "a0": 162.8,
+       "a1": 197.2
+      }
+     },
+     {
+      "id": "219",
+      "label": "219",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 400,
+       "cy": 380,
+       "r0": 260,
+       "r1": 340,
+       "a0": 198.8,
+       "a1": 233.2
+      }
+     },
+     {
+      "id": "220",
+      "label": "220",
+      "ticketTypeId": "upper",
+      "seating": "reserved",
+      "rows": 12,
+      "seatsPerRow": 22,
+      "level": "Upper Level",
+      "shape": "arc",
+      "geometry": {
+       "cx": 400,
+       "cy": 380,
+       "r0": 260,
+       "r1": 340,
+       "a0": 234.8,
+       "a1": 269.2
+      }
+     }
+    ]
+   }
+  },
+  {
+   "slug": "northern-lights-film",
+   "title": "Northern Lights Film Festival",
+   "subtitle": "10 days · 120 films",
+   "category": "Festivals",
+   "startsAt": "2027-04-08T17:00:00",
+   "image": "https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?auto=format&fit=crop&w=900&q=70",
+   "about": [
+    "Ten days of premieres, director Q&As and late-night midnight madness screenings on Toronto’s waterfront.",
+    "Festival passes include every regular screening; galas need a separate ticket."
+   ],
+   "doors": "4:30 PM daily",
+   "venue": {
+    "slug": "harbourfront-cinemas",
+    "name": "Harbourfront Cinemas",
+    "city": "Toronto, ON",
+    "address": "Harbourfront Cinemas, 235 Queens Quay W, Toronto, ON",
+    "lat": 43.64544,
+    "lng": -79.491
+   },
+   "tiers": [
+    {
+     "key": "ga",
+     "name": "3-Day GA",
+     "note": "All stages, all three days",
+     "priceCents": 7900,
+     "left": 1240
+    },
+    {
+     "key": "ga-plus",
+     "name": "3-Day GA+",
+     "note": "Shaded lounge, faster entry, private restrooms",
+     "priceCents": 13400,
+     "left": 310
+    },
+    {
+     "key": "vip",
+     "name": "3-Day VIP",
+     "note": "Front-of-stage viewing, artist lounge",
+     "priceCents": 25300,
+     "left": 42
+    }
+   ],
+   "seatMap": {
+    "version": 1,
+    "width": 1200,
+    "height": 760,
+    "stage": {
+     "x": 420,
+     "y": 36,
+     "w": 360,
+     "h": 100,
+     "label": "MAIN STAGE",
+     "kind": "stage"
+    },
+    "areas": [
+     {
+      "id": "FOOD",
+      "label": "Food court",
+      "kind": "bar",
+      "geometry": {
+       "x": 170,
+       "y": 640,
+       "w": 290,
+       "h": 80
+      }
+     },
+     {
+      "id": "BARS",
+      "label": "Bars",
+      "kind": "bar",
+      "geometry": {
+       "x": 480,
+       "y": 640,
+       "w": 200,
+       "h": 80
+      }
+     },
+     {
+      "id": "GATE",
+      "label": "Entrance",
+      "kind": "entrance",
+      "geometry": {
+       "x": 700,
+       "y": 640,
+       "w": 330,
+       "h": 80
+      }
+     },
+     {
+      "id": "TOWER",
+      "label": "Sound tower",
+      "kind": "other",
+      "geometry": {
+       "x": 560,
+       "y": 470,
+       "w": 80,
+       "h": 60
+      }
+     }
+    ],
+    "sections": [
+     {
+      "id": "GA",
+      "label": "Festival field",
+      "ticketTypeId": "ga",
+      "shape": "rect",
+      "seating": "ga",
+      "capacity": 6000,
+      "geometry": {
+       "x": 170,
+       "y": 160,
+       "w": 860,
+       "h": 460
+      }
+     },
+     {
+      "id": "PLUS",
+      "label": "GA+ lounge",
+      "ticketTypeId": "ga-plus",
+      "shape": "rect",
+      "seating": "ga",
+      "capacity": 800,
+      "geometry": {
+       "x": 30,
+       "y": 200,
+       "w": 120,
+       "h": 380
+      }
+     },
+     {
+      "id": "VIP",
+      "label": "VIP deck",
+      "ticketTypeId": "vip",
+      "shape": "rect",
+      "seating": "ga",
+      "capacity": 300,
+      "geometry": {
+       "x": 1050,
+       "y": 200,
+       "w": 120,
+       "h": 380
+      }
+     }
+    ]
+   }
+  },
+  {
+   "slug": "hall-of-mirrors",
+   "title": "Hall of Mirrors",
+   "subtitle": "A magic show for the whole family",
+   "category": "Family",
+   "startsAt": "2026-12-29T13:00:00",
+   "image": "https://images.unsplash.com/photo-1460723237483-7a6dc9d0b212?auto=format&fit=crop&w=900&q=70",
+   "about": [
+    "Illusionist Theo Marsh turns Liberty Playhouse into a hall of mirrors: disappearing acts, mind reading, and a finale that has kids talking for weeks."
+   ],
+   "doors": "12:30 PM",
+   "venue": {
+    "slug": "liberty-playhouse",
+    "name": "Liberty Playhouse",
+    "city": "New York, NY",
+    "address": "Liberty Playhouse, 220 W 44th St, New York, NY",
+    "lat": 40.69248,
+    "lng": -74.1439
+   },
+   "tiers": [
+    {
+     "key": "std",
+     "name": "Standard",
+     "note": "Reserved seating",
+     "priceCents": 3900,
+     "left": 520
+    },
+    {
+     "key": "rink",
+     "name": "Rinkside",
+     "note": "First two rows, meet the skaters",
+     "priceCents": 10100,
+     "left": 18
+    },
+    {
+     "key": "family",
+     "name": "Family 4-pack",
+     "note": "Four seats together, snacks included",
+     "priceCents": 13300,
+     "left": 90
+    }
+   ],
+   "seatMap": {
+    "version": 1,
+    "width": 1200,
+    "height": 760,
+    "stage": {
+     "x": 400,
+     "y": 40,
+     "w": 400,
+     "h": 90,
+     "label": "STAGE",
+     "kind": "stage"
+    },
+    "sections": [
+     {
+      "id": "OL",
+      "label": "Left",
+      "level": "Orchestra",
+      "ticketTypeId": "rink",
+      "shape": "rect",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 8,
+      "geometry": {
+       "x": 262,
+       "y": 196,
+       "w": 150,
+       "h": 230,
+       "rotation": -14
+      }
+     },
+     {
+      "id": "OC",
+      "label": "Centre",
+      "level": "Orchestra",
+      "ticketTypeId": "rink",
+      "shape": "rect",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 16,
+      "geometry": {
+       "x": 440,
+       "y": 180,
+       "w": 320,
+       "h": 240
+      }
+     },
+     {
+      "id": "OR",
+      "label": "Right",
+      "level": "Orchestra",
+      "ticketTypeId": "rink",
+      "shape": "rect",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 8,
+      "geometry": {
+       "x": 788,
+       "y": 196,
+       "w": 150,
+       "h": 230,
+       "rotation": 14
+      }
+     },
+     {
+      "id": "M1",
+      "label": "M1",
+      "ticketTypeId": "std",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 8,
+      "seatsPerRow": 18,
+      "level": "Mezzanine",
+      "geometry": {
+       "cx": 600,
+       "cy": 90,
+       "r0": 400,
+       "r1": 500,
+       "a0": 122,
+       "a1": 141.2
+      }
+     },
+     {
+      "id": "M2",
+      "label": "M2",
+      "ticketTypeId": "std",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 8,
+      "seatsPerRow": 18,
+      "level": "Mezzanine",
+      "geometry": {
+       "cx": 600,
+       "cy": 90,
+       "r0": 400,
+       "r1": 500,
+       "a0": 101.2,
+       "a1": 120.4
+      }
+     },
+     {
+      "id": "M3",
+      "label": "M3",
+      "ticketTypeId": "std",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 8,
+      "seatsPerRow": 18,
+      "level": "Mezzanine",
+      "geometry": {
+       "cx": 600,
+       "cy": 90,
+       "r0": 400,
+       "r1": 500,
+       "a0": 80.4,
+       "a1": 99.6
+      }
+     },
+     {
+      "id": "M4",
+      "label": "M4",
+      "ticketTypeId": "std",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 8,
+      "seatsPerRow": 18,
+      "level": "Mezzanine",
+      "geometry": {
+       "cx": 600,
+       "cy": 90,
+       "r0": 400,
+       "r1": 500,
+       "a0": 59.6,
+       "a1": 78.8
+      }
+     },
+     {
+      "id": "M5",
+      "label": "M5",
+      "ticketTypeId": "std",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 8,
+      "seatsPerRow": 18,
+      "level": "Mezzanine",
+      "geometry": {
+       "cx": 600,
+       "cy": 90,
+       "r0": 400,
+       "r1": 500,
+       "a0": 38.8,
+       "a1": 58
+      }
+     },
+     {
+      "id": "B1",
+      "label": "B1",
+      "ticketTypeId": "rink",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 10,
+      "seatsPerRow": 22,
+      "level": "Balcony",
+      "geometry": {
+       "cx": 600,
+       "cy": 90,
+       "r0": 520,
+       "r1": 640,
+       "a0": 119.6,
+       "a1": 137.2
+      }
+     },
+     {
+      "id": "B2",
+      "label": "B2",
+      "ticketTypeId": "rink",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 10,
+      "seatsPerRow": 22,
+      "level": "Balcony",
+      "geometry": {
+       "cx": 600,
+       "cy": 90,
+       "r0": 520,
+       "r1": 640,
+       "a0": 100.4,
+       "a1": 118
+      }
+     },
+     {
+      "id": "B3",
+      "label": "B3",
+      "ticketTypeId": "rink",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 10,
+      "seatsPerRow": 22,
+      "level": "Balcony",
+      "geometry": {
+       "cx": 600,
+       "cy": 90,
+       "r0": 520,
+       "r1": 640,
+       "a0": 81.2,
+       "a1": 98.8
+      }
+     },
+     {
+      "id": "B4",
+      "label": "B4",
+      "ticketTypeId": "rink",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 10,
+      "seatsPerRow": 22,
+      "level": "Balcony",
+      "geometry": {
+       "cx": 600,
+       "cy": 90,
+       "r0": 520,
+       "r1": 640,
+       "a0": 62,
+       "a1": 79.6
+      }
+     },
+     {
+      "id": "B5",
+      "label": "B5",
+      "ticketTypeId": "rink",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 10,
+      "seatsPerRow": 22,
+      "level": "Balcony",
+      "geometry": {
+       "cx": 600,
+       "cy": 90,
+       "r0": 520,
+       "r1": 640,
+       "a0": 42.8,
+       "a1": 60.4
+      }
+     }
+    ]
+   }
+  },
+  {
+   "slug": "lagoon-sound",
+   "title": "Lagoon Sound Festival",
+   "subtitle": "2 days on the water",
+   "category": "Festivals",
+   "startsAt": "2026-12-31T16:00:00",
+   "image": "https://images.unsplash.com/photo-1459749411175-04bf5292ceea?auto=format&fit=crop&w=900&q=70",
+   "about": [
+    "Two days of Afrobeats, amapiano and highlife on the sand at Tarkwa Bay, with boats running from the city all day."
+   ],
+   "doors": "3:00 PM daily",
+   "venue": {
+    "slug": "tarkwa-bay-beach",
+    "name": "Tarkwa Bay Beach",
+    "city": "Lagos, NG",
+    "address": "Tarkwa Bay Beach, Lagos",
+    "lat": 6.4916,
+    "lng": 3.2541
+   },
+   "tiers": [
+    {
+     "key": "ga",
+     "name": "3-Day GA",
+     "note": "All stages, all three days",
+     "priceCents": 6500,
+     "left": 1240
+    },
+    {
+     "key": "ga-plus",
+     "name": "3-Day GA+",
+     "note": "Shaded lounge, faster entry, private restrooms",
+     "priceCents": 11100,
+     "left": 310
+    },
+    {
+     "key": "vip",
+     "name": "3-Day VIP",
+     "note": "Front-of-stage viewing, artist lounge",
+     "priceCents": 20800,
+     "left": 42
+    }
+   ],
+   "seatMap": {
+    "version": 1,
+    "width": 1200,
+    "height": 760,
+    "stage": {
+     "x": 420,
+     "y": 36,
+     "w": 360,
+     "h": 100,
+     "label": "MAIN STAGE",
+     "kind": "stage"
+    },
+    "areas": [
+     {
+      "id": "FOOD",
+      "label": "Food court",
+      "kind": "bar",
+      "geometry": {
+       "x": 170,
+       "y": 640,
+       "w": 290,
+       "h": 80
+      }
+     },
+     {
+      "id": "BARS",
+      "label": "Bars",
+      "kind": "bar",
+      "geometry": {
+       "x": 480,
+       "y": 640,
+       "w": 200,
+       "h": 80
+      }
+     },
+     {
+      "id": "GATE",
+      "label": "Entrance",
+      "kind": "entrance",
+      "geometry": {
+       "x": 700,
+       "y": 640,
+       "w": 330,
+       "h": 80
+      }
+     },
+     {
+      "id": "TOWER",
+      "label": "Sound tower",
+      "kind": "other",
+      "geometry": {
+       "x": 560,
+       "y": 470,
+       "w": 80,
+       "h": 60
+      }
+     }
+    ],
+    "sections": [
+     {
+      "id": "GA",
+      "label": "Festival field",
+      "ticketTypeId": "ga",
+      "shape": "rect",
+      "seating": "ga",
+      "capacity": 6000,
+      "geometry": {
+       "x": 170,
+       "y": 160,
+       "w": 860,
+       "h": 460
+      }
+     },
+     {
+      "id": "PLUS",
+      "label": "GA+ lounge",
+      "ticketTypeId": "ga-plus",
+      "shape": "rect",
+      "seating": "ga",
+      "capacity": 800,
+      "geometry": {
+       "x": 30,
+       "y": 200,
+       "w": 120,
+       "h": 380
+      }
+     },
+     {
+      "id": "VIP",
+      "label": "VIP deck",
+      "ticketTypeId": "vip",
+      "shape": "rect",
+      "seating": "ga",
+      "capacity": 300,
+      "geometry": {
+       "x": 1050,
+       "y": 200,
+       "w": 120,
+       "h": 380
+      }
+     }
+    ]
+   }
+  },
+  {
+   "slug": "velvet-hour",
+   "title": "The Velvet Hour",
+   "subtitle": "A late-night jazz revue",
+   "category": "Theater",
+   "startsAt": "2027-02-06T21:00:00",
+   "image": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?auto=format&fit=crop&w=900&q=70",
+   "about": [
+    "A smoky, late-night revue of jazz standards with a seven-piece band, dancers and a cocktail bar on stage."
+   ],
+   "doors": "8:15 PM",
+   "venue": {
+    "slug": "paramount-hall",
+    "name": "Paramount Hall",
+    "city": "London, UK",
+    "address": "Paramount Hall, 14 Strand, London WC2",
+    "lat": 51.53196,
+    "lng": -0.2152
+   },
+   "tiers": [
+    {
+     "key": "upper",
+     "name": "Upper bowl",
+     "note": "Reserved seating",
+     "priceCents": 5500,
+     "left": 640
+    },
+    {
+     "key": "lower",
+     "name": "Lower bowl",
+     "note": "Reserved, closer to the stage",
+     "priceCents": 9100,
+     "left": 180
+    },
+    {
+     "key": "floor",
+     "name": "Floor GA",
+     "note": "Standing, closest to the stage",
+     "priceCents": 11300,
+     "left": 36
+    },
+    {
+     "key": "vip",
+     "name": "VIP package",
+     "note": "Premium seat, merch bundle, early entry",
+     "priceCents": 19800,
+     "left": 9
+    }
+   ],
+   "seatMap": {
+    "version": 1,
+    "width": 1200,
+    "height": 760,
+    "stage": {
+     "x": 400,
+     "y": 40,
+     "w": 400,
+     "h": 90,
+     "label": "STAGE",
+     "kind": "stage"
+    },
+    "sections": [
+     {
+      "id": "OL",
+      "label": "Left",
+      "level": "Orchestra",
+      "ticketTypeId": "lower",
+      "shape": "rect",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 8,
+      "geometry": {
+       "x": 262,
+       "y": 196,
+       "w": 150,
+       "h": 230,
+       "rotation": -14
+      }
+     },
+     {
+      "id": "OC",
+      "label": "Centre",
+      "level": "Orchestra",
+      "ticketTypeId": "lower",
+      "shape": "rect",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 16,
+      "geometry": {
+       "x": 440,
+       "y": 180,
+       "w": 320,
+       "h": 240
+      }
+     },
+     {
+      "id": "OR",
+      "label": "Right",
+      "level": "Orchestra",
+      "ticketTypeId": "lower",
+      "shape": "rect",
+      "seating": "reserved",
+      "rows": 14,
+      "seatsPerRow": 8,
+      "geometry": {
+       "x": 788,
+       "y": 196,
+       "w": 150,
+       "h": 230,
+       "rotation": 14
+      }
+     },
+     {
+      "id": "M1",
+      "label": "M1",
+      "ticketTypeId": "floor",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 8,
+      "seatsPerRow": 18,
+      "level": "Mezzanine",
+      "geometry": {
+       "cx": 600,
+       "cy": 90,
+       "r0": 400,
+       "r1": 500,
+       "a0": 122,
+       "a1": 141.2
+      }
+     },
+     {
+      "id": "M2",
+      "label": "M2",
+      "ticketTypeId": "floor",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 8,
+      "seatsPerRow": 18,
+      "level": "Mezzanine",
+      "geometry": {
+       "cx": 600,
+       "cy": 90,
+       "r0": 400,
+       "r1": 500,
+       "a0": 101.2,
+       "a1": 120.4
+      }
+     },
+     {
+      "id": "M3",
+      "label": "M3",
+      "ticketTypeId": "floor",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 8,
+      "seatsPerRow": 18,
+      "level": "Mezzanine",
+      "geometry": {
+       "cx": 600,
+       "cy": 90,
+       "r0": 400,
+       "r1": 500,
+       "a0": 80.4,
+       "a1": 99.6
+      }
+     },
+     {
+      "id": "M4",
+      "label": "M4",
+      "ticketTypeId": "floor",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 8,
+      "seatsPerRow": 18,
+      "level": "Mezzanine",
+      "geometry": {
+       "cx": 600,
+       "cy": 90,
+       "r0": 400,
+       "r1": 500,
+       "a0": 59.6,
+       "a1": 78.8
+      }
+     },
+     {
+      "id": "M5",
+      "label": "M5",
+      "ticketTypeId": "floor",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 8,
+      "seatsPerRow": 18,
+      "level": "Mezzanine",
+      "geometry": {
+       "cx": 600,
+       "cy": 90,
+       "r0": 400,
+       "r1": 500,
+       "a0": 38.8,
+       "a1": 58
+      }
+     },
+     {
+      "id": "B1",
+      "label": "B1",
+      "ticketTypeId": "upper",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 10,
+      "seatsPerRow": 22,
+      "level": "Balcony",
+      "geometry": {
+       "cx": 600,
+       "cy": 90,
+       "r0": 520,
+       "r1": 640,
+       "a0": 119.6,
+       "a1": 137.2
+      }
+     },
+     {
+      "id": "B2",
+      "label": "B2",
+      "ticketTypeId": "upper",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 10,
+      "seatsPerRow": 22,
+      "level": "Balcony",
+      "geometry": {
+       "cx": 600,
+       "cy": 90,
+       "r0": 520,
+       "r1": 640,
+       "a0": 100.4,
+       "a1": 118
+      }
+     },
+     {
+      "id": "B3",
+      "label": "B3",
+      "ticketTypeId": "upper",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 10,
+      "seatsPerRow": 22,
+      "level": "Balcony",
+      "geometry": {
+       "cx": 600,
+       "cy": 90,
+       "r0": 520,
+       "r1": 640,
+       "a0": 81.2,
+       "a1": 98.8
+      }
+     },
+     {
+      "id": "B4",
+      "label": "B4",
+      "ticketTypeId": "upper",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 10,
+      "seatsPerRow": 22,
+      "level": "Balcony",
+      "geometry": {
+       "cx": 600,
+       "cy": 90,
+       "r0": 520,
+       "r1": 640,
+       "a0": 62,
+       "a1": 79.6
+      }
+     },
+     {
+      "id": "B5",
+      "label": "B5",
+      "ticketTypeId": "upper",
+      "shape": "arc",
+      "seating": "reserved",
+      "rows": 10,
+      "seatsPerRow": 22,
+      "level": "Balcony",
+      "geometry": {
+       "cx": 600,
+       "cy": 90,
+       "r0": 520,
+       "r1": 640,
+       "a0": 42.8,
+       "a1": 60.4
+      }
+     }
+    ]
+   }
+  }
+ ]
+}

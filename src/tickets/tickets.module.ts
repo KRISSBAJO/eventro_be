@@ -6,6 +6,7 @@ import { PrismaService } from '../prisma.service';
 import { config } from '../config';
 import { qrToken } from '../domain/qr';
 import { permilleOf } from '../domain/money';
+import { sectionName, type SeatMap } from '../domain/seatmap';
 import { CurrentUser, type AuthUser } from '../common/auth';
 
 export class TransferDto {
@@ -27,13 +28,19 @@ export class TicketsService {
   }
 
   async mine(user: AuthUser) {
-    const tickets = await this.prisma.ticket.findMany({
+    const rows = await this.prisma.ticket.findMany({
       where: { OR: [{ ownerId: user.id }, { holderEmail: user.email }], status: { not: 'VOID' } },
       include: {
-        ticketType: { select: { name: true } },
-        event: { select: { slug: true, title: true, subtitle: true, startsAt: true, doorsAt: true, imageUrl: true, venue: { select: { name: true, address: true, city: true } } } },
+        ticketType: { select: { name: true, priceCents: true } },
+        order: { select: { id: true, createdAt: true, quantity: true, totalCents: true, status: true } },
+        event: { select: { slug: true, title: true, subtitle: true, startsAt: true, doorsAt: true, imageUrl: true, seatMap: true, venue: { select: { name: true, address: true, city: true } } } },
       },
       orderBy: [{ event: { startsAt: 'asc' } }, { id: 'asc' }],
+    });
+    // Section names come from the event's seat map ("Lower Level 104"); the map itself stays out of the response.
+    const tickets = rows.map(({ event: { seatMap, ...event }, ...t }) => {
+      const s = (seatMap as SeatMap | null)?.sections.find((x) => x.id === t.section);
+      return { ...t, event, sectionName: s ? sectionName(s) : null };
     });
     const incoming = await this.prisma.ticket.findMany({
       where: { transferTo: user.email, status: 'TRANSFER_PENDING' },

@@ -23,6 +23,12 @@ export class CreateOrderDto {
   @ApiPropertyOptional() @IsOptional() @IsString() @Matches(/^[A-Za-z0-9]{3,15}$/) promoCode?: string;
 }
 
+export class QuoteDto {
+  @ApiProperty() @IsString() @MaxLength(40) holdId: string;
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() protection?: boolean;
+  @ApiPropertyOptional() @IsOptional() @IsString() @Matches(/^[A-Za-z0-9]{3,15}$/) promoCode?: string;
+}
+
 export class RefundRequestDto {
   @ApiProperty() @IsString() @MinLength(10) @MaxLength(1000) reason: string;
 }
@@ -39,6 +45,19 @@ export class CheckoutController {
   @Post('holds')
   hold(@Body() dto: CreateHoldDto, @CurrentUser() user: AuthUser | null) {
     return this.checkout.createHold(dto, user);
+  }
+
+  @Public()
+  @Get('holds/:id')
+  getHold(@Param('id') id: string) {
+    return this.checkout.getHold(id);
+  }
+
+  @Public()
+  @Post('quote')
+  @HttpCode(200)
+  quote(@Body() dto: QuoteDto) {
+    return this.checkout.quoteHold(dto);
   }
 
   @Public()

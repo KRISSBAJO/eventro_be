@@ -27,6 +27,11 @@ npm run dev                 # API on http://127.0.0.1:4000/api/v1, docs at http:
 
 Promo code `EVENTRO10` (10% off) works on every demo event.
 
+**Demo data** (`prisma/seed.ts`) loads the website's 16 events from `prisma/catalog.json`: same slugs, prices,
+ticket types and seat maps, plus about 59,000 past tickets spread over the last 75 days so seat maps, dashboards and
+attendee lists look real. Regenerate the catalog from the website repo with
+`node scripts/export-catalog.mjs ../eventro-be/prisma/catalog.json`, then `npx prisma migrate reset --force` to reload.
+
 ## Tests
 
 ```bash
@@ -36,7 +41,7 @@ npm test
 Runs against a separate `eventro_test` database (created by `db:start`; override with `TEST_DATABASE_URL`). It refuses to run against any database whose name doesn't contain `eventro_test`.
 
 - **Unit:** fees, quotes, QR tokens, seat-map validation, seat assignment, fraud scoring.
-- **End to end over HTTP:** the organizer creates an event and a seat map, gets reviewed and approved; a fan buys with a promo code and gets seats 104-A1/A2; the next group gets A3/A4; QR check-in (valid, duplicate, invalid, tampered); transfer and accept; resale cap; refund that voids the tickets and returns the seats to sale; stats and audit log.
+- **End to end over HTTP:** holds reserve exact seats that match the availability preview; quotes with promo codes; the organizer creates an event and a seat map, gets reviewed and approved; a fan buys with a promo code and gets seats 104-A1/A2; the next group gets A3/A4; QR check-in (valid, duplicate, invalid, tampered); transfer and accept; resale cap; refund that voids the tickets and returns the seats to sale; stats and audit log.
 - **Concurrency:** 12 simultaneous holds on 5 seats, so exactly 5 succeed.
 
 ## Payments
@@ -51,7 +56,8 @@ Fulfilment can safely run more than once. If a hold expired during payment and t
 ## How inventory works
 
 - **Holds:** creating a hold locks the ticket type row (`SELECT … FOR UPDATE`). Seats left = capacity − sold − unexpired holds, so seats can't be oversold. Holds last `HOLD_MINUTES` (default 10).
-- **Seats:** assigned at payment, best available. The group sits together in the front-most row with room, otherwise in the first free seats. A database unique key on (event, section, row, seat) means a seat can't be sold twice.
+- **Seats:** on a seat map, the hold itself reserves exact seats (side by side, front-most row with room), and nobody else can get them while it lasts. Payment turns those seats into tickets. If a hold expired before payment, seats are picked again. A database unique key on (event, section, row, seat) means a seat can't be sold twice.
+- **Previews:** `GET /events/:slug/availability?qty=2` returns, per section, what's left and the exact seats a hold would get right now; `GET /events/:slug/sections/:id/seats` lists sold and held seats for drawing a section.
 - **Refunds:** a full refund voids the tickets and returns their seats to sale.
 
 ## Seat maps (venue designer format)
@@ -91,11 +97,11 @@ All routes are under `/api/v1`. Send `Authorization: Bearer <token>` from `/auth
 
 | Area | Routes |
 |---|---|
-| Auth | `POST /auth/signup`, `POST /auth/login`, `GET /auth/me` |
-| Browse | `GET /events?q&category&city&from&to&maxPrice&sort&page`, `GET /events/:slug`, `GET /venues`, `GET /venues/:slug` |
-| Checkout | `POST /holds`, `DELETE /holds/:id`, `POST /orders`, `GET /orders/:id`, `POST /orders/:id/pay` (mock), `POST /orders/:id/refund-requests`, `POST /webhooks/stripe` |
+| Auth | `POST /auth/signup`, `POST /auth/login`, `GET /auth/me`, `PATCH /auth/me` (name) |
+| Browse | `GET /events?q&category&city&from&to&maxPrice&sort&page`, `GET /events/:slug`, `GET /events/:slug/availability?qty`, `GET /events/:slug/sections/:id/seats`, `GET /venues`, `GET /venues/:slug` |
+| Checkout | `POST /holds`, `GET /holds/:id`, `DELETE /holds/:id`, `POST /quote`, `POST /orders`, `GET /orders/:id`, `POST /orders/:id/pay` (mock), `POST /orders/:id/refund-requests`, `POST /webhooks/stripe` |
 | Tickets | `GET /me/tickets`, `GET /tickets/:id/qr`, `POST/DELETE /tickets/:id/transfer`, `POST /tickets/:id/accept`, `POST/DELETE /tickets/:id/listing` |
-| Organizer | `POST/GET /organizer/orgs`, `PATCH /organizer/orgs/:orgId`, team `GET/POST /organizer/orgs/:orgId/team`, `PATCH/DELETE …/team/:memberId`, `POST /organizer/invites/accept`, payouts `GET /organizer/orgs/:orgId/payouts`, `PUT …/payout-settings`, `POST …/payouts/onboarding` |
+| Organizer | `POST/GET /organizer/orgs`, `PATCH /organizer/orgs/:orgId`, `GET …/orders/recent`, team `GET/POST /organizer/orgs/:orgId/team`, `PATCH/DELETE …/team/:memberId`, `POST /organizer/invites/accept`, payouts `GET /organizer/orgs/:orgId/payouts`, `PUT …/payout-settings`, `POST …/payouts/onboarding` |
 | Organizer events | `POST/GET /organizer/orgs/:orgId/events`, `GET/PATCH /organizer/events/:id`, ticket types `POST/PATCH/DELETE …/ticket-types/:ttId`, `POST …/submit`, `POST …/pause`, `POST …/resume`, `PUT …/seat-map`, `POST …/seat-map/template`, `GET …/stats?days=30`, `GET …/attendees`, `GET …/attendees.csv`, `POST …/check-in`, `DELETE …/check-in/:ticketId`, promos `GET/POST …/promos`, `PATCH/DELETE …/promos/:code` |
 | Admin | `GET /admin/reviews`, `POST /admin/events/:id/approve`, `POST /admin/events/:id/reject`, `GET /admin/refunds`, `POST /admin/refunds/:id/decide`, `GET /admin/fraud`, `POST /admin/fraud/:id/decide`, `GET /admin/audit` |
 
@@ -103,7 +109,7 @@ Team roles: **ADMIN** (everything, including payouts and team), **MANAGER** (eve
 
 ## Not done yet
 
-- **The website still uses its browser-only demo data.** Connecting the pages to this API is the next step.
+- **Card payments in the browser:** with Stripe keys set, `POST /orders` returns a PaymentIntent, but the website doesn't load Stripe's card form yet, so it only completes test-mode (mock) payments today.
 - **Email** (receipts, transfer invites, password reset).
 - **Rate limiting** on auth and checkout. Put it behind a gateway, or add `@nestjs/throttler`.
 - **Resale purchases:** listing works, but buying a listed ticket doesn't yet.

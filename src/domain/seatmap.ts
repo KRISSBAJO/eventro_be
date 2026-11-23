@@ -166,6 +166,13 @@ export function capacityByTicketType(map: SeatMap) {
   return out;
 }
 
+/** What fans call a section: "Lower Level 104", "Section 104", or a named area like "Floor". */
+export function sectionName(s: Pick<Section, 'label' | 'level'>) {
+  const numeric = /^[A-Z]{0,2}\d{1,4}[A-Z]?$/i.test(s.label);
+  if (s.level) return numeric ? `${s.level} ${s.label}` : s.label;
+  return numeric ? `Section ${s.label}` : s.label;
+}
+
 /** Row labels: A..Z, AA, AB, … */
 export function rowLabel(index: number) {
   let n = index;
@@ -204,6 +211,26 @@ export function assignSeats(section: Section, taken: Set<string>, qty: number): 
     for (let n = 1; n <= per && any.length < qty; n++) if (free(r, n)) any.push({ row: r, seat: n });
   }
   return any.length === qty ? any : null;
+}
+
+export type SeatPick = { section: string; row: string | null; seat: number | null };
+export type InUse = Map<string, { seats: Set<string>; count: number }>;
+
+/**
+ * Seats for a group from the first section that fits: side by side in reserved sections,
+ * any place in standing ones. `inUse` holds sold and held seats per section.
+ */
+export function pickFromSections(sections: Section[], inUse: InUse, qty: number): SeatPick[] | null {
+  for (const s of sections) {
+    const used = inUse.get(s.id) ?? { seats: new Set<string>(), count: 0 };
+    if (s.seating === 'ga') {
+      if (sectionCapacity(s) - used.count >= qty) return Array.from({ length: qty }, () => ({ section: s.id, row: null, seat: null }));
+      continue;
+    }
+    const picked = assignSeats(s, used.seats, qty);
+    if (picked) return picked.map((p) => ({ section: s.id, row: p.row, seat: p.seat }));
+  }
+  return null;
 }
 
 /** A ready-made arena layout (stage, floor, lower and upper bowls) for new events. */

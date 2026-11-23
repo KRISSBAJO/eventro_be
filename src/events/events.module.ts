@@ -6,7 +6,7 @@ import { Category, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma.service';
 import { InventoryService } from '../common/inventory.service';
 import { OptionalAuth, Public } from '../common/auth';
-import type { SeatMap } from '../domain/seatmap';
+import { assignSeats, sectionCapacity, type SeatMap } from '../domain/seatmap';
 
 const CATEGORIES = Object.values(Category);
 
@@ -95,9 +95,11 @@ export class EventsService {
     const avail = await this.inventory.availabilityForEvent(e.id);
     const map = e.seatMap as SeatMap | null;
     const sectionAvail = map ? await this.inventory.availabilityForSections(this.prisma, e.id, map) : null;
+    const lowest = e.ticketTypes.length ? Math.min(...e.ticketTypes.map((t) => t.priceCents)) : 0;
     return {
       id: e.id,
       slug: e.slug,
+      fromCents: lowest,
       title: e.title,
       subtitle: e.subtitle,
       description: e.description,
@@ -117,6 +119,7 @@ export class EventsService {
         description: t.description,
         priceCents: t.priceCents,
         maxPerOrder: t.maxPerOrder,
+        sortOrder: t.sortOrder,
         available: avail.get(t.id) ?? 0,
       })),
       seatMap: map && {
@@ -130,7 +133,52 @@ export class EventsService {
 @ApiTags('events')
 @Controller('events')
 export class EventsController {
-  constructor(private readonly events: EventsService) {}
+  constructor(
+    private readonly events: EventsService,
+    private readonly prisma: PrismaService,
+    private readonly inventory: InventoryService,
+  ) {}
+
+  /**
+   * For a group of `qty`: places left in every section and the seats a hold would get right now
+   * (side by side, front-most row first). Standing sections have no seat numbers.
+   */
+  @Public()
+  @Get(':slug/availability')
+  async availability(@Param('slug') slug: string, @Query('qty') qtyRaw?: string) {
+    const qty = Math.min(20, Math.max(1, Number(qtyRaw) || 1));
+    const e = await this.prisma.event.findUnique({ where: { slug }, select: { id: true, status: true, seatMap: true } });
+    if (!e || e.status !== 'PUBLISHED') throw new NotFoundException('Event not found.');
+    const map = e.seatMap as SeatMap | null;
+    if (!map) return { qty, sections: [] };
+    const [inUse, typeLeft] = await Promise.all([
+      this.inventory.seatsInUse(this.prisma, e.id, map.sections.map((s) => s.id)),
+      this.inventory.availabilityForEvent(e.id),
+    ]);
+    return {
+      qty,
+      sections: map.sections.map((s) => {
+        const used = inUse.get(s.id)!;
+        const available = Math.max(0, Math.min(sectionCapacity(s) - used.count, typeLeft.get(s.ticketTypeId) ?? 0));
+        const seats = s.seating === 'reserved' && available >= qty ? assignSeats(s, used.seats, qty) : null;
+        const fits = s.seating === 'ga' ? available >= qty : !!seats;
+        // Only side-by-side blocks count as a fit for reserved seating.
+        const together = seats && seats.every((x) => x.row === seats[0].row) && seats.every((x, i) => i === 0 || x.seat === seats[i - 1].seat + 1);
+        return { id: s.id, available, fits: fits && (s.seating === 'ga' || !!together), row: together ? seats![0].row : null, seats: together ? seats!.map((x) => x.seat) : [] };
+      }),
+    };
+  }
+
+  /** Which seats in a section are sold or held, so fans can see their exact seats before holding. */
+  @Public()
+  @Get(':slug/sections/:sectionId/seats')
+  async seats(@Param('slug') slug: string, @Param('sectionId') sectionId: string) {
+    const e = await this.prisma.event.findUnique({ where: { slug }, select: { id: true, status: true, seatMap: true } });
+    const s = (e?.seatMap as SeatMap | null)?.sections.find((x) => x.id === sectionId);
+    if (!e || e.status !== 'PUBLISHED' || !s) throw new NotFoundException('Section not found.');
+    const used = (await this.inventory.seatsInUse(this.prisma, e.id, [s.id])).get(s.id)!;
+    return { section: s.id, seating: s.seating, capacity: sectionCapacity(s), inUse: used.count, taken: [...used.seats] };
+  }
 
   @Public()
   @Get()

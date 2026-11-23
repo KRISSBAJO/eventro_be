@@ -189,3 +189,42 @@ test('no overselling under concurrent holds', async () => {
   await ok(call('POST', `/organizer/events/${ev.id}/pause`, undefined, org));
   assert.equal((await call('POST', '/holds', { ticketTypeId: ev.ticketTypes[0].id, quantity: 1 })).status, 409);
 });
+
+test('holds reserve exact seats: preview, hold, quote and section seats agree', async () => {
+  const fan = (await ok(call('POST', '/auth/login', { email: 'fan@test.local', password: 'test-password-123' }))).token;
+  const list = await ok(call('GET', '/events?q=Arena'));
+  const slug = list.items[0].slug as string;
+  const ev = await ok(call('GET', `/events/${slug}`));
+  const lower = ev.ticketTypes.find((t: Json) => t.name === 'Lower');
+
+  // The preview for 2 people in section 105 is exactly what a hold gets.
+  const avail = await ok(call('GET', `/events/${slug}/availability?qty=2`));
+  const s105 = avail.sections.find((s: Json) => s.id === '105');
+  assert.equal(s105.fits, true);
+  const h1 = await ok(call('POST', '/holds', { ticketTypeId: lower.id, quantity: 2, sectionId: '105' }, fan));
+  assert.deepEqual(h1.seats.map((x: Json) => `${x.row}${x.seat}`), s105.seats.map((n: number) => `${s105.row}${n}`));
+
+  // Held seats are taken for everyone else: the next group sits beside them, not on top of them.
+  const h2 = await ok(call('POST', '/holds', { ticketTypeId: lower.id, quantity: 2, sectionId: '105' }));
+  const taken = new Set(h1.seats.map((x: Json) => `${x.row}:${x.seat}`));
+  assert.ok(h2.seats.every((x: Json) => !taken.has(`${x.row}:${x.seat}`)));
+  const seats = await ok(call('GET', `/events/${slug}/sections/105/seats`));
+  for (const x of [...h1.seats, ...h2.seats]) assert.ok(seats.taken.includes(`${x.row}:${x.seat}`));
+
+  // Checkout reads the hold back and prices it with a promo before any order exists.
+  const view = await ok(call('GET', `/holds/${h1.id}`));
+  assert.equal(view.status, 'ACTIVE');
+  assert.equal(view.section.id, '105');
+  assert.equal(view.event.slug, slug);
+  const q = await ok(call('POST', '/quote', { holdId: h1.id, promoCode: 'TEST20' }));
+  assert.equal(q.promo.percent, 20);
+  assert.equal(q.discountCents, Math.round(lower.priceCents * 2 * 0.2));
+  assert.equal((await call('POST', '/quote', { holdId: h1.id, promoCode: 'NOPE99' })).status, 400);
+
+  // Paying issues tickets for the held seats, not a fresh pick.
+  const order = await ok(call('POST', '/orders', { holdId: h1.id, email: 'fan@test.local', name: 'Fola Fan' }, fan));
+  const paid = await ok(call('POST', `/orders/${order.orderId}/pay`));
+  assert.deepEqual(paid.tickets.map((t: Json) => `${t.row}${t.seat}`), h1.seats.map((x: Json) => `${x.row}${x.seat}`));
+  const mine = await ok(call('GET', '/me/tickets', undefined, fan));
+  assert.ok(mine.tickets.some((t: Json) => t.sectionName === 'Section 105'));
+});

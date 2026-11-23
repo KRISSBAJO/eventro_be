@@ -68,6 +68,9 @@ export class OrganizerController {
   @Post('orgs/:orgId/events') createEvent(@Param('orgId') orgId: string, @CurrentUser() u: AuthUser, @Body() dto: CreateEventDto) {
     return this.svc.createEvent(orgId, u, dto);
   }
+  @Get('orgs/:orgId/orders/recent') recentOrders(@Param('orgId') orgId: string, @CurrentUser() u: AuthUser) {
+    return this.svc.recentOrders(orgId, u);
+  }
   @Get('orgs/:orgId/events') listEvents(@Param('orgId') orgId: string, @CurrentUser() u: AuthUser) {
     return this.svc.listEvents(orgId, u);
   }

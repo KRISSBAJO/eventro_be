@@ -176,26 +176,64 @@ export class OrganizerService {
     return ev;
   }
 
+  /** The organizer's events with ticket types and 60 days of daily sales (for the dashboard). */
   async listEvents(orgId: string, user: AuthUser) {
     await this.member(orgId, user, DOOR);
     const events = await this.prisma.event.findMany({
       where: { orgId },
-      include: { ticketTypes: true, venue: { select: { name: true, city: true } } },
+      include: { ticketTypes: { orderBy: { sortOrder: 'asc' } }, venue: { select: { name: true, city: true, address: true } } },
       orderBy: { startsAt: 'asc' },
     });
+    const days = 60;
+    const since = new Date(Date.now() - days * DAY);
+    const orders = await this.prisma.order.findMany({
+      where: { event: { orgId }, status: { in: ['PAID', 'PARTIALLY_REFUNDED'] }, paidAt: { gte: since } },
+      select: { eventId: true, paidAt: true, quantity: true, subtotalCents: true, discountCents: true },
+    });
+    const keys = Array.from({ length: days }, (_, i) => dayKey(new Date(Date.now() - (days - 1 - i) * DAY)));
+    const index = new Map(keys.map((k, i) => [k, i]));
+    const daily = new Map<string, { tickets: number[]; cents: number[] }>();
+    for (const o of orders) {
+      const i = index.get(dayKey(o.paidAt!));
+      if (i === undefined) continue;
+      const d = daily.get(o.eventId) ?? { tickets: Array(days).fill(0), cents: Array(days).fill(0) };
+      d.tickets[i] += o.quantity;
+      d.cents[i] += o.subtotalCents - o.discountCents;
+      daily.set(o.eventId, d);
+    }
     return events.map((e) => ({
       id: e.id,
       slug: e.slug,
       title: e.title,
+      subtitle: e.subtitle,
+      description: e.description,
+      category: e.category,
       status: e.status,
+      reviewNote: e.reviewNote,
       salesPaused: e.salesPaused,
+      feeMode: e.feeMode,
       startsAt: e.startsAt,
       venue: e.venue,
+      online: e.online,
       imageUrl: e.imageUrl,
+      hasSeatMap: !!e.seatMap,
+      ticketTypes: e.ticketTypes.map((t) => ({ id: t.id, name: t.name, description: t.description, priceCents: t.priceCents, capacity: t.capacity, sold: t.sold, maxPerOrder: t.maxPerOrder })),
       sold: e.ticketTypes.reduce((s, t) => s + t.sold, 0),
       capacity: e.ticketTypes.reduce((s, t) => s + t.capacity, 0),
       grossCents: e.ticketTypes.reduce((s, t) => s + t.sold * t.priceCents, 0),
+      daily: daily.get(e.id) ?? { tickets: Array(days).fill(0), cents: Array(days).fill(0) },
     }));
+  }
+
+  /** Latest paid orders across the organization's events. */
+  async recentOrders(orgId: string, user: AuthUser) {
+    await this.member(orgId, user, EDIT);
+    return this.prisma.order.findMany({
+      where: { event: { orgId }, status: { in: ['PAID', 'PARTIALLY_REFUNDED'] } },
+      orderBy: { paidAt: 'desc' },
+      take: 8,
+      select: { id: true, buyerName: true, quantity: true, totalCents: true, paidAt: true, ticketType: { select: { name: true } }, event: { select: { title: true } } },
+    });
   }
 
   async getEvent(id: string, user: AuthUser) {

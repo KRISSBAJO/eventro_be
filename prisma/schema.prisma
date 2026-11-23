@@ -232,6 +232,8 @@ model Hold {
   ticketTypeId String
   /// Seat map section the fan chose, if any.
   sectionId    String?
+  /// Seats reserved by this hold: [{ section, row, seat }]. Row and seat are null in standing sections.
+  seats        Json?
   quantity     Int
   userId       String?
   status       HoldStatus @default(ACTIVE)

@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma.service';
-import { sectionCapacity, type SeatMap } from '../domain/seatmap';
+import { sectionCapacity, type InUse, type SeatMap, type SeatPick } from '../domain/seatmap';
 
 type Tx = Prisma.TransactionClient | PrismaService;
 
@@ -31,6 +31,29 @@ export class InventoryService {
     ]);
     const held = new Map(holds.map((h) => [h.ticketTypeId, h._sum.quantity ?? 0]));
     return new Map(types.map((t) => [t.id, Math.max(0, t.capacity - t.sold - (held.get(t.id) ?? 0))]));
+  }
+
+  /** Sold and held seats per section (held = unexpired active holds, minus one to ignore). */
+  async seatsInUse(tx: Tx, eventId: string, sectionIds: string[], now = new Date(), exceptHoldId?: string): Promise<InUse> {
+    const [tickets, holds] = await Promise.all([
+      tx.ticket.findMany({ where: { eventId, section: { in: sectionIds }, status: { not: 'VOID' } }, select: { section: true, row: true, seat: true } }),
+      tx.hold.findMany({
+        where: { eventId, status: 'ACTIVE', expiresAt: { gt: now }, sectionId: { in: sectionIds }, ...(exceptHoldId ? { id: { not: exceptHoldId } } : {}) },
+        select: { sectionId: true, quantity: true, seats: true },
+      }),
+    ]);
+    const out: InUse = new Map(sectionIds.map((id) => [id, { seats: new Set<string>(), count: 0 }]));
+    for (const t of tickets) {
+      const u = out.get(t.section!)!;
+      u.count++;
+      if (t.row && t.seat) u.seats.add(`${t.row}:${t.seat}`);
+    }
+    for (const h of holds) {
+      const u = out.get(h.sectionId!)!;
+      u.count += h.quantity;
+      for (const s of (h.seats as SeatPick[] | null) ?? []) if (s.row && s.seat) u.seats.add(`${s.row}:${s.seat}`);
+    }
+    return out;
   }
 
   /** Remaining places per seat-map section. */

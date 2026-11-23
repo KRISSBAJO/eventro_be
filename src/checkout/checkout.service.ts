@@ -7,7 +7,7 @@ import { config } from '../config';
 import { orderCode, ticketCode } from '../domain/codes';
 import { quote } from '../domain/money';
 import { FRAUD_FLAG_THRESHOLD, scoreOrder } from '../domain/fraud';
-import { assignSeats, sectionCapacity, type SeatMap } from '../domain/seatmap';
+import { pickFromSections, type SeatMap, type SeatPick } from '../domain/seatmap';
 import { Payments } from './payments';
 import type { AuthUser } from '../common/auth';
 
@@ -54,18 +54,68 @@ export class CheckoutService {
         if (n < input.quantity) throw new ConflictException(n ? `Only ${n} left in ${section.label}.` : `${section.label} is sold out.`);
       }
 
+      // On a seat map the hold reserves exact seats, so the group is guaranteed to sit together.
+      const map = ev.seatMap as SeatMap | null;
+      const sections = (map?.sections ?? []).filter((s) => s.ticketTypeId === tt.id && (!input.sectionId || s.id === input.sectionId));
+      let seats: SeatPick[] | null = null;
+      if (sections.length) {
+        const inUse = await this.inventory.seatsInUse(tx, ev.id, sections.map((s) => s.id), now);
+        seats = pickFromSections(sections, inUse, input.quantity);
+        if (!seats) throw new ConflictException('Not enough seats together. Try fewer tickets or another section.');
+      }
+
       return tx.hold.create({
         data: {
           eventId: ev.id,
           ticketTypeId: tt.id,
-          sectionId: input.sectionId ?? null,
+          sectionId: seats?.[0]?.section ?? input.sectionId ?? null,
+          ...(seats ? { seats } : {}),
           quantity: input.quantity,
           userId: user?.id ?? null,
           expiresAt: new Date(now.getTime() + config.holdMinutes * 60_000),
         },
-        select: { id: true, quantity: true, expiresAt: true, sectionId: true, ticketTypeId: true },
+        select: { id: true, quantity: true, expiresAt: true, sectionId: true, ticketTypeId: true, seats: true },
       });
     });
+  }
+
+  /** A hold with what the checkout page needs to show. The id is unguessable, so it acts as the key. */
+  async getHold(id: string) {
+    const h = await this.prisma.hold.findUnique({
+      where: { id },
+      include: {
+        ticketType: { select: { id: true, name: true, description: true, priceCents: true } },
+        event: { select: { slug: true, title: true, subtitle: true, category: true, imageUrl: true, startsAt: true, doorsAt: true, description: true, seatMap: true, venue: { select: { name: true, city: true, address: true } } } },
+        order: { select: { id: true, status: true } },
+      },
+    });
+    if (!h) throw new NotFoundException('Hold not found.');
+    const { seatMap, ...event } = h.event;
+    const section = (seatMap as SeatMap | null)?.sections.find((s) => s.id === h.sectionId);
+    return {
+      id: h.id,
+      status: h.status === 'ACTIVE' && h.expiresAt <= new Date() ? 'EXPIRED' : h.status,
+      quantity: h.quantity,
+      expiresAt: h.expiresAt,
+      section: section ? { id: section.id, label: section.label, level: section.level ?? null, seating: section.seating } : null,
+      seats: (h.seats as SeatPick[] | null) ?? [],
+      ticketType: h.ticketType,
+      event,
+      order: h.order,
+    };
+  }
+
+  /** Prices for a hold with an optional promo code, before an order exists. */
+  async quoteHold(input: { holdId: string; promoCode?: string; protection?: boolean }) {
+    const hold = await this.prisma.hold.findUnique({ where: { id: input.holdId }, include: { ticketType: true } });
+    if (!hold) throw new NotFoundException('Hold not found.');
+    let promo: { code: string; percent: number } | null = null;
+    if (input.promoCode) {
+      const p = await this.prisma.promo.findUnique({ where: { eventId_code: { eventId: hold.eventId, code: input.promoCode.trim().toUpperCase() } } });
+      if (!p || !p.active || (p.limit !== null && p.used >= p.limit)) throw new BadRequestException('That promo code isn’t valid for this event.');
+      promo = { code: p.code, percent: p.percent };
+    }
+    return { promo, ...quote(hold.ticketType.priceCents, hold.quantity, promo?.percent ?? null, !!input.protection) };
   }
 
   async releaseHold(id: string) {
@@ -184,7 +234,8 @@ export class CheckoutService {
           }
         }
 
-        const seats = await this.pickSeats(tx, order.eventId, order.event.seatMap as SeatMap | null, order.ticketTypeId, order.hold?.sectionId ?? null, order.quantity);
+        const held = holdLive && order.hold!.expiresAt > now ? ((order.hold!.seats as SeatPick[] | null) ?? null) : null;
+        const seats = held?.length === order.quantity ? held : await this.pickSeats(tx, order.eventId, order.event.seatMap as SeatMap | null, order.ticketTypeId, order.hold?.sectionId ?? null, order.quantity, now);
         const owner = order.buyerId ?? (await tx.user.findUnique({ where: { email: order.email }, select: { id: true } }))?.id ?? null;
 
         await tx.ticket.createMany({
@@ -221,24 +272,14 @@ export class CheckoutService {
   }
 
   /** Best-available seats for a paid order. GA sections and events without a map get no seat numbers. */
-  private async pickSeats(tx: Tx, eventId: string, map: SeatMap | null, ticketTypeId: string, sectionId: string | null, qty: number) {
-    const sections = (map?.sections ?? []).filter((s) => s.ticketTypeId === ticketTypeId && (!sectionId || s.id === sectionId));
+  private async pickSeats(tx: Tx, eventId: string, map: SeatMap | null, ticketTypeId: string, sectionId: string | null, qty: number, now: Date): Promise<SeatPick[] | { section: null; row: null; seat: null }[]> {
+    let sections = (map?.sections ?? []).filter((s) => s.ticketTypeId === ticketTypeId && (!sectionId || s.id === sectionId));
+    if (!sections.length && sectionId) sections = (map?.sections ?? []).filter((s) => s.ticketTypeId === ticketTypeId);
     if (!sections.length) return Array.from({ length: qty }, () => ({ section: null, row: null, seat: null }));
-
-    const taken = await tx.ticket.findMany({
-      where: { eventId, section: { in: sections.map((s) => s.id) }, status: { not: 'VOID' } },
-      select: { section: true, row: true, seat: true },
-    });
-    for (const s of sections) {
-      const inSection = taken.filter((t) => t.section === s.id);
-      if (s.seating === 'ga') {
-        if (sectionCapacity(s) - inSection.length >= qty) return Array.from({ length: qty }, () => ({ section: s.id, row: null, seat: null }));
-        continue;
-      }
-      const picked = assignSeats(s, new Set(inSection.map((t) => `${t.row}:${t.seat}`)), qty);
-      if (picked) return picked.map((p) => ({ section: s.id, row: p.row, seat: p.seat }));
-    }
-    throw new ConflictException('Not enough seats together. Try fewer tickets or another section.');
+    const inUse = await this.inventory.seatsInUse(tx, eventId, sections.map((s) => s.id), now);
+    const picked = pickFromSections(sections, inUse, qty);
+    if (!picked) throw new ConflictException('Not enough seats together. Try fewer tickets or another section.');
+    return picked;
   }
 
   async orderView(orderId: string) {
