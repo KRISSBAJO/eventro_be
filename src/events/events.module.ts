@@ -1,6 +1,6 @@
 import { Controller, Get, Injectable, Module, NotFoundException, Param, Query } from '@nestjs/common';
 import { ApiProperty, ApiPropertyOptional, ApiTags } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import { IsDateString, IsIn, IsInt, IsOptional, IsString, Max, MaxLength, Min, Matches } from 'class-validator';
 import { Category, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma.service';
@@ -9,6 +9,11 @@ import { OptionalAuth, Public } from '../common/auth';
 import { assignSeats, sectionCapacity, type SeatMap } from '../domain/seatmap';
 import { mediaUrls, type MediaItem } from '../media/media.module';
 import { previewOk } from './preview';
+import { FxService } from '../fx/fx.module';
+import { CURRENCY_CODES } from '../domain/currency';
+
+/** "Trending" counts paid tickets from this many days back. */
+const TRENDING_DAYS = 14;
 
 const CATEGORIES = Object.values(Category);
 
@@ -31,10 +36,23 @@ export class EventQueryDto {
   @ApiPropertyOptional({ description: 'With near: only events within this many km' }) @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(20000) radiusKm?: number;
   @ApiPropertyOptional({ description: 'ISO date, inclusive' }) @IsOptional() @IsDateString() from?: string;
   @ApiPropertyOptional({ description: 'ISO date, inclusive' }) @IsOptional() @IsDateString() to?: string;
-  @ApiPropertyOptional({ description: 'Maximum lowest price, in dollars' }) @IsOptional() @Type(() => Number) @IsInt() @Min(0) maxPrice?: number;
-  @ApiPropertyOptional({ enum: ['date', 'price-asc', 'price-desc', 'distance'], description: 'distance needs near (the default when near is given)' })
+  @ApiPropertyOptional({ description: 'Maximum lowest price in whole units: of `currency` when given, else of each event’s own currency' })
   @IsOptional()
-  @IsIn(['date', 'price-asc', 'price-desc', 'distance'])
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  maxPrice?: number;
+  @ApiPropertyOptional({ enum: CURRENCY_CODES, example: 'NGN', description: 'Visitor’s currency: maxPrice is compared after converting each price (approximate, GET /fx/rates), and cards get fromCentsIn' })
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim().toUpperCase() : value))
+  @IsIn(CURRENCY_CODES)
+  currency?: string;
+  @ApiPropertyOptional({
+    enum: ['date', 'price-asc', 'price-desc', 'distance', 'popular'],
+    description: `distance needs near (the default when near is given); popular = most paid tickets in the last ${TRENDING_DAYS} days, then soonest`,
+  })
+  @IsOptional()
+  @IsIn(['date', 'price-asc', 'price-desc', 'distance', 'popular'])
   sort?: string;
   @ApiPropertyOptional({ default: 1 }) @IsOptional() @Type(() => Number) @IsInt() @Min(1) page?: number;
   @ApiPropertyOptional({ default: 24 }) @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100) pageSize?: number;
@@ -55,6 +73,9 @@ export class EventCardDto {
   @ApiProperty({ nullable: true }) lat: number | null;
   @ApiProperty({ nullable: true }) lng: number | null;
   @ApiPropertyOptional({ nullable: true, description: 'With near: straight-line km from the visitor (null for online events)' }) distanceKm?: number | null;
+  @ApiProperty({ description: `Paid tickets sold in the last ${TRENDING_DAYS} days` }) soldRecent: number;
+  @ApiPropertyOptional({ description: 'With currency: fromCents converted to that currency (approximate, for display)', example: { currency: 'USD', cents: 1613 } })
+  fromCentsIn?: { currency: string; cents: number };
 }
 
 @Injectable()
@@ -62,7 +83,19 @@ export class EventsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly inventory: InventoryService,
+    private readonly fx: FxService,
   ) {}
+
+  /** Paid tickets per event in the last TRENDING_DAYS days (refunded orders don't count). */
+  private async soldRecently(eventIds: string[]) {
+    if (!eventIds.length) return new Map<string, number>();
+    const rows = await this.prisma.order.groupBy({
+      by: ['eventId'],
+      where: { eventId: { in: eventIds }, status: { in: ['PAID', 'PARTIALLY_REFUNDED'] }, paidAt: { gte: new Date(Date.now() - TRENDING_DAYS * 86_400_000) } },
+      _sum: { quantity: true },
+    });
+    return new Map(rows.map((r) => [r.eventId, r._sum.quantity ?? 0]));
+  }
 
   async search(q: EventQueryDto) {
     const where: Prisma.EventWhereInput = {
@@ -90,8 +123,9 @@ export class EventsService {
       orderBy: { startsAt: 'asc' },
       take: 1000,
     });
-    let cards: EventCardDto[] = rows
-      .filter((e) => e.ticketTypes.length)
+    const listed = rows.filter((e) => e.ticketTypes.length);
+    const recent = await this.soldRecently(listed.map((e) => e.id));
+    let cards: EventCardDto[] = listed
       .map((e) => ({
         slug: e.slug,
         title: e.title,
@@ -106,7 +140,11 @@ export class EventsService {
         lng: e.venue?.lng ?? null,
         currency: e.currency,
         fromCents: Math.min(...e.ticketTypes.map((t) => t.priceCents)),
+        soldRecent: recent.get(e.id) ?? 0,
       }));
+    // In the visitor's currency: an approximate converted price on every card, and maxPrice compared against it.
+    const cur = q.currency;
+    if (cur) cards = cards.map((c) => ({ ...c, fromCentsIn: { currency: cur, cents: this.fx.convert(c.fromCents, c.currency, cur) } }));
     // Near me: distance from the visitor, optional radius, nearest first (events without a position go last).
     if (q.near) {
       const [lat, lng] = q.near.split(',').map(Number);
@@ -114,9 +152,11 @@ export class EventsService {
       if (q.radiusKm) cards = cards.filter((c) => c.distanceKm !== null && c.distanceKm! <= q.radiusKm!);
       if (!q.sort || q.sort === 'distance') cards.sort((a, b) => (a.distanceKm ?? Infinity) - (b.distanceKm ?? Infinity));
     }
-    if (q.maxPrice !== undefined) cards = cards.filter((c) => c.fromCents <= q.maxPrice! * 100);
+    if (q.maxPrice !== undefined) cards = cards.filter((c) => (c.fromCentsIn?.cents ?? c.fromCents) <= q.maxPrice! * 100);
     if (q.sort === 'price-asc') cards.sort((a, b) => a.fromCents - b.fromCents);
     if (q.sort === 'price-desc') cards.sort((a, b) => b.fromCents - a.fromCents);
+    // Trending: most tickets sold lately, ties soonest first (the list is already soonest first, and sort is stable).
+    if (q.sort === 'popular') cards.sort((a, b) => b.soldRecent - a.soldRecent);
     const page = q.page ?? 1;
     const size = q.pageSize ?? 24;
     return { total: cards.length, page, pageSize: size, items: cards.slice((page - 1) * size, page * size) };

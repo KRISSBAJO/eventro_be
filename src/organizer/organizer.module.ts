@@ -98,6 +98,10 @@ export class OrganizerController {
   @Get('orgs/:orgId/events') listEvents(@Param('orgId') orgId: string, @CurrentUser() u: AuthUser) {
     return this.svc.listEvents(orgId, u);
   }
+  /** Light list for the door scanner's event picker (DOOR role and up): 2 days back to 60 days ahead, with check-in counts. */
+  @Get('orgs/:orgId/door-events') doorEvents(@Param('orgId') orgId: string, @CurrentUser() u: AuthUser) {
+    return this.svc.doorEvents(orgId, u);
+  }
   @Get('events/:id') getEvent(@Param('id') id: string, @CurrentUser() u: AuthUser) {
     return this.svc.getEvent(id, u);
   }

@@ -80,7 +80,7 @@ export class TicketsService {
             gift: { select: { id: true, recipientName: true, recipientEmail: true, sendAt: true, sentAt: true, claimedAt: true } },
           },
         },
-        event: { select: { slug: true, title: true, subtitle: true, status: true, cancelledAt: true, cancelReason: true, startsAt: true, doorsAt: true, imageUrl: true, seatMap: true, online: true, streamUrl: true, timezone: true, resaleEnabled: true, resaleCapPercent: true, resaleRoyaltyPermille: true, transfersEnabled: true, transferCutoffMinutes: true, venue: { select: { name: true, address: true, city: true } } } },
+        event: { select: { slug: true, title: true, subtitle: true, currency: true, status: true, cancelledAt: true, cancelReason: true, startsAt: true, doorsAt: true, imageUrl: true, seatMap: true, online: true, streamUrl: true, timezone: true, resaleEnabled: true, resaleCapPercent: true, resaleRoyaltyPermille: true, transfersEnabled: true, transferCutoffMinutes: true, venue: { select: { name: true, address: true, city: true } } } },
       },
       orderBy: [{ event: { startsAt: 'asc' } }, { id: 'asc' }],
     });

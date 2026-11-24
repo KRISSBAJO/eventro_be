@@ -117,12 +117,16 @@ export class ResaleService {
     const rows = await this.prisma.resaleListing.findMany({
       where: { sellerId: user.id },
       orderBy: { createdAt: 'desc' },
-      include: { event: { select: { slug: true, title: true, startsAt: true } }, ticket: { select: { id: true, section: true, row: true, seat: true, ticketType: { select: { name: true } } } } },
+      include: { event: { select: { slug: true, title: true, startsAt: true, seatMap: true } }, ticket: { select: { id: true, section: true, row: true, seat: true, ticketType: { select: { name: true } } } } },
       take: 100,
     });
     const pending = rows.filter((r) => r.payoutStatus === 'PENDING' || r.payoutStatus === 'AVAILABLE' || r.payoutStatus === 'HELD');
     return {
-      listings: rows.map(({ heldBy: _k, ...r }) => r),
+      // Section names come from the event's seat map ("Lower Level 104"), like GET /me/tickets; the map stays out.
+      listings: rows.map(({ heldBy: _k, event: { seatMap, ...event }, ticket, ...r }) => {
+        const sec = (seatMap as SeatMap | null)?.sections.find((s) => s.id === ticket.section);
+        return { ...r, event, ticket: { ...ticket, sectionName: sec ? sectionName(sec) : null } };
+      }),
       totals: { owedCents: pending.reduce((n, r) => n + (r.payoutCents ?? 0), 0), paidCents: rows.filter((r) => r.payoutStatus === 'PAID').reduce((n, r) => n + (r.payoutCents ?? 0), 0) },
     };
   }

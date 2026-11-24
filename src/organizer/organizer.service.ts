@@ -273,6 +273,31 @@ export class OrganizerService {
     }));
   }
 
+  /**
+   * The door scanner's event picker: events from 2 days ago to 60 days ahead, soonest first, with how many tickets
+   * are out (non-void) and how many are in. Same access as check-in (DOOR and up). Drafts have no tickets and are left out.
+   */
+  async doorEvents(orgId: string, user: AuthUser) {
+    await this.member(orgId, user, DOOR);
+    const now = Date.now();
+    const events = await this.prisma.event.findMany({
+      where: { orgId, status: { not: 'DRAFT' }, startsAt: { gte: new Date(now - 2 * DAY), lte: new Date(now + 60 * DAY) } },
+      select: { id: true, slug: true, title: true, startsAt: true, doorsAt: true, timezone: true, online: true, status: true, venue: { select: { name: true, city: true } } },
+      orderBy: { startsAt: 'asc' },
+    });
+    const ids = events.map((e) => e.id);
+    const counts = ids.length
+      ? await this.prisma.ticket.groupBy({ by: ['eventId', 'status'], where: { eventId: { in: ids }, status: { not: 'VOID' } }, _count: { _all: true } })
+      : [];
+    const issued = new Map<string, number>();
+    const inside = new Map<string, number>();
+    for (const c of counts) {
+      issued.set(c.eventId, (issued.get(c.eventId) ?? 0) + c._count._all);
+      if (c.status === 'CHECKED_IN') inside.set(c.eventId, (inside.get(c.eventId) ?? 0) + c._count._all);
+    }
+    return events.map((e) => ({ ...e, ticketsIssued: issued.get(e.id) ?? 0, checkedIn: inside.get(e.id) ?? 0 }));
+  }
+
   /** Latest paid orders across the organization's events. */
   async recentOrders(orgId: string, user: AuthUser) {
     await this.member(orgId, user, EDIT);
@@ -536,7 +561,7 @@ export class OrganizerService {
     }
     if (!t) return { result: 'invalid', message: 'Ticket not found.' };
     if (t.eventId !== id) return { result: 'wrong-event', message: 'This ticket is for a different event.' };
-    if (t.status === 'CHECKED_IN') return { result: 'duplicate', message: 'Already checked in.', ticket: this.doorView(t), checkedInAt: t.checkedInAt };
+    if (t.status === 'CHECKED_IN') return this.duplicate(t);
     if (t.status === 'VOID') return { result: 'invalid', message: 'This ticket was refunded or cancelled.' };
     if (t.status === 'TRANSFER_PENDING') return { result: 'invalid', message: 'This ticket is being transferred.' };
     // Conditional update so two scanners can't admit the same ticket twice.
@@ -544,8 +569,26 @@ export class OrganizerService {
       where: { id: t.id, status: { in: ['ACTIVE', 'LISTED'] } },
       data: { status: 'CHECKED_IN', checkedInAt: new Date(), checkedInBy: user.id, checkedInDevice: deviceId?.trim() || null, listCents: null },
     });
-    if (!count) return { result: 'duplicate', message: 'Already checked in.', ticket: this.doorView(t) };
+    if (!count) {
+      // Another scanner got there a moment ago: report theirs.
+      const fresh = await this.prisma.ticket.findUniqueOrThrow({ where: { id: t.id }, select: { status: true, checkedInAt: true, checkedInBy: true, checkedInDevice: true } });
+      if (fresh.status !== 'CHECKED_IN') return { result: 'invalid', message: fresh.status === 'VOID' ? 'This ticket was refunded or cancelled.' : 'This ticket is being transferred.' };
+      return this.duplicate({ ...t, ...fresh });
+    }
     return { result: 'ok', message: 'Valid: let them in.', ticket: this.doorView(t) };
+  }
+
+  /** "Already checked in", with when, by whom and on which scanner (like the offline sync's `already`). */
+  private async duplicate(t: Parameters<OrganizerService['doorView']>[0] & { checkedInAt: Date | null; checkedInBy: string | null; checkedInDevice: string | null }) {
+    const by = t.checkedInBy ? await this.prisma.user.findUnique({ where: { id: t.checkedInBy }, select: { id: true, name: true } }) : null;
+    return {
+      result: 'duplicate',
+      message: 'Already checked in.',
+      ticket: this.doorView(t),
+      checkedInAt: t.checkedInAt,
+      checkedInBy: t.checkedInBy ? { id: t.checkedInBy, name: by?.name ?? null } : null,
+      checkedInDevice: t.checkedInDevice,
+    };
   }
 
   /* ---------- offline door scanning ---------- */

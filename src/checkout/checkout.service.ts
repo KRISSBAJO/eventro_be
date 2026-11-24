@@ -153,7 +153,7 @@ export class CheckoutService {
   }
 
   async createOrder(
-    input: { holdId: string; email: string; name: string; protection?: boolean; promoCode?: string; gift?: GiftInput },
+    input: { holdId: string; email: string; name: string; protection?: boolean; promoCode?: string; gift?: GiftInput; returnTo?: 'app' },
     user: AuthUser | null,
     clientIp: string | null,
   ) {
@@ -221,6 +221,7 @@ export class CheckoutService {
       currency,
       email: input.email,
       description: `${hold.quantity} × ${hold.ticketType.name} — ${hold.event.title}`,
+      returnTo: input.returnTo,
       ...(provider.name === 'paystack' ? await this.paystackSplit(hold.event.orgId, currency, q, hold.event.feeMode) : {}),
     });
     await this.prisma.order.update({ where: { id }, data: { paymentRef: pay.paymentRef } });
@@ -238,7 +239,7 @@ export class CheckoutService {
   }
 
   /** Pays for a fan-resale listing the buyer is holding (POST /resale/:id/hold gave them the key). */
-  async createResaleOrder(listingId: string, input: { holdKey: string; email: string; name: string }, user: AuthUser | null, clientIp: string | null) {
+  async createResaleOrder(listingId: string, input: { holdKey: string; email: string; name: string; returnTo?: 'app' }, user: AuthUser | null, clientIp: string | null) {
     const l = await this.prisma.resaleListing.findUnique({ where: { id: listingId }, include: { event: true, ticket: { include: { ticketType: true } }, order: true } });
     if (!l || l.status !== 'HELD' || l.heldBy !== input.holdKey || !l.heldUntil || l.heldUntil <= new Date()) {
       throw new ConflictException('Your hold on that ticket ran out. Pick it again.');
@@ -266,7 +267,7 @@ export class CheckoutService {
         resaleListingId: l.id,
       },
     });
-    const pay = await provider.createPayment({ orderId: id, amountCents: l.priceCents, currency, email: input.email, description: `Resale: ${l.ticket.ticketType.name} — ${l.event.title}` });
+    const pay = await provider.createPayment({ orderId: id, amountCents: l.priceCents, currency, email: input.email, description: `Resale: ${l.ticket.ticketType.name} — ${l.event.title}`, returnTo: input.returnTo });
     await this.prisma.order.update({ where: { id }, data: { paymentRef: pay.paymentRef } });
     return {
       orderId: order.id,

@@ -1,7 +1,7 @@
 import { BadRequestException, Body, Controller, Delete, Get, Headers, HttpCode, Module, Param, Post, Query, Req } from '@nestjs/common';
 import { ApiBearerAuth, ApiProperty, ApiPropertyOptional, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
-import { IsBoolean, IsDateString, IsEmail, IsInt, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
+import { IsBoolean, IsDateString, IsEmail, IsIn, IsInt, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
 import type { Request } from 'express';
 import { CheckoutService } from './checkout.service';
 import { Payments } from './payments';
@@ -31,12 +31,20 @@ export class CreateOrderDto {
   @ApiPropertyOptional() @IsOptional() @IsBoolean() protection?: boolean;
   @ApiPropertyOptional() @IsOptional() @IsString() @Matches(/^[A-Za-z0-9]{3,15}$/) promoCode?: string;
   @ApiPropertyOptional({ type: GiftDto, description: 'Buy for someone else' }) @IsOptional() @ValidateNested() @Type(() => GiftDto) gift?: GiftDto;
+  @ApiPropertyOptional({ enum: ['app'], description: 'Paying from the mobile app: Paystack sends the fan back to /checkout/return?order=…&app=1, which opens the app' })
+  @IsOptional()
+  @IsIn(['app'])
+  returnTo?: 'app';
 }
 
 export class ResaleOrderDto {
   @ApiProperty({ description: 'From POST /resale/:id/hold' }) @IsString() @MaxLength(64) holdKey: string;
   @ApiProperty() @Transform(lower) @IsEmail() email: string;
   @ApiProperty() @IsString() @MinLength(2) @MaxLength(80) name: string;
+  @ApiPropertyOptional({ enum: ['app'], description: 'Paying from the mobile app: Paystack sends the fan back to /checkout/return?order=…&app=1, which opens the app' })
+  @IsOptional()
+  @IsIn(['app'])
+  returnTo?: 'app';
 }
 
 export class QuoteDto {

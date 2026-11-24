@@ -51,6 +51,9 @@ Runs against a separate `eventro_test` database (created by `db:start`; override
   ended by password changes and suspension; push devices, choices and every trigger against a stand-in Expo push
   service (dead phones disabled, dedupe); QR seeds matching the server, a transfer refusing the old holder's codes;
   door packs and offline check-in sync.
+- **Client additions (`test/gaps.test.ts`):** trending sort and `soldRecent`, price filters in the visitor's currency,
+  Paystack's return URL for app buyers (orders and resale orders), who scanned a ticket first, `event.currency` in My
+  tickets, section names in My resale, and the door scanner's event list.
 
 Tests never call real services: Stripe, Paystack, mediaEX, Expo push, IP lookups and exchange rates are switched off or replaced
 by local stand-ins.
@@ -296,6 +299,33 @@ Each ticket has a seed; the app can make the same rotating codes as `GET /ticket
   `wrong-event`, `void`, `transfer-pending`, `bad-code`: the code doesn't match the ticket's current seed, or
   `expired-code`: more than 2 minutes from `scannedAt`). Sending a batch again gives the same answers (`replay: true`).
   `summary` counts each result. `POST …/check-in` takes an optional `deviceId` too.
+- Online, `POST …/check-in` answers a repeat scan with `result: "duplicate"` plus the first scan's `checkedInAt`,
+  `checkedInBy: { id, name } | null` and `checkedInDevice` (null when it was scanned without a `deviceId`, e.g. on
+  the website), so a scanner can say "Already scanned at 7:42 PM by Sam (other device)".
+- `GET /organizer/orgs/:orgId/door-events` (DOOR role or higher) is the light list for a scanner's event picker: every
+  event that isn't a draft, from 2 days ago to 60 days ahead, soonest first, as `{ id, slug, title, startsAt, doorsAt,
+  timezone, venue: { name, city } | null, online, status, ticketsIssued, checkedIn }`. `ticketsIssued` counts non-void
+  tickets, the same ones the door pack holds, so "N of M checked in" means the same online and offline.
+
+### Paying with Paystack from the app
+
+`POST /orders` and `POST /resale/:id/orders` take an optional `returnTo: "app"`. Paystack then sends the fan to
+`${WEB_URL}/checkout/return?order=<id>&app=1` instead of the plain return page. The website verifies the payment as
+usual and, once it's paid, opens `eventro://tickets` (and shows an "Open the Eventro app" button, with the web
+confirmation underneath in case the app doesn't open). The app opens Paystack in an auth session that waits for
+`eventro://`, so the browser closes itself, and it still calls `POST /orders/:id/verify` afterwards.
+
+### Discover and search
+
+- `GET /events?sort=popular` ranks by paid tickets sold in the last 14 days (PAID and PARTIALLY_REFUNDED orders, by
+  `paidAt`), ties soonest first. Every card carries that count as `soldRecent`; the app's Discover rail says
+  "Trending" only when something has sold lately.
+- `GET /events?currency=NGN&maxPrice=25000`: with `currency` (any event currency), each card's `fromCents` is
+  converted into it with the exchange rates (`GET /fx/rates`, approximate) before comparing with `maxPrice` (whole
+  units of that currency), and cards get `fromCentsIn: { currency, cents }` for an "≈ $16" hint. Without `currency`,
+  `maxPrice` is compared in each event's own currency, as before.
+- `GET /me/tickets` has `event.currency`; `GET /me/resale` has `ticket.sectionName` ("Lower Level 104", from the
+  event's seat map, like My tickets).
 
 ## API overview
 
@@ -305,15 +335,15 @@ All routes are under `/api/v1`. Send `Authorization: Bearer <token>` from `/auth
 |---|---|
 | Auth | `POST /auth/signup`, `POST /auth/login` (both take an optional `device`), `POST /auth/refresh`, `POST /auth/logout`, `POST /auth/forgot`, `POST /auth/reset/check`, `POST /auth/reset`, `POST /auth/password`, `GET /auth/me`, `PATCH /auth/me` (name) |
 | Devices & push | `GET /me/sessions`, `DELETE /me/sessions/:id`, `POST /me/push-devices`, `DELETE /me/push-devices/:token`, `GET/PATCH /me/notify-prefs` |
-| Browse | `GET /events?q&category&city&from&to&maxPrice&sort&page`, `GET /events/:slug`, `GET /events/:slug/availability?qty`, `GET /events/:slug/sections/:id/seats`, `GET /venues`, `GET /venues/:slug` |
-| Checkout | `POST /holds`, `GET /holds/:id`, `DELETE /holds/:id`, `POST /quote`, `POST /orders`, `GET /orders/:id`, `POST /orders/:id/pay` (mock), `POST /orders/:id/verify` (Paystack), `POST /orders/:id/refund-requests`, `POST /webhooks/stripe`, `POST /webhooks/paystack` |
+| Browse | `GET /events?q&category&city&country&near&radiusKm&from&to&maxPrice&currency&sort&page` (`sort`: `date`, `price-asc`, `price-desc`, `distance`, `popular`; cards carry `soldRecent`, plus `fromCentsIn` with `currency`), `GET /events/:slug`, `GET /events/:slug/availability?qty`, `GET /events/:slug/sections/:id/seats`, `GET /venues`, `GET /venues/:slug` |
+| Checkout | `POST /holds`, `GET /holds/:id`, `DELETE /holds/:id`, `POST /quote`, `POST /orders` (optional `returnTo: "app"`), `GET /orders/:id`, `POST /orders/:id/pay` (mock), `POST /orders/:id/verify` (Paystack), `POST /orders/:id/refund-requests`, `POST /webhooks/stripe`, `POST /webhooks/paystack` |
 | Places & money | `GET /geo/countries`, `GET /geo/countries/:code/regions`, `GET /geo/search?q&country`, `GET /geo/timezone?lat&lng`, `GET /geo/me`, `GET /geo/currencies`, `GET /fx/rates` |
 | Newsletter | `POST /newsletter` (sign up; returns a private preferences token only when it creates or reopens the subscription), `GET/PATCH/DELETE /newsletter/:token` (preferences and unsubscribe). Limited to `SIGNUPS_PER_IP_PER_HOUR` (default 20) sign-ups per IP per hour. |
-| Tickets | `GET /me/tickets`, `GET /tickets/:id/qr`, `GET /tickets/:id/qr-seed`, `POST/DELETE /tickets/:id/transfer`, `POST /tickets/:id/accept`, `POST/DELETE /tickets/:id/listing` |
+| Tickets | `GET /me/tickets` (`event.currency`), `GET /tickets/:id/qr`, `GET /tickets/:id/qr-seed`, `POST/DELETE /tickets/:id/transfer`, `POST /tickets/:id/accept`, `POST/DELETE /tickets/:id/listing` |
 | Media | `GET /media/config`, `POST /media/uploads`, `PUT /media/uploads/:id`, `POST /media/uploads/:id/complete`, `GET /media/uploads/:id`, `PUT /organizer/events/:id/media` |
 | Organizer | `POST/GET /organizer/orgs`, `PATCH /organizer/orgs/:orgId`, `GET …/orders/recent`, team `GET/POST /organizer/orgs/:orgId/team`, `PATCH/DELETE …/team/:memberId`, `POST /organizer/invites/accept`, payouts `GET /organizer/orgs/:orgId/payouts`, `PUT …/payout-settings`, `POST …/payouts/onboarding` |
-| Organizer events | `POST/GET /organizer/orgs/:orgId/events`, `GET/PATCH /organizer/events/:id`, ticket types `POST/PATCH/DELETE …/ticket-types/:ttId`, `POST …/submit`, `POST …/pause`, `POST …/resume`, `PUT …/seat-map`, `POST …/seat-map/template`, `GET …/stats?days=30`, `GET …/attendees`, `GET …/attendees.csv`, `POST …/check-in`, `DELETE …/check-in/:ticketId`, `GET …/door-pack`, `POST …/check-ins/sync`, promos `GET/POST …/promos`, `PATCH/DELETE …/promos/:code` |
-| Resale | `GET /events/:slug/resale`, `POST /resale/:id/hold`, `POST /resale/:id/orders`, `GET /me/resale` |
+| Organizer events | `POST/GET /organizer/orgs/:orgId/events`, `GET /organizer/orgs/:orgId/door-events`, `GET/PATCH /organizer/events/:id`, ticket types `POST/PATCH/DELETE …/ticket-types/:ttId`, `POST …/submit`, `POST …/pause`, `POST …/resume`, `PUT …/seat-map`, `POST …/seat-map/template`, `GET …/stats?days=30`, `GET …/attendees`, `GET …/attendees.csv`, `POST …/check-in` (duplicates say who scanned first), `DELETE …/check-in/:ticketId`, `GET …/door-pack`, `POST …/check-ins/sync`, promos `GET/POST …/promos`, `PATCH/DELETE …/promos/:code` |
+| Resale | `GET /events/:slug/resale`, `POST /resale/:id/hold`, `POST /resale/:id/orders` (optional `returnTo: "app"`), `GET /me/resale` (`ticket.sectionName`) |
 | Gifts | `GET /gifts/:token`, `POST /gifts/:token/claim`, `POST /gifts/:id/resend` |
 | Price drops | `POST /events/:slug/price-watch`, `GET /events/:slug/price-drop`, `DELETE /price-watch/:token`, `GET /organizer/events/:id/price-drops` |
 | Admin console | `GET /admin/overview`, `GET/PATCH /admin/users[/:id]`, `GET/PATCH /admin/orgs[/:id]`, `GET /admin/events`, `POST /admin/events/:id/takedown`, `…/publish`, `…/sales`, `GET /admin/orders`, `POST /admin/orders/:id/refund`, `GET /admin/subscribers`, `GET /admin/subscribers.csv`, `GET /admin/broadcast/audience`, `POST /admin/broadcast`, `GET /admin/price-drops`, `GET /admin/emails`, `GET /admin/notifications?kind&status&q`, `GET /admin/resale?status&q`, `GET /admin/resale/payouts?status`, `POST /admin/resale/:id/delist`, `POST /admin/resale/:id/payout` |
