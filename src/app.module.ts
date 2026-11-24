@@ -22,6 +22,7 @@ import { PriceDropModule } from './price-drops/price-drops.module';
 import { GiftModule } from './gifts/gifts.module';
 import { VenuesModule } from './venues/venues.module';
 import { ResaleModule } from './resale/resale.module';
+import { PushModule } from './push/push.module';
 import { Payments } from './checkout/payments';
 
 @ApiTags('health')
@@ -60,6 +61,7 @@ class CoreModule {}
     FxModule,
     NewsletterModule,
     MailModule,
+    PushModule,
     PriceDropModule,
     GiftModule,
     VenuesModule,

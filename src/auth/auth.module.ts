@@ -1,8 +1,7 @@
-import { BadRequestException, Body, ConflictException, Controller, ForbiddenException, Get, HttpCode, Injectable, Logger, Module, Patch, Post, Req, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, Body, ConflictException, Controller, Delete, ForbiddenException, Get, HttpCode, Injectable, Logger, Module, Param, Patch, Post, Req, UnauthorizedException } from '@nestjs/common';
 import { ApiBearerAuth, ApiProperty, ApiPropertyOptional, ApiTags } from '@nestjs/swagger';
-import { JwtService } from '@nestjs/jwt';
-import { IsEmail, IsOptional, IsString, Matches, MaxLength, MinLength } from 'class-validator';
-import { Transform } from 'class-transformer';
+import { IsEmail, IsOptional, IsString, Matches, MaxLength, MinLength, ValidateNested } from 'class-validator';
+import { Transform, Type } from 'class-transformer';
 import type { Request } from 'express';
 import { createHash, randomBytes } from 'node:crypto';
 import bcrypt from 'bcryptjs';
@@ -10,8 +9,9 @@ import { PrismaService } from '../prisma.service';
 import { AuditService } from '../common/audit.service';
 import { MailService, render } from '../mail/mail.module';
 import { config } from '../config';
-import { CurrentUser, Public, type AuthUser, type Role } from '../common/auth';
+import { CurrentSession, CurrentUser, Public, type AuthUser, type Role } from '../common/auth';
 import { RATE_RULES, RateLimit, clientIp } from '../common/rate-limit';
+import { SessionService, type SessionUser } from './sessions';
 
 const lower = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim().toLowerCase() : value);
 
@@ -30,10 +30,27 @@ const hashToken = (token: string) => createHash('sha256').update(token).digest('
 /** A path on the website to go to after resetting (never another site). */
 const SAFE_NEXT = /^\/(?![/\\])\S{0,300}$/;
 
+/** Sent by the mobile app only: asks for a long-lived device sign-in (a refresh token). */
+export class DeviceDto {
+  @ApiPropertyOptional({ example: 'Ada’s iPhone' }) @IsOptional() @IsString() @MaxLength(80) name?: string;
+  @ApiPropertyOptional({ example: 'ios', description: 'ios, android, …' }) @IsOptional() @IsString() @MaxLength(20) platform?: string;
+}
+const DEVICE_DOC = { type: DeviceDto, description: 'Mobile app only. When present the answer also has refreshToken (see POST /auth/refresh) and a 1-hour access token.' };
+
 export class SignupDto {
   @ApiProperty({ example: 'Ada Obi' }) @IsString() @MinLength(2) @MaxLength(80) name: string;
   @ApiProperty({ example: 'ada@example.com' }) @Transform(lower) @IsEmail() email: string;
   @ApiProperty({ minLength: 8 }) @PasswordRules() password: string;
+  @ApiPropertyOptional(DEVICE_DOC) @IsOptional() @ValidateNested() @Type(() => DeviceDto) device?: DeviceDto;
+}
+
+export class RefreshDto {
+  @ApiProperty() @IsString() @MinLength(20) @MaxLength(200) refreshToken: string;
+}
+
+export class LogoutDto {
+  @ApiProperty() @IsString() @MinLength(20) @MaxLength(200) refreshToken: string;
+  @ApiPropertyOptional({ description: 'This phone’s Expo push token: it stops getting notifications.' }) @IsOptional() @IsString() @MaxLength(250) pushToken?: string;
 }
 
 export class UpdateMeDto {
@@ -43,6 +60,7 @@ export class UpdateMeDto {
 export class LoginDto {
   @ApiProperty() @Transform(lower) @IsEmail() email: string;
   @ApiProperty() @IsString() @MaxLength(200) password: string;
+  @ApiPropertyOptional(DEVICE_DOC) @IsOptional() @ValidateNested() @Type(() => DeviceDto) device?: DeviceDto;
 }
 
 export class ForgotDto {
@@ -61,14 +79,13 @@ export class ResetTokenDto {
 export class ResetDto {
   @ApiProperty() @IsString() @MinLength(20) @MaxLength(200) token: string;
   @ApiProperty({ minLength: 8 }) @PasswordRules() password: string;
+  @ApiPropertyOptional(DEVICE_DOC) @IsOptional() @ValidateNested() @Type(() => DeviceDto) device?: DeviceDto;
 }
 
 export class ChangePasswordDto {
   @ApiProperty() @IsString() @MaxLength(200) currentPassword: string;
   @ApiProperty({ minLength: 8 }) @PasswordRules() newPassword: string;
 }
-
-type SessionUser = { id: string; email: string; name: string; roles: string[]; passwordChangedAt?: Date | null };
 
 const resetRefused = (code: 'RESET_INVALID' | 'RESET_USED' | 'RESET_EXPIRED') =>
   new BadRequestException({
@@ -87,23 +104,18 @@ export class AuthService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly jwt: JwtService,
     private readonly audit: AuditService,
     private readonly mail: MailService,
+    private readonly sessions: SessionService,
   ) {}
 
-  private async session(u: SessionUser) {
-    // JWT `iat` is in whole seconds and the guard refuses tokens issued at or before the last password change,
-    // so a token issued in the same second as a change is stamped one second later to stay valid.
-    const now = Math.floor(Date.now() / 1000);
-    const changed = u.passwordChangedAt ? Math.floor(u.passwordChangedAt.getTime() / 1000) + 1 : 0;
-    return {
-      token: await this.jwt.signAsync({ sub: u.id, iat: Math.max(now, changed) }),
-      user: { id: u.id, email: u.email, name: u.name, roles: u.roles as Role[] },
-    };
+  /** The website's answer ({ token, user }); with `device`, a mobile session with a refresh token as well. */
+  private async session(u: SessionUser, device?: DeviceDto, ip: string | null = null) {
+    if (device) return this.sessions.start(u, device, ip);
+    return { token: (await this.sessions.accessToken(u)).token, user: SessionService.userView(u) };
   }
 
-  async signup(dto: SignupDto) {
+  async signup(dto: SignupDto, ip: string | null = null) {
     const exists = await this.prisma.user.findUnique({ where: { email: dto.email } });
     if (exists) throw new ConflictException('An account with this email already exists. Sign in instead.');
     const roles: Role[] = ['FAN'];
@@ -114,16 +126,16 @@ export class AuthService {
     // Tickets bought with this email before the account existed now belong to it.
     await this.prisma.ticket.updateMany({ where: { holderEmail: dto.email, ownerId: null }, data: { ownerId: user.id } });
     await this.prisma.order.updateMany({ where: { email: dto.email, buyerId: null }, data: { buyerId: user.id } });
-    return this.session(user);
+    return this.session(user, dto.device, ip);
   }
 
-  async login(dto: LoginDto) {
+  async login(dto: LoginDto, ip: string | null = null) {
     const user = await this.prisma.user.findUnique({ where: { email: dto.email } });
     // Same message and similar timing whether or not the email exists.
     const ok = await bcrypt.compare(dto.password, user?.passwordHash ?? '$2a$11$invalidinvalidinvalidinvalidinvalidinvalidinvalidinv');
     if (!user || !ok) throw new UnauthorizedException('Email or password is incorrect.');
     if (user.suspendedAt) throw new ForbiddenException('This account is suspended. Contact Eventro support.');
-    return this.session(user);
+    return this.session(user, dto.device, ip);
   }
 
   async rename(id: string, name: string) {
@@ -188,15 +200,23 @@ export class AuthService {
     // Claim the link first so two submits can't both use it.
     const { count } = await this.prisma.passwordReset.updateMany({ where: { id: r.id, usedAt: null }, data: { usedAt: new Date() } });
     if (!count) throw resetRefused('RESET_USED');
-    const user = await this.setPassword(r.userId, dto.password, 'user.password_reset', ip);
-    return this.session(user);
+    const user = await this.setPassword(r.userId, dto.password, 'user.password_reset', ip, null);
+    return this.session(user, dto.device, ip);
   }
 
-  async changePassword(me: AuthUser, dto: ChangePasswordDto, ip: string | null) {
+  /**
+   * From the mobile app (a device session), that device stays signed in: its refresh token keeps working and the
+   * answer is a new access token for it. Every other sign-in ends.
+   */
+  async changePassword(me: AuthUser, dto: ChangePasswordDto, ip: string | null, sessionId: string | null = null) {
     const u = await this.prisma.user.findUnique({ where: { id: me.id } });
     if (!u || !(await bcrypt.compare(dto.currentPassword, u.passwordHash))) throw new BadRequestException('Your current password isn’t right.');
     if (await bcrypt.compare(dto.newPassword, u.passwordHash)) throw new BadRequestException('Choose a new password that’s different from your current one.');
-    const user = await this.setPassword(u.id, dto.newPassword, 'user.password_change', ip);
+    const user = await this.setPassword(u.id, dto.newPassword, 'user.password_change', ip, sessionId);
+    if (sessionId) {
+      const access = await this.sessions.accessToken(user, sessionId);
+      return { token: access.token, accessTokenExpiresAt: access.expiresAt, sessionId, user: SessionService.userView(user) };
+    }
     return this.session(user);
   }
 
@@ -204,12 +224,14 @@ export class AuthService {
    * New password: unused reset links stop working, sign-ins from before now end (the guard checks
    * passwordChangedAt), the change is audited and the account holder gets an email about it.
    */
-  private async setPassword(userId: string, password: string, action: string, ip: string | null) {
+  private async setPassword(userId: string, password: string, action: string, ip: string | null, keepSessionId: string | null) {
     const passwordHash = await hashPassword(password);
     const now = new Date();
     const [user] = await this.prisma.$transaction([
       this.prisma.user.update({ where: { id: userId }, data: { passwordHash, passwordChangedAt: now } }),
       this.prisma.passwordReset.deleteMany({ where: { userId, usedAt: null } }),
+      // Mobile sign-ins end too (refresh tokens stop working), except the device making the change.
+      this.prisma.session.updateMany({ where: { userId, revokedAt: null, ...(keepSessionId ? { id: { not: keepSessionId } } : {}) }, data: { revokedAt: now } }),
     ]);
     await this.audit.log(userId, action, 'User', userId, { ip });
     const { html, text } = render({
@@ -231,21 +253,49 @@ export class AuthService {
 @ApiTags('auth')
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly auth: AuthService) {}
+  constructor(
+    private readonly auth: AuthService,
+    private readonly sessions: SessionService,
+    private readonly prisma: PrismaService,
+  ) {}
 
   @Public()
   @Post('signup')
   @RateLimit(RATE_RULES.signup)
-  signup(@Body() dto: SignupDto) {
-    return this.auth.signup(dto);
+  signup(@Body() dto: SignupDto, @Req() req: Request) {
+    return this.auth.signup(dto, clientIp(req));
   }
 
   @Public()
   @Post('login')
   @HttpCode(200)
   @RateLimit(RATE_RULES.loginPerIpEmail, RATE_RULES.loginPerIp)
-  login(@Body() dto: LoginDto) {
-    return this.auth.login(dto);
+  login(@Body() dto: LoginDto, @Req() req: Request) {
+    return this.auth.login(dto, clientIp(req));
+  }
+
+  /**
+   * Mobile app: swaps a refresh token for a new access token and a new refresh token (the old one stops working).
+   * 401 with `code` REFRESH_INVALID, REFRESH_EXPIRED, REFRESH_REVOKED, REFRESH_REUSED (an old token came back:
+   * the session is ended) or ACCOUNT_SUSPENDED. Send one refresh at a time per device.
+   */
+  @Public()
+  @Post('refresh')
+  @HttpCode(200)
+  @RateLimit(RATE_RULES.refresh)
+  refresh(@Body() dto: RefreshDto, @Req() req: Request) {
+    return this.sessions.refresh(dto.refreshToken, clientIp(req));
+  }
+
+  /** Mobile app: signs this device out (its refresh token stops working) and, with `pushToken`, stops its notifications. */
+  @Public()
+  @Post('logout')
+  @HttpCode(200)
+  @RateLimit(RATE_RULES.refresh)
+  async logout(@Body() dto: LogoutDto) {
+    const userId = await this.sessions.logout(dto.refreshToken);
+    if (userId && dto.pushToken) await this.prisma.pushDevice.updateMany({ where: { token: dto.pushToken, userId, disabledAt: null }, data: { disabledAt: new Date() } });
+    return { ok: true };
   }
 
   /** Emails a reset link if the account exists. The answer is the same either way. */
@@ -280,8 +330,8 @@ export class AuthController {
   @Post('password')
   @HttpCode(200)
   @RateLimit(RATE_RULES.password)
-  changePassword(@CurrentUser() user: AuthUser, @Body() dto: ChangePasswordDto, @Req() req: Request) {
-    return this.auth.changePassword(user, dto, clientIp(req));
+  changePassword(@CurrentUser() user: AuthUser, @CurrentSession() sid: string | null, @Body() dto: ChangePasswordDto, @Req() req: Request) {
+    return this.auth.changePassword(user, dto, clientIp(req), sid);
   }
 
   @ApiBearerAuth()
@@ -298,8 +348,28 @@ export class AuthController {
   }
 }
 
+/** The account's mobile sign-ins. */
+@ApiTags('auth')
+@ApiBearerAuth()
+@Controller('me/sessions')
+export class SessionsController {
+  constructor(private readonly sessions: SessionService) {}
+
+  /** Signed-in devices; `current` marks the one making this request (mobile access tokens only). */
+  @Get()
+  list(@CurrentUser() user: AuthUser, @CurrentSession() sid: string | null) {
+    return this.sessions.list(user.id, sid);
+  }
+
+  /** Signs that device out: its refresh token and access token stop working at once. */
+  @Delete(':id')
+  revoke(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.sessions.revokeOne(user.id, id);
+  }
+}
+
 @Module({
-  controllers: [AuthController],
-  providers: [AuthService],
+  controllers: [AuthController, SessionsController],
+  providers: [AuthService, SessionService],
 })
 export class AuthModule {}

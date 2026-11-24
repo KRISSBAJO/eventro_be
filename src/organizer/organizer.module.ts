@@ -5,10 +5,12 @@ import { BankAccountDto, PayoutAccounts } from './payout-accounts';
 import { CheckoutModule } from '../checkout/checkout.module';
 import { AdminModule } from '../admin/admin-console';
 import { CurrentUser, type AuthUser } from '../common/auth';
+import { RATE_RULES, RateLimit } from '../common/rate-limit';
 import { config } from '../config';
 import {
   CancelEventDto,
   CheckInDto,
+  CheckInSyncDto,
   CreateEventDto,
   CreateOrgDto,
   InviteDto,
@@ -163,7 +165,21 @@ export class OrganizerController {
     return this.svc.attendeesCsv(id, u);
   }
   @Post('events/:id/check-in') @HttpCode(200) checkIn(@Param('id') id: string, @CurrentUser() u: AuthUser, @Body() dto: CheckInDto) {
-    return this.svc.checkIn(id, u, dto.code);
+    return this.svc.checkIn(id, u, dto.code, dto.deviceId);
+  }
+  /**
+   * Offline door scanning: every non-void ticket with its QR seed, so a scanner can check codes without a
+   * connection. Holds secrets: rate-limited, audited, never cached. Same access as check-in (DOOR and up).
+   */
+  @Get('events/:id/door-pack')
+  @Header('Cache-Control', 'no-store')
+  @RateLimit(RATE_RULES.doorPack)
+  doorPack(@Param('id') id: string, @CurrentUser() u: AuthUser) {
+    return this.svc.doorPack(id, u);
+  }
+  /** Uploads scans made offline (up to 500 per call); safe to send again. */
+  @Post('events/:id/check-ins/sync') @HttpCode(200) syncCheckIns(@Param('id') id: string, @CurrentUser() u: AuthUser, @Body() dto: CheckInSyncDto) {
+    return this.svc.syncCheckIns(id, u, dto.deviceId, dto.scans);
   }
   @Delete('events/:id/check-in/:ticketId') undo(@Param('id') id: string, @Param('ticketId') ticketId: string, @CurrentUser() u: AuthUser) {
     return this.svc.undoCheckIn(id, ticketId, u);

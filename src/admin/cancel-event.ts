@@ -16,6 +16,7 @@ import { MailService, formatMoney, render, type Mail } from '../mail/mail.module
 import { config } from '../config';
 import type { AuthUser } from '../common/auth';
 import { AdminService } from './admin.module';
+import { NoticeService } from '../push/notices';
 
 const REFUNDABLE = ['PAID', 'PARTIALLY_REFUNDED'] as const;
 
@@ -45,6 +46,7 @@ export class EventCancellation {
     private readonly audit: AuditService,
     private readonly admin: AdminService,
     private readonly mail: MailService,
+    private readonly notices: NoticeService,
   ) {}
 
   /** What cancelling would do: the paid orders that would be refunded and how much, per currency. */
@@ -99,6 +101,8 @@ export class EventCancellation {
 
     // Counted now: refunds void their own tickets as they go.
     const liveTickets = await this.prisma.ticket.count({ where: { eventId, status: { not: 'VOID' } } });
+    // Who to tell by push, also collected before the tickets are voided.
+    const holders = await this.notices.holders(eventId).catch(() => [] as string[]);
 
     // 2. Refund each paid order on its own, so one failure doesn't stop the rest.
     const orders = await this.prisma.order.findMany({
@@ -139,6 +143,8 @@ export class EventCancellation {
 
     // 4. One email per order, after replying: refunded ones say how much; failed ones that a refund is coming.
     void this.emailBuyers(e, shownReason, refunded, failed, alreadyCancelled).catch((err) => this.log.warn(`Cancellation emails for ${eventId}: ${(err as Error).message}`));
+    // Push to every ticket holder with an account (once per person, even if cancel is retried).
+    void this.notices.eventCancelled({ id: e.id, title: e.title, orgName: e.org.name }, holders);
 
     return {
       status: 'CANCELLED',

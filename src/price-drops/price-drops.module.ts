@@ -36,6 +36,7 @@ import { config } from '../config';
 import { CurrentUser, OptionalAuth, Public, type AuthUser } from '../common/auth';
 import { RATE_RULES, RateLimit, clientIp } from '../common/rate-limit';
 import { MailService, formatMoney, render, type Mail } from '../mail/mail.module';
+import { NoticeService } from '../push/notices';
 
 /** Smallest cut worth an email, as a fraction of the old price. */
 export const MIN_DROP = 0.05;
@@ -83,6 +84,7 @@ export class PriceDropService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly mail: MailService,
+    private readonly notices: NoticeService,
   ) {}
 
   /**
@@ -130,6 +132,8 @@ export class PriceDropService {
 
   private async notify(dropId: string, e: EventForDrop, ticketName: string, from: number, to: number, audience: Awaited<ReturnType<PriceDropService['audience']>>) {
     const off = Math.round(((from - to) / from) * 100);
+    // Watchers with an account also get a push (if they allow price drops).
+    void this.notices.priceDrop(dropId, e, ticketName, to, off);
     const when = new Intl.DateTimeFormat('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' }).format(e.startsAt);
     const where = e.online ? 'Online' : e.venue ? `${e.venue.name}, ${e.venue.city}` : '';
     const url = `${config.webUrl}/events/${e.slug}`;

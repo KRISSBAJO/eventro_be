@@ -47,7 +47,12 @@ Runs against a separate `eventro_test` database (created by `db:start`; override
   tickets issued once); venue time zones from the map position; online events keep the organizer's zone and give
   buyers the stream link; unknown zones and currencies are refused; exchange rates and visitor country.
 
-Tests never call real services: Stripe, Paystack, mediaEX, IP lookups and exchange rates are switched off or replaced
+- **Mobile (`test/mobile.test.ts`):** refresh-token rotation and reuse detection, device lists and sign-out, sessions
+  ended by password changes and suspension; push devices, choices and every trigger against a stand-in Expo push
+  service (dead phones disabled, dedupe); QR seeds matching the server, a transfer refusing the old holder's codes;
+  door packs and offline check-in sync.
+
+Tests never call real services: Stripe, Paystack, mediaEX, Expo push, IP lookups and exchange rates are switched off or replaced
 by local stand-ins.
 
 ## Payments
@@ -206,25 +211,112 @@ the reply.
 - `GET /events/:slug` returns the map with an `available` count on every section, so the website can shade sections and show "12 left".
 - `POST /holds` accepts an optional `sectionId` for fans who pick a section on the map.
 
+## Mobile app
+
+Everything the Expo app needs is additive: the website keeps working unchanged.
+
+### Long-lived sign-ins
+
+- `POST /auth/login`, `POST /auth/signup` and `POST /auth/reset` take an optional `device: { name?, platform? }`. With it,
+  the answer is the usual `{ token, user }` plus `refreshToken`, `refreshTokenExpiresAt`, `accessTokenExpiresAt` and
+  `sessionId`. The access token lasts **1 hour** (website tokens stay at 7 days). The refresh token looks like
+  `<sessionId>.<43 base64url chars>` (32 random bytes); only its SHA-256 hash is stored. It lasts 60 days from its last use.
+- `POST /auth/refresh { refreshToken }` returns a new access token **and a new refresh token**; the old one stops working.
+  If an old refresh token is ever presented again, the whole session is revoked (someone copied it). Send one refresh at a
+  time per device. Refusals are 401 with `code`: `REFRESH_INVALID`, `REFRESH_EXPIRED`, `REFRESH_REVOKED`,
+  `REFRESH_REUSED`, `ACCOUNT_SUSPENDED`. Limited to `RATE_REFRESH_PER_IP` (default 120) per 15 minutes.
+- `POST /auth/logout { refreshToken, pushToken? }` signs this device out (and stops its notifications). Always `{ ok: true }`.
+- `GET /me/sessions` lists signed-in devices (`deviceName`, `platform`, `ip`, `createdAt`, `lastUsedAt`, `expiresAt`,
+  `current`); `DELETE /me/sessions/:id` signs one out. Access tokens carry the session id (`sid`), so a signed-out
+  device's access token stops working at once.
+- A password reset ends every session; a password change ends all but the device making it (`POST /auth/password` from
+  the app answers with a fresh access token for the same session). An admin suspension ends them all.
+
+### Push notifications
+
+- `POST /me/push-devices { token, platform?, deviceName? }` registers an Expo push token (`ExponentPushToken[…]` or
+  `ExpoPushToken[…]`); call it after every sign-in. A token moves to whoever registered it last.
+  `DELETE /me/push-devices/:token` (URL-encoded) turns it off.
+- `GET /me/notify-prefs`, `PATCH /me/notify-prefs` with any of `orders`, `tickets`, `priceDrops`, `reminders`, `marketing`
+  (booleans; all on except `marketing`).
+- Sent through Expo (`EXPO_PUSH_URL`, optional `EXPO_ACCESS_TOKEN`) 100 at a time, in the background. Every message is
+  logged in `NotificationLog` (SENT, FAILED, or SKIPPED: no phones, or that kind switched off), shown at
+  `GET /admin/notifications`. `DeviceNotRegistered` (from the send or from Expo's receipts, checked every 15 minutes)
+  switches that phone off. A `dedupeKey` per message means nothing is sent twice.
+- Every notification's `data` has `type`, `url` (`eventro://<path>`) and `path` (the website path), plus ids:
+
+| Trigger | To | Choice | `data.path` | Dedupe key |
+|---|---|---|---|---|
+| Order paid ("You're going to …") | buyer | orders | `/tickets/<ticketId>` | `order.paid:<orderId>` |
+| Transfer received | recipient | tickets | `/tickets` | `ticket.transfer:<ticketId>:<expiry ms>` |
+| Transfer accepted | sender | tickets | `/tickets` | `ticket.accepted:<ticketId>:<qrVersion>` |
+| Gift delivered | recipient | tickets | `/gift/<token>` | `gift.delivered:<giftId>` |
+| Resale sold | seller | orders | `/tickets` | `resale.sold:<listingId>` |
+| Price drop | watchers | priceDrops | `/events/<slug>` | `price_drop:<dropId>:<userId>` |
+| Event cancelled | ticket holders | orders | `/tickets` | `event.cancelled:<eventId>:<userId>` |
+| "Tomorrow: …" (start 20–24 h away) | holders of ACTIVE tickets | reminders | `/tickets/<ticketId>` | `reminder.day:<eventId>:<userId>` |
+| "Doors open soon" (hour before doors, or start) | holders of ACTIVE tickets | reminders | `/tickets/<ticketId>` | `reminder.doors:<eventId>:<userId>` |
+
+  Only people with an Eventro account get pushes. Reminders run every 5 minutes and use the venue's real time
+  (event times are stored as wall-clock in the venue zone).
+
+### Offline tickets (QR seeds)
+
+Each ticket has a seed; the app can make the same rotating codes as `GET /tickets/:id/qr` without a connection.
+
+- `GET /tickets/:id/qr-seed` (owner only, ACTIVE tickets only; `Cache-Control: no-store`) →
+  `{ ticketId, seed, version, windowMs: 15000, algorithm: "HMAC-SHA256", format }`. `GET /me/tickets` also puts
+  `qrSeed` and `qrVersion` on ACTIVE tickets. Keep seeds in secure storage.
+- The code shown at time `t` (Unix milliseconds):
+
+  ```
+  window = floor(t / 15000)
+  sig    = base64url(HMAC-SHA256(key = base64urlDecode(seed), message = ticketId + "." + window)), first 22 characters
+  code   = ticketId + "." + window + "." + sig          e.g. EVT-AB12-CD34-01.115384210.Qm9fX3...
+  ```
+
+  base64url is RFC 4648 §5 without `=` padding. Refresh the QR every window (the door accepts one window either side).
+- Server side, `seed = HMAC-SHA256(TICKET_QR_SECRET, "seed." + ticketId + "." + qrVersion)`. `qrVersion` goes up when a
+  ticket changes hands (transfer accepted, gift claimed; a resale sale issues a new ticket), so the old holder's saved
+  seed makes codes the door refuses. Fetch a fresh seed (or `GET /me/tickets`) when the app comes online.
+
+### Door scanning offline
+
+- `GET /organizer/events/:id/door-pack` (team members with DOOR role or higher) →
+  `{ eventId, title, startsAt, doorsAt, timezone, generatedAt, windowMs, algorithm, format, tickets: [{ id, seed, version,
+  status, checkedInAt, checkedInDevice, holderName, ticketType, section, sectionName, row, seat }] }` for every non-void
+  ticket. It holds every seed: `Cache-Control: no-store`, rate-limited (`RATE_DOOR_PACK_PER_IP`, default 30 per 10
+  minutes) and each download is in the audit log (`door_pack.download`, who, when, how many tickets). A scanner
+  checks a code offline by recomputing it from the ticket's seed for the code's window, and admits only `ACTIVE`
+  tickets (or `LISTED`, which the online check-in also admits by ID).
+- `POST /organizer/events/:id/check-ins/sync { deviceId, scans: [{ ticketId, scannedAt, code? }] }` (up to 500) applies
+  offline scans oldest first. Each answer has `index` (position in the request), `ticketId`, `scannedAt` and `result`:
+  `checked_in` (stored with `checkedInAt = scannedAt` and `checkedInDevice`), `already` (with `checkedInAt`,
+  `checkedInBy: { id, name }`, `checkedInDevice` of the first scan) or `invalid` with `reason` (`unknown`,
+  `wrong-event`, `void`, `transfer-pending`, `bad-code`: the code doesn't match the ticket's current seed, or
+  `expired-code`: more than 2 minutes from `scannedAt`). Sending a batch again gives the same answers (`replay: true`).
+  `summary` counts each result. `POST …/check-in` takes an optional `deviceId` too.
+
 ## API overview
 
 All routes are under `/api/v1`. Send `Authorization: Bearer <token>` from `/auth/login` or `/auth/signup`. Interactive docs are at `/docs`.
 
 | Area | Routes |
 |---|---|
-| Auth | `POST /auth/signup`, `POST /auth/login`, `GET /auth/me`, `PATCH /auth/me` (name) |
+| Auth | `POST /auth/signup`, `POST /auth/login` (both take an optional `device`), `POST /auth/refresh`, `POST /auth/logout`, `POST /auth/forgot`, `POST /auth/reset/check`, `POST /auth/reset`, `POST /auth/password`, `GET /auth/me`, `PATCH /auth/me` (name) |
+| Devices & push | `GET /me/sessions`, `DELETE /me/sessions/:id`, `POST /me/push-devices`, `DELETE /me/push-devices/:token`, `GET/PATCH /me/notify-prefs` |
 | Browse | `GET /events?q&category&city&from&to&maxPrice&sort&page`, `GET /events/:slug`, `GET /events/:slug/availability?qty`, `GET /events/:slug/sections/:id/seats`, `GET /venues`, `GET /venues/:slug` |
 | Checkout | `POST /holds`, `GET /holds/:id`, `DELETE /holds/:id`, `POST /quote`, `POST /orders`, `GET /orders/:id`, `POST /orders/:id/pay` (mock), `POST /orders/:id/verify` (Paystack), `POST /orders/:id/refund-requests`, `POST /webhooks/stripe`, `POST /webhooks/paystack` |
 | Places & money | `GET /geo/countries`, `GET /geo/countries/:code/regions`, `GET /geo/search?q&country`, `GET /geo/timezone?lat&lng`, `GET /geo/me`, `GET /geo/currencies`, `GET /fx/rates` |
 | Newsletter | `POST /newsletter` (sign up; returns a private preferences token only when it creates or reopens the subscription), `GET/PATCH/DELETE /newsletter/:token` (preferences and unsubscribe). Limited to `SIGNUPS_PER_IP_PER_HOUR` (default 20) sign-ups per IP per hour. |
-| Tickets | `GET /me/tickets`, `GET /tickets/:id/qr`, `POST/DELETE /tickets/:id/transfer`, `POST /tickets/:id/accept`, `POST/DELETE /tickets/:id/listing` |
+| Tickets | `GET /me/tickets`, `GET /tickets/:id/qr`, `GET /tickets/:id/qr-seed`, `POST/DELETE /tickets/:id/transfer`, `POST /tickets/:id/accept`, `POST/DELETE /tickets/:id/listing` |
 | Media | `GET /media/config`, `POST /media/uploads`, `PUT /media/uploads/:id`, `POST /media/uploads/:id/complete`, `GET /media/uploads/:id`, `PUT /organizer/events/:id/media` |
 | Organizer | `POST/GET /organizer/orgs`, `PATCH /organizer/orgs/:orgId`, `GET …/orders/recent`, team `GET/POST /organizer/orgs/:orgId/team`, `PATCH/DELETE …/team/:memberId`, `POST /organizer/invites/accept`, payouts `GET /organizer/orgs/:orgId/payouts`, `PUT …/payout-settings`, `POST …/payouts/onboarding` |
-| Organizer events | `POST/GET /organizer/orgs/:orgId/events`, `GET/PATCH /organizer/events/:id`, ticket types `POST/PATCH/DELETE …/ticket-types/:ttId`, `POST …/submit`, `POST …/pause`, `POST …/resume`, `PUT …/seat-map`, `POST …/seat-map/template`, `GET …/stats?days=30`, `GET …/attendees`, `GET …/attendees.csv`, `POST …/check-in`, `DELETE …/check-in/:ticketId`, promos `GET/POST …/promos`, `PATCH/DELETE …/promos/:code` |
+| Organizer events | `POST/GET /organizer/orgs/:orgId/events`, `GET/PATCH /organizer/events/:id`, ticket types `POST/PATCH/DELETE …/ticket-types/:ttId`, `POST …/submit`, `POST …/pause`, `POST …/resume`, `PUT …/seat-map`, `POST …/seat-map/template`, `GET …/stats?days=30`, `GET …/attendees`, `GET …/attendees.csv`, `POST …/check-in`, `DELETE …/check-in/:ticketId`, `GET …/door-pack`, `POST …/check-ins/sync`, promos `GET/POST …/promos`, `PATCH/DELETE …/promos/:code` |
 | Resale | `GET /events/:slug/resale`, `POST /resale/:id/hold`, `POST /resale/:id/orders`, `GET /me/resale` |
 | Gifts | `GET /gifts/:token`, `POST /gifts/:token/claim`, `POST /gifts/:id/resend` |
 | Price drops | `POST /events/:slug/price-watch`, `GET /events/:slug/price-drop`, `DELETE /price-watch/:token`, `GET /organizer/events/:id/price-drops` |
-| Admin console | `GET /admin/overview`, `GET/PATCH /admin/users[/:id]`, `GET/PATCH /admin/orgs[/:id]`, `GET /admin/events`, `POST /admin/events/:id/takedown`, `…/publish`, `…/sales`, `GET /admin/orders`, `POST /admin/orders/:id/refund`, `GET /admin/subscribers`, `GET /admin/subscribers.csv`, `GET /admin/broadcast/audience`, `POST /admin/broadcast`, `GET /admin/price-drops`, `GET /admin/emails`, `GET /admin/resale?status&q`, `GET /admin/resale/payouts?status`, `POST /admin/resale/:id/delist`, `POST /admin/resale/:id/payout` |
+| Admin console | `GET /admin/overview`, `GET/PATCH /admin/users[/:id]`, `GET/PATCH /admin/orgs[/:id]`, `GET /admin/events`, `POST /admin/events/:id/takedown`, `…/publish`, `…/sales`, `GET /admin/orders`, `POST /admin/orders/:id/refund`, `GET /admin/subscribers`, `GET /admin/subscribers.csv`, `GET /admin/broadcast/audience`, `POST /admin/broadcast`, `GET /admin/price-drops`, `GET /admin/emails`, `GET /admin/notifications?kind&status&q`, `GET /admin/resale?status&q`, `GET /admin/resale/payouts?status`, `POST /admin/resale/:id/delist`, `POST /admin/resale/:id/payout` |
 | Admin | `GET /admin/reviews`, `POST /admin/events/:id/approve`, `POST /admin/events/:id/reject`, `GET /admin/refunds`, `POST /admin/refunds/:id/decide`, `GET /admin/fraud`, `POST /admin/fraud/:id/decide`, `GET /admin/audit` |
 
 Team roles: **ADMIN** (everything, including payouts and team), **MANAGER** (events, attendees, promos), **DOOR** (check-in only).

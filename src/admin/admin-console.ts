@@ -221,6 +221,8 @@ export class AdminConsoleService {
       data.suspendReason = dto.suspended ? reason : null;
     }
     const out = await this.prisma.user.update({ where: { id }, data, select: { id: true, email: true, name: true, roles: true, createdAt: true, suspendedAt: true, suspendReason: true } });
+    // Suspension also signs the mobile app out everywhere (refresh tokens stop working).
+    if (dto.suspended) await this.prisma.session.updateMany({ where: { userId: id, revokedAt: null }, data: { revokedAt: new Date() } });
     if (dto.roles) await this.audit.log(me.id, 'user.roles', 'User', id, { from: u.roles, to: out.roles, note });
     if (dto.suspended !== undefined) {
       await this.audit.log(me.id, dto.suspended ? 'user.suspend' : 'user.unsuspend', 'User', id, dto.suspended ? { reason, note } : { note, reason, previousReason: u.suspendReason });
@@ -697,6 +699,24 @@ export class AdminConsoleService {
     ]);
     return { total, page, pageSize: PAGE, enabled: this.mail.enabled, from: config.mailFrom, kinds: kinds.map((k) => ({ kind: k.kind, count: k._count._all })), items };
   }
+
+  /** Push notifications sent or skipped (NotificationLog), like the email log. */
+  async notifications(kind?: string, status?: string, q?: string, pageRaw?: string) {
+    const page = pageOf(pageRaw);
+    const s = like(q);
+    const where: Prisma.NotificationLogWhereInput = {
+      ...(kind ? { kind: { startsWith: kind } } : {}),
+      ...(status && ['SENT', 'FAILED', 'SKIPPED', 'PENDING'].includes(status) ? { status } : {}),
+      ...(s ? { OR: [{ title: { contains: s, mode: 'insensitive' } }, { body: { contains: s, mode: 'insensitive' } }, { userId: s }] } : {}),
+    };
+    const [total, items, kinds, devices] = await Promise.all([
+      this.prisma.notificationLog.count({ where }),
+      this.prisma.notificationLog.findMany({ where, orderBy: { createdAt: 'desc' }, skip: (page - 1) * PAGE, take: PAGE }),
+      this.prisma.notificationLog.groupBy({ by: ['kind'], _count: { _all: true } }),
+      this.prisma.pushDevice.count({ where: { disabledAt: null } }),
+    ]);
+    return { total, page, pageSize: PAGE, activeDevices: devices, kinds: kinds.map((k) => ({ kind: k.kind, count: k._count._all })), items };
+  }
 }
 
 /* ---------- routes ---------- */
@@ -786,6 +806,9 @@ export class AdminConsoleController {
   }
   @Get('emails') emails(@Query('kind') kind?: string, @Query('status') status?: string, @Query('q') q?: string, @Query('page') page?: string) {
     return this.svc.emails(kind, status, q, page);
+  }
+  @Get('notifications') notifications(@Query('kind') kind?: string, @Query('status') status?: string, @Query('q') q?: string, @Query('page') page?: string) {
+    return this.svc.notifications(kind, status, q, page);
   }
 }
 

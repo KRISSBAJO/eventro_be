@@ -170,6 +170,23 @@ export class TemplateDto {
 
 export class CheckInDto {
   @ApiProperty({ description: 'Scanned QR token, or a ticket ID typed in' }) @IsString() @MinLength(4) @MaxLength(200) code: string;
+  @ApiPropertyOptional({ description: 'Which scanner (stored on the ticket as checkedInDevice)' }) @IsOptional() @IsString() @MaxLength(80) deviceId?: string;
+}
+
+export class OfflineScanDto {
+  @ApiProperty({ example: 'EVT-AB12-CD34-01' }) @IsString() @MinLength(4) @MaxLength(64) ticketId: string;
+  @ApiProperty({ description: 'When the scanner admitted it (ISO 8601, the scanner’s clock)' }) @IsDateString() scannedAt: string;
+  @ApiPropertyOptional({ description: 'The QR code that was scanned; checked against the ticket’s seed when sent' }) @IsOptional() @IsString() @MaxLength(200) code?: string;
+}
+
+export class CheckInSyncDto {
+  @ApiProperty({ description: 'A stable id for this scanner' }) @IsString() @MinLength(1) @MaxLength(80) deviceId: string;
+  @ApiProperty({ type: [OfflineScanDto], maxItems: 500 })
+  @IsArray()
+  @ArrayMaxSize(500)
+  @ValidateNested({ each: true })
+  @Type(() => OfflineScanDto)
+  scans: OfflineScanDto[];
 }
 
 export class PromoDto {

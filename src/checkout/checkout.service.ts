@@ -16,6 +16,7 @@ import { ResaleService } from '../resale/resale.module';
 import { isCurrency, type Currency } from '../domain/currency';
 import type { AuthUser } from '../common/auth';
 import { paystackCountryFor } from '../organizer/payout-accounts';
+import { NoticeService } from '../push/notices';
 
 type Tx = Prisma.TransactionClient;
 
@@ -35,6 +36,7 @@ export class CheckoutService {
     private readonly mail: MailService,
     private readonly gifts: GiftService,
     private readonly resale: ResaleService,
+    private readonly notices: NoticeService,
   ) {}
 
   /* ---------- holds ---------- */
@@ -459,6 +461,9 @@ export class CheckoutService {
       void this.sendReceipt(orderId).catch((e) => this.log.warn(`Receipt for ${orderId}: ${(e as Error).message}`));
       void this.gifts.afterPaid(orderId).catch((e) => this.log.warn(`Gift for ${orderId}: ${(e as Error).message}`));
       if (result.order.resaleListingId) void this.resale.soldEmail(result.order.resaleListingId).catch((e) => this.log.warn(`Resale email for ${orderId}: ${(e as Error).message}`));
+      // Push (never throws): the buyer's "You're going", and the seller's "Your ticket sold".
+      void this.notices.orderPaid(orderId);
+      if (result.order.resaleListingId) void this.notices.resaleSold(result.order.resaleListingId);
     }
     return this.orderView(orderId);
   }

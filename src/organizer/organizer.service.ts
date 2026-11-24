@@ -7,8 +7,9 @@ import { config } from '../config';
 import { Payments } from '../checkout/payments';
 import { randomSuffix, slugify } from '../domain/codes';
 import { buyerPrice, organizerNet, type FeeMode } from '../domain/money';
-import { verifyQr } from '../domain/qr';
-import { arenaTemplate, capacityByTicketType, rowLabel, validateSeatMap, type SeatMap } from '../domain/seatmap';
+import { QR_WINDOW_MS, parseQr, qrSeed, verifyQr } from '../domain/qr';
+import { QR_SEED_SPEC } from '../tickets/tickets.module';
+import { arenaTemplate, capacityByTicketType, rowLabel, sectionName, validateSeatMap, type SeatMap } from '../domain/seatmap';
 import type { AuthUser } from '../common/auth';
 import { mediaUrls, type MediaItem } from '../media/media.module';
 import { countryTimezone, isTimeZone, timezoneAt } from '../geo/geo.module';
@@ -516,15 +517,23 @@ export class OrganizerService {
 
   /* ---------- door check-in ---------- */
 
-  async checkIn(id: string, user: AuthUser, code: string) {
+  async checkIn(id: string, user: AuthUser, code: string, deviceId?: string) {
     await this.eventFor(id, user, DOOR);
     let ticketId = code.trim().toUpperCase();
+    const invalidCode = { result: 'invalid', message: 'Not a valid Eventro code.' };
+    let t: Prisma.TicketGetPayload<{ include: { ticketType: { select: { name: true } } } }> | null = null;
     if (code.includes('.')) {
-      const v = verifyQr(config.qrSecret, code.trim());
+      // Codes are signed with the ticket's own seed (its qrVersion), so find the ticket first, then check.
+      const p = parseQr(code);
+      if (!p.ok) return invalidCode;
+      t = await this.prisma.ticket.findUnique({ where: { id: p.ticketId }, include: { ticketType: { select: { name: true } } } });
+      if (!t) return invalidCode;
+      const v = verifyQr(config.qrSecret, code.trim(), Date.now(), t.qrVersion);
       if (!v.ok) return { result: v.reason === 'expired' ? 'expired-code' : 'invalid', message: v.reason === 'expired' ? 'This code has expired. Ask them to reopen the ticket.' : 'Not a valid Eventro code.' };
       ticketId = v.ticketId;
+    } else {
+      t = await this.prisma.ticket.findUnique({ where: { id: ticketId }, include: { ticketType: { select: { name: true } } } });
     }
-    const t = await this.prisma.ticket.findUnique({ where: { id: ticketId }, include: { ticketType: { select: { name: true } } } });
     if (!t) return { result: 'invalid', message: 'Ticket not found.' };
     if (t.eventId !== id) return { result: 'wrong-event', message: 'This ticket is for a different event.' };
     if (t.status === 'CHECKED_IN') return { result: 'duplicate', message: 'Already checked in.', ticket: this.doorView(t), checkedInAt: t.checkedInAt };
@@ -533,10 +542,156 @@ export class OrganizerService {
     // Conditional update so two scanners can't admit the same ticket twice.
     const { count } = await this.prisma.ticket.updateMany({
       where: { id: t.id, status: { in: ['ACTIVE', 'LISTED'] } },
-      data: { status: 'CHECKED_IN', checkedInAt: new Date(), checkedInBy: user.id, listCents: null },
+      data: { status: 'CHECKED_IN', checkedInAt: new Date(), checkedInBy: user.id, checkedInDevice: deviceId?.trim() || null, listCents: null },
     });
     if (!count) return { result: 'duplicate', message: 'Already checked in.', ticket: this.doorView(t) };
     return { result: 'ok', message: 'Valid: let them in.', ticket: this.doorView(t) };
+  }
+
+  /* ---------- offline door scanning ---------- */
+
+  /** Every non-void ticket with its QR seed, for scanners that work without a connection. Audited. */
+  async doorPack(id: string, user: AuthUser) {
+    const ev = await this.eventFor(id, user, DOOR);
+    const rows = await this.prisma.ticket.findMany({
+      where: { eventId: id, status: { not: 'VOID' } },
+      select: { id: true, qrVersion: true, status: true, checkedInAt: true, checkedInDevice: true, holderName: true, section: true, row: true, seat: true, ticketType: { select: { name: true } } },
+      orderBy: { id: 'asc' },
+    });
+    const map = ev.seatMap as SeatMap | null;
+    const names = new Map((map?.sections ?? []).map((s) => [s.id, sectionName(s)]));
+    await this.audit.log(user.id, 'door_pack.download', 'Event', id, { tickets: rows.length });
+    return {
+      eventId: id,
+      title: ev.title,
+      startsAt: ev.startsAt,
+      doorsAt: ev.doorsAt,
+      timezone: ev.timezone,
+      generatedAt: new Date(),
+      ...QR_SEED_SPEC,
+      tickets: rows.map((t) => ({
+        id: t.id,
+        seed: qrSeed(config.qrSecret, t.id, t.qrVersion).toString('base64url'),
+        version: t.qrVersion,
+        status: t.status,
+        checkedInAt: t.checkedInAt,
+        checkedInDevice: t.checkedInDevice,
+        holderName: t.holderName,
+        ticketType: t.ticketType.name,
+        section: t.section,
+        sectionName: t.section ? (names.get(t.section) ?? t.section) : null,
+        row: t.row,
+        seat: t.seat,
+      })),
+    };
+  }
+
+  /**
+   * Applies scans a door scanner made offline, oldest first. Each ticket is admitted once: the first scan wins and
+   * later ones come back `already` (with when, by whom and on which scanner). Sending the same batch again gives
+   * the same answers. With `code`, the scanned QR must match the ticket's current seed (a code from before a
+   * transfer is refused) and be within 2 minutes of `scannedAt` (scanner clocks drift).
+   */
+  async syncCheckIns(id: string, user: AuthUser, deviceIdRaw: string, scans: { ticketId: string; scannedAt: string; code?: string }[]) {
+    await this.eventFor(id, user, DOOR);
+    const deviceId = deviceIdRaw.trim();
+    const now = Date.now();
+    // A scan can't be in the future; the scanner's clock is ahead, so it counts as now.
+    const ordered = scans
+      .map((s, index) => ({ index, ticketId: s.ticketId.trim().toUpperCase(), code: s.code?.trim() || null, at: new Date(Math.min(new Date(s.scannedAt).getTime(), now)) }))
+      .sort((a, b) => a.at.getTime() - b.at.getTime() || a.index - b.index);
+    const tickets = await this.prisma.ticket.findMany({
+      where: { id: { in: [...new Set(ordered.map((s) => s.ticketId))] } },
+      select: { id: true, eventId: true, status: true, qrVersion: true, checkedInAt: true, checkedInBy: true, checkedInDevice: true, holderName: true, section: true, row: true, seat: true, ticketType: { select: { name: true } } },
+    });
+    const byId = new Map(tickets.map((t) => [t.id, t]));
+    const SKEW_WINDOWS = 8;
+
+    type Result = {
+      index: number;
+      ticketId: string;
+      scannedAt: Date;
+      result: 'checked_in' | 'already' | 'invalid';
+      reason?: string;
+      replay?: boolean;
+      checkedInAt?: Date | null;
+      checkedInBy?: { id: string; name: string | null } | null;
+      checkedInDevice?: string | null;
+      ticket?: ReturnType<OrganizerService['doorView']>;
+    };
+    const results: Result[] = [];
+    const checkerIds = new Set<string>();
+    for (const s of ordered) {
+      const base = { index: s.index, ticketId: s.ticketId, scannedAt: s.at };
+      const t = byId.get(s.ticketId);
+      if (!t) {
+        results.push({ ...base, result: 'invalid', reason: 'unknown' });
+        continue;
+      }
+      if (t.eventId !== id) {
+        results.push({ ...base, result: 'invalid', reason: 'wrong-event' });
+        continue;
+      }
+      if (s.code) {
+        const p = parseQr(s.code);
+        // Signature against the ticket's current seed, then the code's window against the scan time.
+        const v = p.ok && p.ticketId === t.id ? verifyQr(config.qrSecret, s.code, p.window * QR_WINDOW_MS, t.qrVersion) : null;
+        if (!p.ok || !v?.ok) {
+          results.push({ ...base, result: 'invalid', reason: 'bad-code' });
+          continue;
+        }
+        if (Math.abs(p.window - Math.floor(s.at.getTime() / QR_WINDOW_MS)) > SKEW_WINDOWS) {
+          results.push({ ...base, result: 'invalid', reason: 'expired-code' });
+          continue;
+        }
+      }
+      if (t.status === 'VOID') {
+        results.push({ ...base, result: 'invalid', reason: 'void' });
+        continue;
+      }
+      if (t.status === 'TRANSFER_PENDING') {
+        results.push({ ...base, result: 'invalid', reason: 'transfer-pending' });
+        continue;
+      }
+      if (t.status !== 'CHECKED_IN') {
+        const { count } = await this.prisma.ticket.updateMany({
+          where: { id: t.id, status: { in: ['ACTIVE', 'LISTED'] } },
+          data: { status: 'CHECKED_IN', checkedInAt: s.at, checkedInBy: user.id, checkedInDevice: deviceId, listCents: null },
+        });
+        if (count) {
+          Object.assign(t, { status: 'CHECKED_IN', checkedInAt: s.at, checkedInBy: user.id, checkedInDevice: deviceId });
+          checkerIds.add(user.id);
+          results.push({ ...base, result: 'checked_in', checkedInAt: s.at, checkedInBy: { id: user.id, name: null }, checkedInDevice: deviceId, ticket: this.doorView(t) });
+          continue;
+        }
+        // Someone else admitted it a moment ago: report theirs.
+        const fresh = await this.prisma.ticket.findUniqueOrThrow({ where: { id: t.id }, select: { status: true, checkedInAt: true, checkedInBy: true, checkedInDevice: true } });
+        Object.assign(t, fresh);
+        if (fresh.status !== 'CHECKED_IN') {
+          results.push({ ...base, result: 'invalid', reason: fresh.status === 'VOID' ? 'void' : 'transfer-pending' });
+          continue;
+        }
+      }
+      // Already in. The same scan sent again (same scanner, same time) is reported as it was the first time.
+      const replay = t.checkedInDevice === deviceId && t.checkedInAt?.getTime() === s.at.getTime();
+      if (t.checkedInBy) checkerIds.add(t.checkedInBy);
+      results.push({
+        ...base,
+        result: replay ? 'checked_in' : 'already',
+        ...(replay ? { replay: true } : {}),
+        checkedInAt: t.checkedInAt,
+        checkedInBy: t.checkedInBy ? { id: t.checkedInBy, name: null } : null,
+        checkedInDevice: t.checkedInDevice,
+        ticket: this.doorView(t),
+      });
+    }
+    const people = checkerIds.size ? await this.prisma.user.findMany({ where: { id: { in: [...checkerIds] } }, select: { id: true, name: true } }) : [];
+    const nameOf = new Map(people.map((p) => [p.id, p.name]));
+    for (const r of results) if (r.checkedInBy) r.checkedInBy.name = nameOf.get(r.checkedInBy.id) ?? null;
+    const summary = { checked_in: 0, already: 0, invalid: 0 };
+    for (const r of results) summary[r.result]++;
+    await this.audit.log(user.id, 'checkin.sync', 'Event', id, { deviceId, scans: scans.length, ...summary });
+    return { eventId: id, deviceId, summary, results };
   }
 
   private doorView(t: { id: string; holderName: string; section: string | null; row: string | null; seat: number | null; ticketType: { name: string } }) {
@@ -547,7 +702,7 @@ export class OrganizerService {
     await this.eventFor(id, user, DOOR);
     const { count } = await this.prisma.ticket.updateMany({
       where: { id: ticketId, eventId: id, status: 'CHECKED_IN' },
-      data: { status: 'ACTIVE', checkedInAt: null, checkedInBy: null },
+      data: { status: 'ACTIVE', checkedInAt: null, checkedInBy: null, checkedInDevice: null },
     });
     if (!count) throw new NotFoundException('Checked-in ticket not found.');
     await this.audit.log(user.id, 'checkin.undo', 'Ticket', ticketId);

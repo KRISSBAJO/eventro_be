@@ -1,16 +1,27 @@
-import { BadRequestException, Body, Controller, Delete, Get, HttpCode, Injectable, Module, NotFoundException, Param, Post } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, Header, HttpCode, Injectable, Module, NotFoundException, Param, Post } from '@nestjs/common';
 import { ApiBearerAuth, ApiProperty, ApiTags } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import { IsEmail, IsInt, Min } from 'class-validator';
 import { PrismaService } from '../prisma.service';
 import { config } from '../config';
-import { qrToken } from '../domain/qr';
+import { QR_SIG_LENGTH, QR_WINDOW_MS, qrSeed, qrToken } from '../domain/qr';
 import { permilleOf } from '../domain/money';
 import { sectionName, type SeatMap } from '../domain/seatmap';
 import { CurrentUser, type AuthUser } from '../common/auth';
 import { AuditService } from '../common/audit.service';
 import { MailService, render } from '../mail/mail.module';
 import { pastCutoff } from '../resale/resale.module';
+import { NoticeService } from '../push/notices';
+
+/** How the phone turns a seed into door codes (also in the README). */
+export const QR_SEED_SPEC = {
+  windowMs: QR_WINDOW_MS,
+  algorithm: 'HMAC-SHA256',
+  format: `<ticketId>.<window>.<first ${QR_SIG_LENGTH} chars of base64url(HMAC-SHA256(key = base64url-decoded seed, message = ticketId + "." + window))>, window = floor(unixTimeMs / ${QR_WINDOW_MS})`,
+} as const;
+
+/** A ticket's QR seed for its holder's phone (base64url of 32 bytes). */
+export const seedFor = (t: { id: string; qrVersion: number }) => qrSeed(config.qrSecret, t.id, t.qrVersion).toString('base64url');
 
 /** A pending transfer goes back to the sender after a week (or at the event's cutoff, if sooner). */
 const TRANSFER_DAYS = 7;
@@ -29,6 +40,7 @@ export class TicketsService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly mail: MailService,
+    private readonly notices: NoticeService,
   ) {}
 
   /** Transfers nobody accepted in time go back to the sender. */
@@ -75,7 +87,9 @@ export class TicketsService {
     const tickets = rows.map(({ event: { seatMap, streamUrl, ...event }, ...t }) => {
       const s = (seatMap as SeatMap | null)?.sections.find((x) => x.id === t.section);
       const watch = event.online && (t.status === 'ACTIVE' || t.status === 'CHECKED_IN') ? streamUrl : null;
-      return { ...t, event: { ...event, streamUrl: watch }, sectionName: s ? sectionName(s) : null };
+      // Usable tickets carry their QR seed, so the app can show the door code offline (see GET /tickets/:id/qr-seed).
+      const seed = t.status === 'ACTIVE' ? { qrSeed: seedFor(t) } : {};
+      return { ...t, ...seed, event: { ...event, streamUrl: watch }, sectionName: s ? sectionName(s) : null };
     });
     const incoming = await this.prisma.ticket.findMany({
       where: { transferTo: user.email, status: 'TRANSFER_PENDING' },
@@ -88,7 +102,14 @@ export class TicketsService {
   async qr(id: string, user: AuthUser) {
     const t = await this.owned(id, user);
     if (t.status !== 'ACTIVE') throw new BadRequestException(t.status === 'CHECKED_IN' ? 'This ticket has already been used.' : 'This ticket can’t be scanned right now.');
-    return qrToken(config.qrSecret, t.id);
+    return qrToken(config.qrSecret, t.id, Date.now(), t.qrVersion);
+  }
+
+  /** The seed the phone uses to make door codes offline. Only for usable (ACTIVE) tickets of this account. */
+  async qrSeed(id: string, user: AuthUser) {
+    const t = await this.owned(id, user);
+    if (t.status !== 'ACTIVE') throw new BadRequestException(t.status === 'CHECKED_IN' ? 'This ticket has already been used.' : 'This ticket can’t be scanned right now.');
+    return { ticketId: t.id, seed: seedFor(t), version: t.qrVersion, ...QR_SEED_SPEC };
   }
 
   async transfer(id: string, user: AuthUser, email: string) {
@@ -112,6 +133,7 @@ export class TicketsService {
       footer: `${user.name} sent this from their Eventro account. Not expecting it? You can ignore this email.`,
     });
     void this.mail.send('ticket.transfer', { to: email, subject: `${user.name.split(' ')[0]} sent you a ticket to ${t.event.title}`, html, text });
+    void this.notices.transferSent(id, user.name);
     return out;
   }
 
@@ -123,12 +145,16 @@ export class TicketsService {
 
   async accept(id: string, user: AuthUser) {
     await this.expireTransfers();
+    const before = await this.prisma.ticket.findUnique({ where: { id }, select: { ownerId: true, holderEmail: true } });
+    // New holder, new QR seed (qrVersion + 1): codes the sender saved on their phone stop working.
     const { count } = await this.prisma.ticket.updateMany({
       where: { id, status: 'TRANSFER_PENDING', transferTo: user.email },
-      data: { status: 'ACTIVE', transferTo: null, transferExpiresAt: null, ownerId: user.id, holderEmail: user.email, holderName: user.name },
+      data: { status: 'ACTIVE', transferTo: null, transferExpiresAt: null, ownerId: user.id, holderEmail: user.email, holderName: user.name, qrVersion: { increment: 1 } },
     });
     if (!count) throw new NotFoundException('Transfer not found, or it has expired.');
     await this.audit.log(user.id, 'ticket.accept', 'Ticket', id);
+    const sender = before?.ownerId ?? (before ? (await this.prisma.user.findUnique({ where: { email: before.holderEmail }, select: { id: true } }))?.id : null) ?? null;
+    if (sender && sender !== user.id) void this.notices.transferAccepted(id, sender, user.name);
     return this.prisma.ticket.findUnique({ where: { id } });
   }
 
@@ -178,6 +204,16 @@ export class TicketsController {
   @Get('tickets/:id/qr')
   qr(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.tickets.qr(id, user);
+  }
+
+  /**
+   * Mobile app: the ticket's QR seed, to make the same rotating codes offline. Changes when the ticket changes
+   * hands (`version`). Keep it in secure storage.
+   */
+  @Get('tickets/:id/qr-seed')
+  @Header('Cache-Control', 'no-store')
+  qrSeed(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.tickets.qrSeed(id, user);
   }
 
   @Post('tickets/:id/transfer')

@@ -32,6 +32,11 @@ export const CurrentUser = createParamDecorator((_: unknown, ctx: ExecutionConte
   return (ctx.switchToHttp().getRequest<Request & { user?: AuthUser }>().user ?? null) as AuthUser | null;
 });
 
+/** The mobile sign-in (Session id) the access token belongs to, or null for website tokens. */
+export const CurrentSession = createParamDecorator((_: unknown, ctx: ExecutionContext) => {
+  return (ctx.switchToHttp().getRequest<Request & { sessionId?: string }>().sessionId ?? null) as string | null;
+});
+
 /**
  * Global guard: every route needs a valid Bearer token unless marked @Public or @OptionalAuth.
  * The user is re-read from the database so role changes apply immediately.
@@ -49,19 +54,25 @@ export class AuthGuard implements CanActivate {
     const isPublic = this.reflector.getAllAndOverride<boolean>(PUBLIC, targets);
     const optional = this.reflector.getAllAndOverride<boolean>(OPTIONAL, targets);
     const roles = this.reflector.getAllAndOverride<Role[]>(ROLES, targets);
-    const req = ctx.switchToHttp().getRequest<Request & { user?: AuthUser }>();
+    const req = ctx.switchToHttp().getRequest<Request & { user?: AuthUser; sessionId?: string }>();
 
     const header = req.headers.authorization ?? '';
     const token = header.startsWith('Bearer ') ? header.slice(7) : '';
 
     if (token) {
       try {
-        const payload = await this.jwt.verifyAsync<{ sub: string; iat?: number }>(token);
+        const payload = await this.jwt.verifyAsync<{ sub: string; iat?: number; sid?: string }>(token);
         const u = await this.prisma.user.findUnique({ where: { id: payload.sub } });
         if (u?.suspendedAt) throw new SuspendedError();
         // Signed in before the password last changed (a reset or change elsewhere): that session has ended.
         // `iat` is in whole seconds; sessions issued by the change itself are stamped after it (see AuthService).
         if (u?.passwordChangedAt && (payload.iat ?? 0) * 1000 <= u.passwordChangedAt.getTime()) throw new Error('session ended by a password change');
+        // Mobile access tokens name their device sign-in: signing that device out ends the token at once.
+        if (u && payload.sid) {
+          const s = await this.prisma.session.findUnique({ where: { id: payload.sid }, select: { userId: true, revokedAt: true, expiresAt: true } });
+          if (!s || s.userId !== u.id || s.revokedAt || s.expiresAt <= new Date()) throw new Error('device signed out');
+          req.sessionId = payload.sid;
+        }
         if (u) req.user = { id: u.id, email: u.email, name: u.name, roles: u.roles as Role[] };
       } catch (e) {
         // A suspended account is refused everywhere, even on public routes, so it can't keep buying.

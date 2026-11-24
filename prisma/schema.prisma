@@ -122,6 +122,63 @@ model User {
   auditLogs      AuditLog[]
   venueClaims    VenueClaim[]
   passwordResets PasswordReset[]
+  sessions       Session[]
+  pushDevices    PushDevice[]
+  /// Push notification choices, e.g. { "priceDrops": false }. Missing keys mean on.
+  notifyPrefs    Json?
+}
+
+/// Long-lived sign-ins for the mobile app: a refresh token (only its SHA-256 hash is stored) per device.
+/// Short-lived access tokens are minted from it; signing out, a password change or an admin revokes it.
+model Session {
+  id         String    @id @default(cuid())
+  userId     String
+  tokenHash  String    @unique
+  deviceName String?
+  platform   String?
+  ip         String?
+  createdAt  DateTime  @default(now())
+  lastUsedAt DateTime  @default(now())
+  expiresAt  DateTime
+  revokedAt  DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+/// A phone that receives push notifications (Expo push token).
+model PushDevice {
+  id         String    @id @default(cuid())
+  userId     String
+  token      String    @unique
+  platform   String?
+  deviceName String?
+  createdAt  DateTime  @default(now())
+  lastSeenAt DateTime  @default(now())
+  /// Set when Expo reports the token is no longer registered, or the user signs out on that phone.
+  disabledAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+/// Every push notification Eventro sends (or skips), like EmailLog. `dedupeKey` stops repeats (e.g. one reminder per ticket holder per event).
+model NotificationLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  kind      String
+  title     String
+  body      String
+  data      Json?
+  status    String   @default("SENT")
+  error     String?
+  dedupeKey String?  @unique
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([kind, createdAt])
 }
 
 /// "Forgot password" links. Only a SHA-256 hash of the token is stored; each link works once, for an hour.
@@ -408,6 +465,10 @@ model Ticket {
   transferExpiresAt DateTime?
   /// the ticket was sold on fan resale; the buyer got a new ticket for the same seat
   resoldAt     DateTime?
+  /// Bumped when the ticket changes hands (transfer, gift claim): the QR seed changes, so the old holder's saved codes stop working.
+  qrVersion    Int          @default(0)
+  /// Which door scanner checked it in (offline scans sync later)
+  checkedInDevice String?
   createdAt    DateTime     @default(now())
 
   order      Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)

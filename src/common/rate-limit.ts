@@ -40,6 +40,10 @@ export const RATE_RULES = {
   /** holds and orders, including resale orders */
   checkout: { bucket: 'checkout:ip', env: 'RATE_CHECKOUT_PER_IP', limit: 30, windowMs: 10 * MIN, by: 'ip' },
   resaleHold: { bucket: 'resale-hold:ip', env: 'RATE_RESALE_HOLD_PER_IP', limit: 20, windowMs: 10 * MIN, by: 'ip' },
+  /** mobile app: refreshing an access token and signing a device out (many phones can share a carrier IP) */
+  refresh: { bucket: 'refresh:ip', env: 'RATE_REFRESH_PER_IP', limit: 120, windowMs: 15 * MIN, by: 'ip' },
+  /** door scanners downloading an event's offline ticket pack (it holds every ticket's QR seed) */
+  doorPack: { bucket: 'door-pack:ip', env: 'RATE_DOOR_PACK_PER_IP', limit: 30, windowMs: 10 * MIN, by: 'ip' },
 } satisfies Record<string, RateRule>;
 
 const limitOf = (r: RateRule) => {

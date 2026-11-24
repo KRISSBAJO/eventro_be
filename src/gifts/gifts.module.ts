@@ -34,6 +34,7 @@ import { config } from '../config';
 import { CurrentUser, Public, type AuthUser } from '../common/auth';
 import { MailService, formatMoney, render } from '../mail/mail.module';
 import { sectionName, type SeatMap } from '../domain/seatmap';
+import { NoticeService } from '../push/notices';
 
 export type GiftInput = { name: string; email: string; message?: string; sendAt?: string; hidePrice?: boolean };
 
@@ -49,6 +50,7 @@ export class GiftService implements OnModuleInit, OnModuleDestroy {
     private readonly prisma: PrismaService,
     private readonly mail: MailService,
     private readonly audit: AuditService,
+    private readonly notices: NoticeService,
   ) {}
 
   /** Scheduled gifts go out within a minute of their time. */
@@ -123,6 +125,7 @@ export class GiftService implements OnModuleInit, OnModuleDestroy {
     });
     const ok = await this.mail.send('gift.delivered', { to: g.recipientEmail, subject: `🎁 ${from} sent you tickets to ${e.title}`, html, text });
     await this.prisma.gift.update({ where: { id }, data: { sentAt: g.sentAt ?? new Date() } });
+    void this.notices.giftDelivered(id);
     this.log.log(`Gift ${id} delivered to the recipient (${ok ? 'email sent' : 'email not sent'})`);
     return true;
   }
@@ -178,7 +181,8 @@ export class GiftService implements OnModuleInit, OnModuleDestroy {
     const result = await this.prisma.$transaction(async (tx) => {
       const { count } = await tx.ticket.updateMany({
         where: { orderId: g.orderId, status: 'TRANSFER_PENDING' },
-        data: { status: 'ACTIVE', transferTo: null, ownerId: user.id, holderEmail: user.email, holderName: user.name },
+        // New holder, new QR seed: codes made before the claim stop working.
+        data: { status: 'ACTIVE', transferTo: null, ownerId: user.id, holderEmail: user.email, holderName: user.name, qrVersion: { increment: 1 } },
       });
       if (!count) throw new BadRequestException('There are no tickets left in this gift.');
       await tx.gift.update({ where: { id: g.id }, data: { claimedAt: new Date(), claimedBy: user.id } });

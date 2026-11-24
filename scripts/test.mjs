@@ -36,7 +36,12 @@ const env = {
   RATE_PASSWORD_PER_IP: '100000',
   RATE_CHECKOUT_PER_IP: '100000',
   RATE_RESALE_HOLD_PER_IP: '100000',
+  RATE_REFRESH_PER_IP: '100000',
+  RATE_DOOR_PACK_PER_IP: '100000',
   RESEND_API_URL: 'http://127.0.0.1:9',
+  // Push: never sent to Expo from tests; mobile.test.ts runs its own Expo push stand-in.
+  EXPO_PUSH_URL: 'http://127.0.0.1:9',
+  EXPO_ACCESS_TOKEN: '',
   FX_OFFLINE: '1',
 };
 const run = (cmd) => execSync(cmd, { stdio: 'inherit', env, shell: true });
