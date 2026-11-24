@@ -227,6 +227,7 @@ model Organization {
 
   members OrganizationMember[]
   events  Event[]
+  venueBookings VenueBooking[]
 }
 
 model OrganizationMember {
@@ -276,6 +277,9 @@ model Venue {
 
   events Event[]
   claims VenueClaim[]
+  listing   VenueListing?
+  blackouts VenueBlackout[]
+  bookings  VenueBooking[]
 }
 
 /// Someone asking to manage a venue's page. Approved claims make that person a manager of the venue.
@@ -344,6 +348,7 @@ model Event {
   priceDrops  PriceDrop[]
   priceWatches PriceWatch[]
   savedBy      SavedEvent[]
+  venueBooking VenueBooking?
   resaleListings ResaleListing[]
 
   /// Fan resale: allowed at all, the most a ticket may be listed for (% of face value; null = no cap),
@@ -603,6 +608,116 @@ model PriceWatch {
 
   @@unique([eventId, email])
   @@index([clientIp, createdAt])
+}
+
+/// A venue's listing for hire on Eventro: whether organizers can book it, and on what terms. One per venue, kept by
+/// the venue's approved managers (VenueClaim). Payment happens outside Eventro for now; the price is shown only.
+model VenueListing {
+  venueId       String   @id
+  /// Shown in venue search and bookable when true
+  active        Boolean  @default(false)
+  /// HOUR, DAY or QUOTE (ask the venue)
+  priceMode     String   @default("QUOTE")
+  /// Price per hour or per day in the smallest unit of `currency`; null with QUOTE
+  priceCents    Int?
+  currency      String   @default("USD")
+  /// Shortest booking, in hours
+  minHours      Int      @default(1)
+  /// How many days ahead a booking must be requested
+  noticeDays    Int      @default(7)
+  /// Setup and cleanup time kept free around each booking (minutes)
+  bufferMinutes Int      @default(60)
+  /// Most guests for a hired event (may be lower than the venue's full capacity)
+  capacity      Int?
+  amenities     String[] @default([])
+  rules         String?
+  /// Extra photos for the listing: [{ url, alt? }]
+  photos        Json?
+  /// Confirm requests automatically when the time is free
+  instantBook   Boolean  @default(false)
+  /// Weekly opening hours in the venue's time zone: [{ day: 0-6 (Sunday = 0), open: "09:00", close: "23:00" }].
+  /// Null means any time.
+  hours         Json?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @default(now()) @updatedAt
+
+  venue Venue @relation(fields: [venueId], references: [id], onDelete: Cascade)
+
+  @@index([active])
+}
+
+/// Time a venue can't be booked (private use, maintenance, holidays). Times are the venue's wall-clock time stored
+/// as UTC, like event times.
+model VenueBlackout {
+  id          String   @id @default(cuid())
+  venueId     String
+  startsAt    DateTime
+  endsAt      DateTime
+  note        String?
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  venue Venue @relation(fields: [venueId], references: [id], onDelete: Cascade)
+
+  @@index([venueId, startsAt])
+}
+
+/// A request to hire a venue, and what became of it. Times are the venue's wall-clock time stored as UTC (like event
+/// times); blockFrom/blockTo add the listing's setup and cleanup buffer and are what other bookings can't overlap.
+/// Pending requests hold their time until holdUntil; confirming one declines the others that overlap it.
+model VenueBooking {
+  id            String    @id @default(cuid())
+  /// Shown to people, e.g. VB-7KQ2-M9XD
+  code          String    @unique
+  venueId       String
+  orgId         String
+  requestedById String?
+  /// The event this booking is for (an event waits for the venue's confirmation before it can be submitted)
+  eventId       String?   @unique
+  startsAt      DateTime
+  endsAt        DateTime
+  blockFrom     DateTime
+  blockTo       DateTime
+  guests        Int?
+  message       String?
+  /// PENDING, CONFIRMED, DECLINED, EXPIRED or CANCELLED
+  status        String    @default("PENDING")
+  holdUntil     DateTime
+  /// The price the venue quoted (or the listing price when the request was made); paid outside Eventro for now
+  quotedCents   Int?
+  currency      String?
+  decidedById   String?
+  decidedAt     DateTime?
+  declineReason String?
+  cancelledById String?
+  cancelledAt   DateTime?
+  cancelReason  String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @default(now()) @updatedAt
+
+  venue    Venue                 @relation(fields: [venueId], references: [id], onDelete: Cascade)
+  org      Organization          @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  event    Event?                @relation(fields: [eventId], references: [id], onDelete: SetNull)
+  messages VenueBookingMessage[]
+
+  @@index([venueId, status, blockFrom])
+  @@index([orgId, createdAt])
+  @@index([status, holdUntil])
+}
+
+/// A short message between the organizer and the venue on one booking.
+model VenueBookingMessage {
+  id        String   @id @default(cuid())
+  bookingId String
+  userId    String?
+  /// ORGANIZER or VENUE: which side wrote it
+  side      String
+  body      String
+  createdAt DateTime @default(now())
+
+  booking VenueBooking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@index([bookingId, createdAt])
 }
 
 /// An event a fan hearted. Kept on the server so saves follow them between the website and the app.
