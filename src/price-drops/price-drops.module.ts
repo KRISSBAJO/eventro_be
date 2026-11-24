@@ -19,8 +19,6 @@ import {
   Get,
   Global,
   HttpCode,
-  HttpException,
-  HttpStatus,
   Injectable,
   Logger,
   Module,
@@ -36,6 +34,7 @@ import type { Request } from 'express';
 import { PrismaService } from '../prisma.service';
 import { config } from '../config';
 import { CurrentUser, OptionalAuth, Public, type AuthUser } from '../common/auth';
+import { RATE_RULES, RateLimit, clientIp } from '../common/rate-limit';
 import { MailService, formatMoney, render, type Mail } from '../mail/mail.module';
 
 /** Smallest cut worth an email, as a fraction of the old price. */
@@ -166,10 +165,6 @@ export class PriceDropService {
     const e = await this.publishedEvent(slug);
     const address = email ?? user?.email;
     if (!address) throw new BadRequestException('Enter your email address.');
-    if (clientIp) {
-      const recent = await this.prisma.priceWatch.count({ where: { clientIp, createdAt: { gte: new Date(Date.now() - 3600_000) } } });
-      if (recent >= config.signupsPerIpPerHour) throw new HttpException('Too many alerts from this connection. Try again later.', HttpStatus.TOO_MANY_REQUESTS);
-    }
     await this.prisma.priceWatch.upsert({
       where: { eventId_email: { eventId: e.id, email: address } },
       create: { eventId: e.id, email: address, userId: user?.id ?? null, token: token(), clientIp },
@@ -210,8 +205,9 @@ export class PriceDropController {
   @OptionalAuth()
   @Post('events/:slug/price-watch')
   @HttpCode(200)
+  @RateLimit(RATE_RULES.priceWatch)
   watch(@Param('slug') slug: string, @Body() dto: WatchDto, @CurrentUser() user: AuthUser | null, @Req() req: Request) {
-    return this.drops.watch(slug, dto.email, user, req.ip ?? null);
+    return this.drops.watch(slug, dto.email, user, clientIp(req));
   }
 
   @Public()

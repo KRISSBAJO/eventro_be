@@ -26,8 +26,10 @@ export async function createApp() {
 
 async function bootstrap() {
   const app = await createApp();
-  await app.listen(config.port, '127.0.0.1');
-  Logger.log(`Eventro API on http://127.0.0.1:${config.port}/api/v1 (docs at /docs)`, 'Bootstrap');
+  // Local development stays on 127.0.0.1; containers set HOST=0.0.0.0.
+  const host = process.env.HOST || '127.0.0.1';
+  await app.listen(config.port, host);
+  Logger.log(`Eventro API on http://${host}:${config.port}/api/v1 (docs at /docs)`, 'Bootstrap');
 }
 
 if (require.main === module) {

@@ -1,7 +1,7 @@
 import { Controller, Get, Injectable, Module, NotFoundException, Param, Query } from '@nestjs/common';
 import { ApiProperty, ApiPropertyOptional, ApiTags } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsDateString, IsIn, IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+import { IsDateString, IsIn, IsInt, IsOptional, IsString, Max, MaxLength, Min, Matches } from 'class-validator';
 import { Category, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma.service';
 import { InventoryService } from '../common/inventory.service';
@@ -12,14 +12,30 @@ import { previewOk } from './preview';
 
 const CATEGORIES = Object.values(Category);
 
+/** Great-circle distance in km. */
+function km(aLat: number, aLng: number, bLat: number, bLng: number) {
+  const rad = (d: number) => (d * Math.PI) / 180;
+  const h = Math.sin(rad(bLat - aLat) / 2) ** 2 + Math.cos(rad(aLat)) * Math.cos(rad(bLat)) * Math.sin(rad(bLng - aLng) / 2) ** 2;
+  return 2 * 6371 * Math.asin(Math.sqrt(h));
+}
+
 export class EventQueryDto {
   @ApiPropertyOptional({ description: 'Search title, subtitle, venue and city' }) @IsOptional() @IsString() @MaxLength(80) q?: string;
   @ApiPropertyOptional({ enum: CATEGORIES }) @IsOptional() @IsIn(CATEGORIES) category?: Category;
   @ApiPropertyOptional({ example: 'London' }) @IsOptional() @IsString() @MaxLength(60) city?: string;
+  @ApiPropertyOptional({ example: 'NG', description: 'ISO country code of the venue' }) @IsOptional() @Matches(/^[A-Za-z]{2}$/) country?: string;
+  @ApiPropertyOptional({ example: '6.5244,3.3792', description: 'Visitor position "lat,lng": adds distanceKm and sorts nearest first' })
+  @IsOptional()
+  @Matches(/^-?\d{1,2}(\.\d+)?,-?\d{1,3}(\.\d+)?$/)
+  near?: string;
+  @ApiPropertyOptional({ description: 'With near: only events within this many km' }) @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(20000) radiusKm?: number;
   @ApiPropertyOptional({ description: 'ISO date, inclusive' }) @IsOptional() @IsDateString() from?: string;
   @ApiPropertyOptional({ description: 'ISO date, inclusive' }) @IsOptional() @IsDateString() to?: string;
   @ApiPropertyOptional({ description: 'Maximum lowest price, in dollars' }) @IsOptional() @Type(() => Number) @IsInt() @Min(0) maxPrice?: number;
-  @ApiPropertyOptional({ enum: ['date', 'price-asc', 'price-desc'] }) @IsOptional() @IsIn(['date', 'price-asc', 'price-desc']) sort?: string;
+  @ApiPropertyOptional({ enum: ['date', 'price-asc', 'price-desc', 'distance'], description: 'distance needs near (the default when near is given)' })
+  @IsOptional()
+  @IsIn(['date', 'price-asc', 'price-desc', 'distance'])
+  sort?: string;
   @ApiPropertyOptional({ default: 1 }) @IsOptional() @Type(() => Number) @IsInt() @Min(1) page?: number;
   @ApiPropertyOptional({ default: 24 }) @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100) pageSize?: number;
 }
@@ -36,6 +52,9 @@ export class EventCardDto {
   @ApiProperty({ description: 'Lowest all-in price in minor units of `currency`' }) fromCents: number;
   @ApiProperty({ example: 'USD' }) currency: string;
   @ApiProperty({ nullable: true, example: 'NG' }) country: string | null;
+  @ApiProperty({ nullable: true }) lat: number | null;
+  @ApiProperty({ nullable: true }) lng: number | null;
+  @ApiPropertyOptional({ nullable: true, description: 'With near: straight-line km from the visitor (null for online events)' }) distanceKm?: number | null;
 }
 
 @Injectable()
@@ -51,7 +70,9 @@ export class EventsService {
       visibility: 'PUBLIC',
       startsAt: { gte: q.from ? new Date(q.from) : new Date(), ...(q.to ? { lte: new Date(`${q.to.slice(0, 10)}T23:59:59Z`) } : {}) },
       ...(q.category ? { category: q.category } : {}),
-      ...(q.city ? { venue: { city: { equals: q.city, mode: 'insensitive' } } } : {}),
+      ...(q.city || q.country
+        ? { venue: { ...(q.city ? { city: { equals: q.city, mode: 'insensitive' as const } } : {}), ...(q.country ? { country: q.country.toUpperCase() } : {}) } }
+        : {}),
       ...(q.q
         ? {
             OR: [
@@ -81,9 +102,18 @@ export class EventsService {
         venue: e.venue?.name ?? (e.online ? 'Online' : null),
         city: e.venue?.city ?? null,
         country: e.venue?.country ?? null,
+        lat: e.venue?.lat ?? null,
+        lng: e.venue?.lng ?? null,
         currency: e.currency,
         fromCents: Math.min(...e.ticketTypes.map((t) => t.priceCents)),
       }));
+    // Near me: distance from the visitor, optional radius, nearest first (events without a position go last).
+    if (q.near) {
+      const [lat, lng] = q.near.split(',').map(Number);
+      cards = cards.map((c) => ({ ...c, distanceKm: c.lat !== null && c.lng !== null ? Math.round(km(lat, lng, c.lat, c.lng) * 10) / 10 : null }));
+      if (q.radiusKm) cards = cards.filter((c) => c.distanceKm !== null && c.distanceKm! <= q.radiusKm!);
+      if (!q.sort || q.sort === 'distance') cards.sort((a, b) => (a.distanceKm ?? Infinity) - (b.distanceKm ?? Infinity));
+    }
     if (q.maxPrice !== undefined) cards = cards.filter((c) => c.fromCents <= q.maxPrice! * 100);
     if (q.sort === 'price-asc') cards.sort((a, b) => a.fromCents - b.fromCents);
     if (q.sort === 'price-desc') cards.sort((a, b) => b.fromCents - a.fromCents);
@@ -92,13 +122,18 @@ export class EventsService {
     return { total: cards.length, page, pageSize: size, items: cards.slice((page - 1) * size, page * size) };
   }
 
-  /** A published event; or, with a valid preview token, one that isn't published yet (flagged `preview`). */
+  /**
+   * A published event; a cancelled one (with `status: 'CANCELLED'` and the reason, so ticket holders who follow
+   * an old link learn what happened; it has nothing on sale); or, with a valid preview token, one that isn't
+   * published yet (flagged `preview`).
+   */
   async detail(slug: string, preview?: string) {
     const e = await this.prisma.event.findUnique({
       where: { slug },
       include: { venue: true, org: { select: { name: true } }, ticketTypes: { orderBy: { sortOrder: 'asc' } } },
     });
-    if (!e || (e.status !== 'PUBLISHED' && !previewOk(e.slug, preview))) throw new NotFoundException('Event not found.');
+    const cancelled = e?.status === 'CANCELLED';
+    if (!e || (e.status !== 'PUBLISHED' && !cancelled && !previewOk(e.slug, preview))) throw new NotFoundException('Event not found.');
     const avail = await this.inventory.availabilityForEvent(e.id);
     const map = e.seatMap as SeatMap | null;
     const sectionAvail = map ? await this.inventory.availabilityForSections(this.prisma, e.id, map) : null;
@@ -119,7 +154,7 @@ export class EventsService {
       online: e.online,
       currency: e.currency,
       salesPaused: e.salesPaused,
-      ...(e.status !== 'PUBLISHED' ? { preview: true, status: e.status } : {}),
+      ...(cancelled ? { status: e.status, cancelledAt: e.cancelledAt, cancelReason: e.cancelReason } : e.status !== 'PUBLISHED' ? { preview: true, status: e.status } : {}),
       presentedBy: e.org.name,
       venue: e.venue && { slug: e.venue.slug, name: e.venue.name, address: e.venue.address, city: e.venue.city, region: e.venue.region, country: e.venue.country, postalCode: e.venue.postalCode, timezone: e.venue.timezone, lat: e.venue.lat, lng: e.venue.lng },
       ticketTypes: e.ticketTypes.map((t) => ({
@@ -131,7 +166,7 @@ export class EventsService {
         sortOrder: t.sortOrder,
         perks: t.perks,
         badge: t.badge,
-        available: avail.get(t.id) ?? 0,
+        available: cancelled ? 0 : (avail.get(t.id) ?? 0),
       })),
       media: ((e.media as MediaItem[] | null) ?? []).map(mediaUrls),
       seatMap: map && {

@@ -85,6 +85,10 @@ function soldSeats(s: Section, sold: number, r: () => number): Sold[] {
   return out;
 }
 
+/** Catalog cities are written "Lagos, NG" / "Austin, TX": the suffix is a country, or a US state / Canadian province. */
+const SUFFIX_COUNTRY: Record<string, string> = { NG: 'NG', UK: 'GB', ON: 'CA', NY: 'US', TX: 'US', IL: 'US', CO: 'US', CA: 'US', NV: 'US' };
+const countryOfCatalogCity = (city: string) => SUFFIX_COUNTRY[city.split(',')[1]?.trim() ?? ''] ?? null;
+
 async function main() {
   const catalog = JSON.parse(readFileSync(join(__dirname, '..', '..', 'prisma', 'catalog.json'), 'utf8')) as { events: CatalogEvent[] };
   const hash11 = await bcrypt.hash(PASSWORD, 11);
@@ -131,7 +135,7 @@ async function main() {
     const venue = await prisma.venue.upsert({
       where: { slug: c.venue.slug || slugify(c.venue.name) },
       update: {},
-      create: { slug: c.venue.slug || slugify(c.venue.name), name: c.venue.name, city: c.venue.city.split(',')[0], address: c.venue.address, lat: c.venue.lat, lng: c.venue.lng },
+      create: { slug: c.venue.slug || slugify(c.venue.name), name: c.venue.name, city: c.venue.city.split(',')[0], country: countryOfCatalogCity(c.venue.city), address: c.venue.address, lat: c.venue.lat, lng: c.venue.lng },
     });
 
     // Capacity: the seat map decides for ticket types on it; others get what's left plus past sales.

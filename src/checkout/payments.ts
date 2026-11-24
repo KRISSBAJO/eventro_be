@@ -247,6 +247,10 @@ export class Payments {
     this.paystack = config.paystackSecretKey ? new PaystackProvider(config.paystackSecretKey) : null;
     if (!this.stripe) this.log.warn('STRIPE_SECRET_KEY is not set: card payments outside Paystack use the mock provider (development only).');
     if (!this.paystack) this.log.warn('PAYSTACK_SECRET_KEY is not set: NGN, GHS, KES and ZAR payments use the mock provider (development only).');
+    if (config.isProduction && (!this.stripe || !this.paystack)) {
+      const missing = [!this.stripe && 'STRIPE_SECRET_KEY', !this.paystack && 'PAYSTACK_SECRET_KEY'].filter(Boolean).join(' and ');
+      this.log.error(`Production without ${missing}: those currencies can’t be sold (test payments are off in production).`);
+    }
   }
 
   /** Bank lists, name checks and subaccounts for Paystack payouts (a stand-in outside production without a key). */
@@ -258,8 +262,11 @@ export class Payments {
 
   /** Which provider charges this currency. */
   forCurrency(currency: Currency): PaymentProvider {
-    if (PAYSTACK_CURRENCIES.has(currency)) return this.paystack ?? this.mock;
-    return this.stripeProvider ?? this.mock;
+    const real = PAYSTACK_CURRENCIES.has(currency) ? this.paystack : this.stripeProvider;
+    if (real) return real;
+    // Never fall back to free test payments on a live site.
+    if (config.isProduction) throw new ServiceUnavailableException(`Payments in ${currency} aren’t available right now. Please try again later.`);
+    return this.mock;
   }
 
   /** The provider an existing order was paid with (for refunds). */

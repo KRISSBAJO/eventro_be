@@ -3,9 +3,11 @@ import { ApiBearerAuth, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { OrganizerService } from './organizer.service';
 import { BankAccountDto, PayoutAccounts } from './payout-accounts';
 import { CheckoutModule } from '../checkout/checkout.module';
+import { AdminModule } from '../admin/admin-console';
 import { CurrentUser, type AuthUser } from '../common/auth';
 import { config } from '../config';
 import {
+  CancelEventDto,
   CheckInDto,
   CreateEventDto,
   CreateOrgDto,
@@ -116,6 +118,14 @@ export class OrganizerController {
   @Post('events/:id/submit') @HttpCode(200) submit(@Param('id') id: string, @CurrentUser() u: AuthUser) {
     return this.svc.submit(id, u);
   }
+  /** What cancelling would refund: paid orders and totals per currency. */
+  @Get('events/:id/cancel-preview') cancelPreview(@Param('id') id: string, @CurrentUser() u: AuthUser) {
+    return this.svc.cancelPreview(id, u);
+  }
+  /** Org admins: cancel the event and refund every paid order. Safe to call again (only failed refunds are retried). */
+  @Post('events/:id/cancel') @HttpCode(200) cancel(@Param('id') id: string, @CurrentUser() u: AuthUser, @Body() dto: CancelEventDto) {
+    return this.svc.cancelEvent(id, u, dto.reason, dto.confirmTitle);
+  }
   @Post('events/:id/pause') @HttpCode(200) pause(@Param('id') id: string, @CurrentUser() u: AuthUser) {
     return this.svc.setPaused(id, u, true);
   }
@@ -175,7 +185,7 @@ export class OrganizerController {
 }
 
 @Module({
-  imports: [CheckoutModule],
+  imports: [CheckoutModule, AdminModule],
   controllers: [OrganizerController],
   providers: [OrganizerService, PayoutAccounts],
 })

@@ -934,3 +934,27 @@ test('payouts: a Paystack split sends the organizer share to their subaccount', 
     stub.close();
   }
 });
+
+test('events near me: filter by country, nearest first with distances, optional radius', async () => {
+  const admin = await account('admin@test.local', 'Admin');
+  const org = await account(`near-org-${run}@test.local`, 'Nia Near');
+  const { ev } = await publishedEvent(org.token, admin.token, 'Near Night'); // Austin, US (30.2672, -97.7431)
+
+  const us = await ok(call('GET', '/events?country=us&pageSize=100'));
+  assert.ok(us.items.some((e: Json) => e.slug === ev.slug), 'country filter, any casing');
+  assert.equal((await ok(call('GET', '/events?country=NG&pageSize=100'))).items.some((e: Json) => e.slug === ev.slug), false);
+
+  const card = (await ok(call('GET', `/events?q=${encodeURIComponent(ev.title)}`))).items[0];
+  assert.equal(card.lat, 30.2672);
+  assert.equal(card.lng, -97.7431);
+
+  // A few km from the venue: it comes first, with its distance.
+  const near = await ok(call('GET', '/events?near=30.30,-97.74&pageSize=100'));
+  const mine = near.items.find((e: Json) => e.slug === ev.slug);
+  assert.ok(mine.distanceKm > 2 && mine.distanceKm < 5, `distance ${mine.distanceKm}`);
+  const withDistance = near.items.filter((e: Json) => e.distanceKm !== null).map((e: Json) => e.distanceKm);
+  assert.deepEqual(withDistance, [...withDistance].sort((a: number, b: number) => a - b), 'nearest first');
+
+  assert.equal((await ok(call('GET', '/events?near=6.52,3.38&radiusKm=100&pageSize=100'))).items.some((e: Json) => e.slug === ev.slug), false, 'outside the radius');
+  assert.equal((await call('GET', '/events?near=somewhere')).status, 400);
+});

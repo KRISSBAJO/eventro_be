@@ -45,7 +45,13 @@ export class TicketsService {
   async mine(user: AuthUser) {
     await this.expireTransfers();
     const rows = await this.prisma.ticket.findMany({
-      where: { OR: [{ ownerId: user.id }, { holderEmail: user.email }], status: { not: 'VOID' } },
+      // Voided tickets stay hidden, except for cancelled events, so holders see what happened to them.
+      where: {
+        AND: [
+          { OR: [{ ownerId: user.id }, { holderEmail: user.email }] },
+          { OR: [{ status: { not: 'VOID' } }, { event: { status: 'CANCELLED' }, resoldAt: null }] },
+        ],
+      },
       include: {
         ticketType: { select: { name: true, priceCents: true } },
         order: {
@@ -54,12 +60,13 @@ export class TicketsService {
             createdAt: true,
             quantity: true,
             totalCents: true,
+            refundedCents: true,
             status: true,
             currency: true,
             gift: { select: { id: true, recipientName: true, recipientEmail: true, sendAt: true, sentAt: true, claimedAt: true } },
           },
         },
-        event: { select: { slug: true, title: true, subtitle: true, startsAt: true, doorsAt: true, imageUrl: true, seatMap: true, online: true, streamUrl: true, timezone: true, resaleEnabled: true, resaleCapPercent: true, resaleRoyaltyPermille: true, transfersEnabled: true, transferCutoffMinutes: true, venue: { select: { name: true, address: true, city: true } } } },
+        event: { select: { slug: true, title: true, subtitle: true, status: true, cancelledAt: true, cancelReason: true, startsAt: true, doorsAt: true, imageUrl: true, seatMap: true, online: true, streamUrl: true, timezone: true, resaleEnabled: true, resaleCapPercent: true, resaleRoyaltyPermille: true, transfersEnabled: true, transferCutoffMinutes: true, venue: { select: { name: true, address: true, city: true } } } },
       },
       orderBy: [{ event: { startsAt: 'asc' } }, { id: 'asc' }],
     });

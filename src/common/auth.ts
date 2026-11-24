@@ -56,9 +56,12 @@ export class AuthGuard implements CanActivate {
 
     if (token) {
       try {
-        const payload = await this.jwt.verifyAsync<{ sub: string }>(token);
+        const payload = await this.jwt.verifyAsync<{ sub: string; iat?: number }>(token);
         const u = await this.prisma.user.findUnique({ where: { id: payload.sub } });
         if (u?.suspendedAt) throw new SuspendedError();
+        // Signed in before the password last changed (a reset or change elsewhere): that session has ended.
+        // `iat` is in whole seconds; sessions issued by the change itself are stamped after it (see AuthService).
+        if (u?.passwordChangedAt && (payload.iat ?? 0) * 1000 <= u.passwordChangedAt.getTime()) throw new Error('session ended by a password change');
         if (u) req.user = { id: u.id, email: u.email, name: u.name, roles: u.roles as Role[] };
       } catch (e) {
         // A suspended account is refused everywhere, even on public routes, so it can't keep buying.

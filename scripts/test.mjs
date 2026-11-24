@@ -29,6 +29,13 @@ const env = {
   RESEND_API_KEY: '',
   // Every test request comes from 127.0.0.1, so the anti-spam limit would trip across runs.
   SIGNUPS_PER_IP_PER_HOUR: '100000',
+  // Same for the other rate limits (src/common/rate-limit.ts); launch.test.ts tightens one on purpose.
+  RATE_LOGIN_PER_IP_EMAIL: '100000',
+  RATE_LOGIN_PER_IP: '100000',
+  RATE_FORGOT_PER_IP: '100000',
+  RATE_PASSWORD_PER_IP: '100000',
+  RATE_CHECKOUT_PER_IP: '100000',
+  RATE_RESALE_HOLD_PER_IP: '100000',
   RESEND_API_URL: 'http://127.0.0.1:9',
   FX_OFFLINE: '1',
 };

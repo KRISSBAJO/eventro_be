@@ -111,14 +111,32 @@ model User {
   /// Set by an admin: the account can't sign in or use the API until it's lifted.
   suspendedAt   DateTime?
   suspendReason String?
+  /// Set when the password changes (e.g. a reset); sign-in tokens issued before it stop working.
+  passwordChangedAt DateTime?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  memberships OrganizationMember[]
-  orders      Order[]
-  tickets     Ticket[]            @relation("TicketOwner")
-  auditLogs   AuditLog[]
-  venueClaims VenueClaim[]
+  memberships    OrganizationMember[]
+  orders         Order[]
+  tickets        Ticket[]            @relation("TicketOwner")
+  auditLogs      AuditLog[]
+  venueClaims    VenueClaim[]
+  passwordResets PasswordReset[]
+}
+
+/// "Forgot password" links. Only a SHA-256 hash of the token is stored; each link works once, for an hour.
+model PasswordReset {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  ip        String?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
 }
 
 model Organization {
@@ -248,6 +266,9 @@ model Event {
   /// ISO 4217. Ticket prices and orders are in this currency's minor units (kobo for NGN).
   currency    String      @default("USD")
   salesPaused Boolean     @default(false)
+  /// Set when the organizer or Eventro cancels the event (status CANCELLED); every paid order is refunded.
+  cancelledAt  DateTime?
+  cancelReason String?
   /// Seat map layout: stage + sections (arc / rect / ga), each linked to a ticket type.
   seatMap     Json?
   /// Photos and videos hosted on mediaEX, in display order: [{ id, kind: "image" | "video" }]. The first image is the cover.

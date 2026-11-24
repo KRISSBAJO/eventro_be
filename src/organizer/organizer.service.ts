@@ -14,6 +14,7 @@ import { mediaUrls, type MediaItem } from '../media/media.module';
 import { countryTimezone, isTimeZone, timezoneAt } from '../geo/geo.module';
 import { FxService } from '../fx/fx.module';
 import { PriceDropService } from '../price-drops/price-drops.module';
+import { EventCancellation } from '../admin/cancel-event';
 import type {
   CreateEventDto,
   CreateOrgDto,
@@ -52,6 +53,7 @@ export class OrganizerService {
     private readonly payments: Payments,
     private readonly fx: FxService,
     private readonly priceDrops: PriceDropService,
+    private readonly cancellation: EventCancellation,
   ) {}
 
   /* ---------- access ---------- */
@@ -389,8 +391,22 @@ export class OrganizerService {
     return this.prisma.event.update({ where: { id }, data: { status: 'IN_REVIEW', reviewNote: null } });
   }
 
+  /** What cancelling would refund. Org admins only, like cancelling itself. */
+  async cancelPreview(id: string, user: AuthUser) {
+    await this.eventFor(id, user, ADMIN_ONLY);
+    return this.cancellation.preview(id);
+  }
+
+  /** Cancels the event and refunds every paid order (see EventCancellation). The title must be typed to confirm. */
+  async cancelEvent(id: string, user: AuthUser, reason: string, confirmTitle: string) {
+    const ev = await this.eventFor(id, user, ADMIN_ONLY);
+    if (confirmTitle.trim() !== ev.title.trim()) throw new BadRequestException('Type the event title exactly as it appears to confirm.');
+    return this.cancellation.cancel(id, user, reason, 'organizer');
+  }
+
   async setPaused(id: string, user: AuthUser, paused: boolean) {
     const ev = await this.eventFor(id, user, EDIT);
+    if (ev.status === 'CANCELLED') throw new BadRequestException('This event was cancelled.');
     if (!paused) await this.notSuspended(ev.orgId);
     await this.audit.log(user.id, paused ? 'event.pause' : 'event.resume', 'Event', id);
     return this.prisma.event.update({ where: { id }, data: { salesPaused: paused } });

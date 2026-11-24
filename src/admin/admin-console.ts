@@ -18,6 +18,7 @@ import { MailService, render, type Mail } from '../mail/mail.module';
 import { CATEGORIES } from '../newsletter/newsletter.module';
 import { CheckoutModule } from '../checkout/checkout.module';
 import { AdminController, AdminService } from './admin.module';
+import { EventCancellation } from './cancel-event';
 
 const PAGE = 25;
 const DAY = 86400_000;
@@ -30,6 +31,10 @@ const like = (q?: string) => (q ?? '').trim().slice(0, 100);
 const dayKey = (d: Date) => d.toISOString().slice(0, 10);
 
 /* ---------- DTOs ---------- */
+
+export class AdminCancelEventDto {
+  @ApiProperty({ minLength: 10, description: 'Shown to buyers in the cancellation email and kept in the audit log' }) @IsString() @MinLength(10) @MaxLength(500) reason: string;
+}
 
 const REASON_DOC = { description: 'Why. Required (5+ characters) when suspending; shown on the account and kept in the audit log.' };
 const NOTE_DOC = { description: 'Internal note for the audit log (never shown to the account holder), e.g. why a suspension was lifted.' };
@@ -466,6 +471,8 @@ export class AdminConsoleService {
         currency: e.currency,
         salesPaused: e.salesPaused,
         reviewNote: e.reviewNote,
+        cancelledAt: e.cancelledAt,
+        cancelReason: e.cancelReason,
         online: e.online,
         org: { id: e.org.id, name: e.org.name, verified: !!e.org.verifiedAt, suspended: !!e.org.suspendedAt },
         venue: e.venue,
@@ -699,7 +706,10 @@ export class AdminConsoleService {
 @Roles('ADMIN')
 @Controller('admin')
 export class AdminConsoleController {
-  constructor(private readonly svc: AdminConsoleService) {}
+  constructor(
+    private readonly svc: AdminConsoleService,
+    private readonly cancellation: EventCancellation,
+  ) {}
 
   @Get('overview') overview() {
     return this.svc.overview();
@@ -733,6 +743,14 @@ export class AdminConsoleController {
   }
   @Post('events/:id/publish') @HttpCode(200) publish(@Param('id') id: string, @CurrentUser() u: AuthUser) {
     return this.svc.publish(id, u);
+  }
+  /** What cancelling would refund (paid orders and totals per currency). */
+  @Get('events/:id/cancel-preview') cancelPreview(@Param('id') id: string) {
+    return this.cancellation.preview(id);
+  }
+  /** Cancels the event and refunds every paid order. Safe to call again: it only retries refunds that failed. */
+  @Post('events/:id/cancel') @HttpCode(200) cancel(@Param('id') id: string, @CurrentUser() u: AuthUser, @Body() dto: AdminCancelEventDto) {
+    return this.cancellation.cancel(id, u, dto.reason, 'admin');
   }
   @Post('events/:id/sales') @HttpCode(200) sales(@Param('id') id: string, @CurrentUser() u: AuthUser, @Body() dto: SalesDto) {
     return this.svc.setSales(id, u, dto.paused);
@@ -771,5 +789,11 @@ export class AdminConsoleController {
   }
 }
 
-@Module({ imports: [CheckoutModule], controllers: [AdminController, AdminConsoleController], providers: [AdminService, AdminConsoleService] })
+@Module({
+  imports: [CheckoutModule],
+  controllers: [AdminController, AdminConsoleController],
+  providers: [AdminService, AdminConsoleService, EventCancellation],
+  // The organizer module cancels events through the same service.
+  exports: [EventCancellation],
+})
 export class AdminModule {}

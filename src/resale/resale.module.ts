@@ -27,6 +27,7 @@ import { PrismaService } from '../prisma.service';
 import { AuditService } from '../common/audit.service';
 import { config } from '../config';
 import { CurrentUser, OptionalAuth, Public, Roles, type AuthUser } from '../common/auth';
+import { RATE_RULES, RateLimit } from '../common/rate-limit';
 import { MailService, formatMoney, render } from '../mail/mail.module';
 import { sectionName, type SeatMap } from '../domain/seatmap';
 
@@ -239,7 +240,7 @@ export class ResaleController {
   @Public() @Get('events/:slug/resale') forEvent(@Param('slug') slug: string) {
     return this.resale.forEvent(slug);
   }
-  @OptionalAuth() @Post('resale/:id/hold') @HttpCode(200) hold(@Param('id') id: string, @CurrentUser() u: AuthUser | null) {
+  @OptionalAuth() @Post('resale/:id/hold') @HttpCode(200) @RateLimit(RATE_RULES.resaleHold) hold(@Param('id') id: string, @CurrentUser() u: AuthUser | null) {
     return this.resale.hold(id, u);
   }
   @ApiBearerAuth() @Get('me/resale') mine(@CurrentUser() u: AuthUser) {

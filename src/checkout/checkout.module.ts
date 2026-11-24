@@ -6,6 +6,7 @@ import type { Request } from 'express';
 import { CheckoutService } from './checkout.service';
 import { Payments } from './payments';
 import { CurrentUser, OptionalAuth, Public, type AuthUser } from '../common/auth';
+import { RATE_RULES, RateLimit } from '../common/rate-limit';
 
 const lower = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim().toLowerCase() : value);
 
@@ -58,6 +59,7 @@ export class CheckoutController {
 
   @OptionalAuth()
   @Post('holds')
+  @RateLimit(RATE_RULES.checkout)
   hold(@Body() dto: CreateHoldDto, @CurrentUser() user: AuthUser | null) {
     return this.checkout.createHold(dto, user);
   }
@@ -83,12 +85,14 @@ export class CheckoutController {
 
   @OptionalAuth()
   @Post('resale/:id/orders')
+  @RateLimit(RATE_RULES.checkout)
   resaleOrder(@Param('id') id: string, @Body() dto: ResaleOrderDto, @CurrentUser() user: AuthUser | null, @Req() req: Request) {
     return this.checkout.createResaleOrder(id, dto, user, req.ip ?? null);
   }
 
   @OptionalAuth()
   @Post('orders')
+  @RateLimit(RATE_RULES.checkout)
   order(@Body() dto: CreateOrderDto, @CurrentUser() user: AuthUser | null, @Req() req: Request) {
     return this.checkout.createOrder(dto, user, req.ip ?? null);
   }

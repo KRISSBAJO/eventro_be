@@ -186,3 +186,8 @@ export class UpdatePromoDto {
 export class PayoutSettingsDto {
   @ApiPropertyOptional({ enum: ['DAILY', 'WEEKLY'] }) @IsOptional() @IsIn(['DAILY', 'WEEKLY']) schedule?: 'DAILY' | 'WEEKLY';
 }
+
+export class CancelEventDto {
+  @ApiProperty({ minLength: 10, description: 'Shown to buyers in the cancellation email and kept in the audit log' }) @IsString() @MinLength(10) @MaxLength(500) reason: string;
+  @ApiProperty({ description: 'The event title, typed again to confirm' }) @IsString() @MaxLength(200) confirmTitle: string;
+}

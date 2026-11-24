@@ -16,8 +16,6 @@ import {
   Delete,
   Get,
   HttpCode,
-  HttpException,
-  HttpStatus,
   Injectable,
   Module,
   NotFoundException,
@@ -32,6 +30,7 @@ import { ArrayMaxSize, IsArray, IsEmail, IsIn, IsOptional, IsString, Matches, Ma
 import type { Request } from 'express';
 import { PrismaService } from '../prisma.service';
 import { Public } from '../common/auth';
+import { RATE_RULES, RateLimit, clientIp } from '../common/rate-limit';
 import { config } from '../config';
 import { MailService, render } from '../mail/mail.module';
 
@@ -95,10 +94,6 @@ export class NewsletterService {
   }
 
   async subscribe(dto: SubscribeDto, clientIp: string | null) {
-    if (clientIp) {
-      const recent = await this.prisma.subscriber.count({ where: { clientIp, createdAt: { gte: new Date(Date.now() - 3600_000) } } });
-      if (recent >= config.signupsPerIpPerHour) throw new HttpException('Too many sign-ups from this connection. Try again later.', HttpStatus.TOO_MANY_REQUESTS);
-    }
     const prefs = { interests: dto.interests ?? [], city: dto.city || null };
     const existing = await this.prisma.subscriber.findUnique({ where: { email: dto.email } });
 
@@ -159,8 +154,9 @@ export class NewsletterController {
   @Public()
   @Post()
   @HttpCode(200)
+  @RateLimit(RATE_RULES.newsletter)
   subscribe(@Body() dto: SubscribeDto, @Req() req: Request) {
-    return this.newsletter.subscribe(dto, req.ip ?? null);
+    return this.newsletter.subscribe(dto, clientIp(req));
   }
 
   @Public()

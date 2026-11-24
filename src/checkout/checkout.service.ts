@@ -287,6 +287,7 @@ export class CheckoutService {
     const o = await this.prisma.order.findUnique({ where: { id: orderId } });
     if (!o) throw new NotFoundException('Order not found.');
     if (o.provider !== 'mock') throw new ForbiddenException('This order is paid through a payment provider.');
+    if (config.isProduction) throw new ForbiddenException('Test payments are switched off on this site.');
     return this.fulfil(orderId);
   }
 
@@ -294,11 +295,16 @@ export class CheckoutService {
    * Called when a fan comes back from Paystack: asks Paystack whether the payment went through, then fulfils.
    * Safe to call more than once and from anyone (it only completes orders Paystack confirms were paid in full).
    */
+  /**
+   * The website asks us to confirm a payment after the fan pays (Paystack's page, or Stripe's card form).
+   * We ask the provider directly rather than waiting for the webhook, so the confirmation shows straight away.
+   */
   async verifyPaystack(orderId: string) {
     const o = await this.prisma.order.findUnique({ where: { id: orderId } });
     if (!o) throw new NotFoundException('Order not found.');
-    if (o.provider !== 'paystack') throw new BadRequestException('This order isn’t paid through Paystack.');
     if (o.status === 'PAID') return this.orderView(orderId);
+    if (o.provider === 'stripe') return this.verifyStripe(o);
+    if (o.provider !== 'paystack') throw new BadRequestException('This order isn’t paid through Paystack.');
     if (!this.payments.paystack) throw new BadRequestException('Paystack isn’t configured on this server.');
     const t = await this.payments.paystack.verify(o.paymentRef ?? o.id);
     if (t.status !== 'success') return { ...(await this.orderView(orderId)), paymentStatus: t.status };
@@ -323,6 +329,19 @@ export class CheckoutService {
    * Marks an order paid and issues tickets. Safe to call more than once (webhook retries).
    * If the hold expired during payment and the seats are gone, the payment is refunded.
    */
+  private async verifyStripe(o: { id: string; paymentRef: string | null; totalCents: number; currency: string }) {
+    const stripe = this.payments.stripe;
+    if (!stripe || !o.paymentRef) throw new BadRequestException('Card payments aren’t configured on this server.');
+    const pi = await stripe.paymentIntents.retrieve(o.paymentRef);
+    if (pi.metadata?.orderId !== o.id) throw new BadRequestException('That payment belongs to a different order.');
+    if (pi.status !== 'succeeded') return { ...(await this.orderView(o.id)), paymentStatus: pi.status };
+    if (pi.amount !== o.totalCents || pi.currency.toUpperCase() !== o.currency) {
+      this.log.error(`Stripe amount mismatch on ${o.id}: paid ${pi.amount} ${pi.currency}, expected ${o.totalCents} ${o.currency}`);
+      throw new BadRequestException('The payment amount doesn’t match the order. Our team has been alerted.');
+    }
+    return this.fulfil(o.id);
+  }
+
   async fulfil(orderId: string) {
     const result = await this.prisma.$transaction(
       async (tx) => {
@@ -330,6 +349,12 @@ export class CheckoutService {
         const order = await tx.order.findUnique({ where: { id: orderId }, include: { hold: true, event: true, ticketType: true, gift: true } });
         if (!order) throw new NotFoundException('Order not found.');
         if (order.status !== 'PENDING') return { order, refund: false, fresh: false };
+        // Paid after the event was cancelled (the payment was already under way): refund it instead of issuing tickets.
+        if (order.event.status === 'CANCELLED') {
+          await tx.order.update({ where: { id: order.id }, data: { status: 'CANCELLED' } });
+          if (order.hold?.status === 'ACTIVE') await tx.hold.update({ where: { id: order.hold.id }, data: { status: 'RELEASED' } });
+          return { order, refund: true, fresh: false, eventCancelled: true };
+        }
 
         if (order.resaleListingId) {
           // Fan resale: the seller's ticket is cancelled and the buyer gets a new ticket for the same seat.
@@ -422,9 +447,12 @@ export class CheckoutService {
     );
 
     if (result.refund && result.order.paymentRef) {
+      const cancelled = 'eventCancelled' in result && result.eventCancelled;
       await this.payments.byName(result.order.provider).refund(result.order.paymentRef, result.order.totalCents);
-      await this.audit.log(null, 'order.auto_refund', 'Order', orderId, { reason: 'seats no longer available after hold expired' });
-      throw new ConflictException('Your seats were released before payment finished. You have been refunded in full.');
+      await this.audit.log(null, 'order.auto_refund', 'Order', orderId, { reason: cancelled ? 'event was cancelled before payment finished' : 'seats no longer available after hold expired' });
+      throw new ConflictException(
+        cancelled ? 'This event was cancelled before your payment finished. You have been refunded in full.' : 'Your seats were released before payment finished. You have been refunded in full.',
+      );
     }
     // Only the call that actually marked it paid sends the receipt (webhook retries don't send it again).
     if (result.fresh) {

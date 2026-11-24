@@ -129,12 +129,12 @@ export class AdminService {
   }
 
   /** Refunds through the payment provider; a full refund voids the tickets and returns them to sale. */
-  async refundOrder(orderId: string, amountCents: number, admin: AuthUser, reason: string) {
+  async refundOrder(orderId: string, amountCents: number, admin: Pick<AuthUser, 'id'>, reason: string) {
     const o = await this.prisma.order.findUnique({ where: { id: orderId } });
     if (!o) throw new NotFoundException('Order not found.');
     const remaining = o.totalCents - o.refundedCents;
     if (amountCents > remaining) throw new BadRequestException(`At most ${remaining} cents can still be refunded.`);
-    if (o.paymentRef) await this.payments.byName(o.provider).refund(o.paymentRef, amountCents);
+    if (o.paymentRef && amountCents > 0) await this.payments.byName(o.provider).refund(o.paymentRef, amountCents);
     const full = amountCents === remaining;
     await this.prisma.$transaction(async (tx) => {
       await tx.order.update({
