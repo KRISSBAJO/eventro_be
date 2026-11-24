@@ -958,3 +958,34 @@ test('events near me: filter by country, nearest first with distances, optional 
   assert.equal((await ok(call('GET', '/events?near=6.52,3.38&radiusKm=100&pageSize=100'))).items.some((e: Json) => e.slug === ev.slug), false, 'outside the radius');
   assert.equal((await call('GET', '/events?near=somewhere')).status, 400);
 });
+
+test('gifts: accepting a gift from incoming tickets claims the whole gift', async () => {
+  const admin = await account('admin@test.local', 'Admin');
+  const org = await account(`gacc-org-${run}@test.local`, 'Gina Organizer');
+  const buyer = await account(`gacc-buyer-${run}@test.local`, 'Ada Buyer');
+  const friend = await account(`gacc-friend-${run}@test.local`, 'Femi Friend');
+  const { tt } = await publishedEvent(org.token, admin.token, 'Gift Accept');
+
+  const h = await ok(call('POST', '/holds', { ticketTypeId: tt.id, quantity: 2 }, buyer.token));
+  const before = outbox.length;
+  const order = await ok(call('POST', '/orders', { holdId: h.id, email: `gacc-buyer-${run}@test.local`, name: 'Ada Buyer', gift: { name: 'Femi', email: `gacc-friend-${run}@test.local`, message: 'Enjoy!' } }, buyer.token));
+  await ok(call('POST', `/orders/${order.orderId}/pay`));
+  const mail = await waitFor(() => outbox.slice(before).find((m) => m.to === `gacc-friend-${run}@test.local`));
+  const token = /\/gift\/([A-Za-z0-9_-]+)/.exec(mail.html)![1];
+
+  // The recipient sees them labelled as a gift, not a plain transfer.
+  const inbox = await ok(call('GET', '/me/tickets', undefined, friend.token));
+  const incoming = inbox.incomingTransfers.filter((t: Json) => t.gift);
+  assert.equal(incoming.length, 2);
+  assert.equal(incoming[0].gift.from, 'Ada Buyer');
+  assert.equal(incoming[0].gift.message, 'Enjoy!');
+
+  // Accepting one ticket claims the gift: both tickets move, and the gift is marked claimed.
+  await ok(call('POST', `/tickets/${incoming[0].id}/accept`, undefined, friend.token));
+  const after = await ok(call('GET', '/me/tickets', undefined, friend.token));
+  assert.equal(after.tickets.filter((t: Json) => t.orderId === order.orderId && t.status === 'ACTIVE').length, 2);
+  assert.equal(after.incomingTransfers.length, 0);
+  assert.equal((await ok(call('GET', `/gifts/${token}`))).status, 'claimed');
+  // Claiming again through the link says it's already theirs.
+  assert.equal((await ok(call('POST', `/gifts/${token}/claim`, undefined, friend.token))).already, true);
+});

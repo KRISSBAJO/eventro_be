@@ -12,6 +12,7 @@ import { AuditService } from '../common/audit.service';
 import { MailService, render } from '../mail/mail.module';
 import { pastCutoff } from '../resale/resale.module';
 import { NoticeService } from '../push/notices';
+import { GiftService } from '../gifts/gifts.module';
 
 /** How the phone turns a seed into door codes (also in the README). */
 export const QR_SEED_SPEC = {
@@ -41,6 +42,7 @@ export class TicketsService {
     private readonly audit: AuditService,
     private readonly mail: MailService,
     private readonly notices: NoticeService,
+    private readonly gifts: GiftService,
   ) {}
 
   /** Transfers nobody accepted in time go back to the sender. */
@@ -93,10 +95,22 @@ export class TicketsService {
     });
     const incoming = await this.prisma.ticket.findMany({
       where: { transferTo: user.email, status: 'TRANSFER_PENDING' },
-      select: { id: true, holderName: true, transferExpiresAt: true, event: { select: { title: true, startsAt: true } }, ticketType: { select: { name: true } } },
+      select: {
+        id: true,
+        holderName: true,
+        transferExpiresAt: true,
+        event: { select: { title: true, startsAt: true } },
+        ticketType: { select: { name: true } },
+        order: { select: { buyerName: true, gift: { select: { id: true, message: true, claimedAt: true } } } },
+      },
     });
+    // Gifts are labelled ("A gift from Ada", with the note), so apps don't show them as a plain transfer.
+    const incomingTransfers = incoming.map(({ order, ...t }) => ({
+      ...t,
+      gift: order.gift && !order.gift.claimedAt ? { id: order.gift.id, from: order.buyerName, message: order.gift.message || null } : null,
+    }));
     // The event rules above and the fee rate let the website show the resale breakdown before listing.
-    return { tickets, incomingTransfers: incoming, resaleFeePermille: config.resaleFeePermille };
+    return { tickets, incomingTransfers, resaleFeePermille: config.resaleFeePermille };
   }
 
   async qr(id: string, user: AuthUser) {
@@ -145,7 +159,16 @@ export class TicketsService {
 
   async accept(id: string, user: AuthUser) {
     await this.expireTransfers();
-    const before = await this.prisma.ticket.findUnique({ where: { id }, select: { ownerId: true, holderEmail: true } });
+    const before = await this.prisma.ticket.findUnique({
+      where: { id },
+      select: { ownerId: true, holderEmail: true, status: true, transferTo: true, order: { select: { gift: { select: { id: true, claimedAt: true } } } } },
+    });
+    // A gift's tickets wait for the recipient like a transfer; accepting one claims the whole gift (marked claimed).
+    const gift = before?.order.gift;
+    if (gift && !gift.claimedAt && before.status === 'TRANSFER_PENDING' && before.transferTo === user.email) {
+      await this.gifts.claimById(gift.id, user);
+      return this.prisma.ticket.findUnique({ where: { id } });
+    }
     // New holder, new QR seed (qrVersion + 1): codes the sender saved on their phone stop working.
     const { count } = await this.prisma.ticket.updateMany({
       where: { id, status: 'TRANSFER_PENDING', transferTo: user.email },

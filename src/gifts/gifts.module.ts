@@ -171,6 +171,23 @@ export class GiftService implements OnModuleInit, OnModuleDestroy {
 
   async claim(t: string, user: AuthUser) {
     const g = t.length <= 64 ? await this.prisma.gift.findUnique({ where: { token: t }, include: { order: { select: { status: true, buyerId: true, email: true } } } }) : null;
+    return this.claimGift(g, user);
+  }
+
+  /**
+   * The recipient accepted one of the gift's tickets from their incoming tickets (signed in with the email it was sent
+   * to): that claims the whole gift, the same as opening the link.
+   */
+  async claimById(id: string, user: AuthUser) {
+    const g = await this.prisma.gift.findUnique({ where: { id }, include: { order: { select: { status: true, buyerId: true, email: true } } } });
+    if (g && g.recipientEmail !== user.email.toLowerCase()) throw new NotFoundException('Transfer not found, or it has expired.');
+    return this.claimGift(g, user);
+  }
+
+  private async claimGift(
+    g: { id: string; orderId: string; sentAt: Date | null; claimedAt: Date | null; claimedBy: string | null; order: { status: string; buyerId: string | null; email: string } } | null,
+    user: AuthUser,
+  ) {
     if (!g || g.order.status !== 'PAID') throw new NotFoundException('That gift link isn’t valid.');
     if (!g.sentAt) throw new BadRequestException('This gift hasn’t been delivered yet.');
     if (g.claimedAt) {
