@@ -57,6 +57,9 @@ Runs against a separate `eventro_test` database (created by `db:start`; override
 - **Client additions (`test/gaps.test.ts`):** trending sort and `soldRecent`, price filters in the visitor's currency,
   Paystack's return URL for app buyers (orders and resale orders), who scanned a ticket first, `event.currency` in My
   tickets, section names in My resale, and the door scanner's event list.
+- **Changing the venue (`test/venue.test.ts`):** the new zone with the same wall-clock times, venues found again,
+  the organizer's own zone, refusals (online, cancelled, ended, door staff, seats already sold on the map), and one
+  email and one push per holder per change (refunded tickets left out; drafts tell nobody).
 
 Tests never call real services: Stripe, Paystack, mediaEX, Expo push, IP lookups and exchange rates are switched off or replaced
 by local stand-ins.
@@ -172,6 +175,25 @@ Organizers pick a venue in the create-event wizard: `GET /geo/search?q&country` 
 they type the address themselves. The venue record is created with the event; picking the same place again (same name
 in the same city, or within about 150 m with a shared word in the name) reuses the existing venue instead of adding a copy.
 
+### Changing an event's venue
+
+`PUT /organizer/events/:id/venue` (org admins and managers; door staff get 403) moves an in-person event to `{ venueId }`
+(a venue on Eventro) or `{ venue: { name, address, city, country?, region?, postalCode?, lat?, lng? } }` (a new place,
+found again or created with the same rules as creating an event). Optional `timezone` only when the organizer picked the
+zone themselves.
+
+- **Times keep their wall-clock value** ("8:00 PM" stays 8:00 PM) and the event takes the new venue's zone: its map
+  position, else its state or province, else its country. The answer has `zone: { from, to, changed, fromName, toName }`
+  and, when it changed, `notice: "Times stay 8:00 PM, now in Central time."` for the screens to show.
+- **Refused** (400) for cancelled, started or ended events and online events (switching between online and in person
+  isn't supported). Seat maps are per event and drawn for the old building, so an event with seats or sections already
+  sold, or held at checkout, is refused with 409 `code: "SEATED_SALES"`. A seat map with nothing sold is kept, and the
+  answer's `seatMapNote` says to check it in the designer.
+- **Ticket holders are told** on published events only: one email per holder address (kind `event.venue`: the new
+  venue, its address, a map link, the unchanged date and time) and one push (see the table below). Drafts and events
+  in review tell nobody (`notified.reason`). Every move is in the audit log (`event.venue`, from and to, both zones);
+  its id is the answer's `changeId`.
+
 ## Online events
 
 Events created with `online: true` have no venue; `streamUrl` is the private link. `GET /me/tickets` includes it
@@ -281,6 +303,7 @@ Everything the Expo app needs is additive: the website keeps working unchanged.
 | Resale sold | seller | orders | `/tickets` | `resale.sold:<listingId>` |
 | Price drop | watchers | priceDrops | `/events/<slug>` | `price_drop:<dropId>:<userId>` |
 | Event cancelled | ticket holders | orders | `/tickets` | `event.cancelled:<eventId>:<userId>` |
+| New venue ("Now at …") | ticket holders | orders | `/tickets` | `event.venue:<eventId>:<changeId>:<userId>` |
 | "Tomorrow: …" (start 20–24 h away) | holders of ACTIVE tickets | reminders | `/tickets/<ticketId>` | `reminder.day:<eventId>:<userId>` |
 | "Doors open soon" (hour before doors, or start) | holders of ACTIVE tickets | reminders | `/tickets/<ticketId>` | `reminder.doors:<eventId>:<userId>` |
 | New sale ("New sale: …", quantity × type · total) | the org's active admins and managers (not door staff; resales left out) | sales | `/organizer/events/<eventId>` | `order.sale:<orderId>:<userId>` |
@@ -367,7 +390,7 @@ All routes are under `/api/v1`. Send `Authorization: Bearer <token>` from `/auth
 | Tickets | `GET /me/tickets` (`event.currency`), `GET /tickets/:id/qr`, `GET /tickets/:id/qr-seed`, `POST/DELETE /tickets/:id/transfer`, `POST /tickets/:id/accept`, `POST/DELETE /tickets/:id/listing` |
 | Media | `GET /media/config`, `POST /media/uploads`, `PUT /media/uploads/:id`, `POST /media/uploads/:id/complete`, `GET /media/uploads/:id`, `PUT /organizer/events/:id/media` |
 | Organizer | `POST/GET /organizer/orgs`, `PATCH /organizer/orgs/:orgId`, `GET …/orders/recent`, team `GET/POST /organizer/orgs/:orgId/team`, `PATCH/DELETE …/team/:memberId`, `POST /organizer/invites/accept`, payouts `GET /organizer/orgs/:orgId/payouts`, `PUT …/payout-settings`, `POST …/payouts/onboarding` |
-| Organizer events | `POST/GET /organizer/orgs/:orgId/events`, `GET /organizer/orgs/:orgId/door-events`, `GET/PATCH /organizer/events/:id`, ticket types `POST/PATCH/DELETE …/ticket-types/:ttId`, `POST …/submit`, `POST …/pause`, `POST …/resume`, `PUT …/seat-map`, `POST …/seat-map/template`, `GET …/stats?days=30`, `GET …/attendees`, `GET …/attendees.csv`, `POST …/check-in` (duplicates say who scanned first), `DELETE …/check-in/:ticketId`, `GET …/door-pack`, `POST …/check-ins/sync`, promos `GET/POST …/promos`, `PATCH/DELETE …/promos/:code` |
+| Organizer events | `POST/GET /organizer/orgs/:orgId/events`, `GET /organizer/orgs/:orgId/door-events`, `GET/PATCH /organizer/events/:id`, `PUT …/venue` (move to another venue), ticket types `POST/PATCH/DELETE …/ticket-types/:ttId`, `POST …/submit`, `POST …/pause`, `POST …/resume`, `PUT …/seat-map`, `POST …/seat-map/template`, `GET …/stats?days=30`, `GET …/attendees`, `GET …/attendees.csv`, `POST …/check-in` (duplicates say who scanned first), `DELETE …/check-in/:ticketId`, `GET …/door-pack`, `POST …/check-ins/sync`, promos `GET/POST …/promos`, `PATCH/DELETE …/promos/:code` |
 | Resale | `GET /events/:slug/resale`, `POST /resale/:id/hold`, `POST /resale/:id/orders` (optional `returnTo: "app"`), `GET /me/resale` (`ticket.sectionName`) |
 | Gifts | `GET /gifts/:token`, `POST /gifts/:token/claim`, `POST /gifts/:id/resend` |
 | Price drops | `POST /events/:slug/price-watch`, `GET /events/:slug/price-drop`, `DELETE /price-watch/:token`, `GET /organizer/events/:id/price-drops` |

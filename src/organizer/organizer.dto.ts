@@ -130,6 +130,20 @@ export class UpdateEventDto {
   @ApiPropertyOptional({ description: 'Resale and transfers stop this many minutes before the start (0–10080)' }) @IsOptional() @IsInt() @Min(0) @Max(10_080) transferCutoffMinutes?: number;
 }
 
+/** PUT /organizer/events/:id/venue: an existing venue, or a new one (same shape and reuse rules as creating an event). */
+export class ChangeVenueDto {
+  @ApiPropertyOptional({ description: 'An existing venue' }) @IsOptional() @IsString() @MaxLength(40) venueId?: string;
+  @ApiPropertyOptional({ type: VenueInputDto, description: 'Or a new venue' }) @IsOptional() @ValidateNested() @Type(() => VenueInputDto) venue?: VenueInputDto;
+  @ApiPropertyOptional({
+    example: 'America/Chicago',
+    description: 'Only when the organizer picked the zone themselves; otherwise the new venue’s zone is used (map position, else its state, else its country)',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  timezone?: string;
+}
+
 export class UpdateTicketTypeDto {
   @ApiPropertyOptional() @IsOptional() @IsString() @MinLength(1) @MaxLength(60) name?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(300) description?: string;

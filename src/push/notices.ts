@@ -10,7 +10,8 @@
  *   resale.sold              seller                orders      resale.sold:<listingId>
  *   price_drop               watchers              priceDrops  price_drop:<dropId>:<userId>
  *   event.cancelled          ticket holders        orders      event.cancelled:<eventId>:<userId>
- *   reminder.day             holders of ACTIVE     reminders   reminder.day:<eventId>:<userId>
+ *   event.venue              ticket holders        orders      event.venue:<eventId>:<changeId>:<userId>
+ *   reminder.day            holders of ACTIVE     reminders   reminder.day:<eventId>:<userId>
  *   reminder.doors           holders of ACTIVE     reminders   reminder.doors:<eventId>:<userId>
  *   order.sale               org admins, managers  sales       order.sale:<orderId>:<userId>
  *
@@ -257,6 +258,26 @@ export class NoticeService implements OnModuleInit, OnModuleDestroy {
           body: `${e.orgName} cancelled this event. Refunds go back to the original payment method.`,
           data: link('/tickets', { type: 'event.cancelled', eventId: e.id }),
           dedupeKey: `event.cancelled:${e.id}:${userId}`,
+        })),
+      );
+    });
+  }
+
+  /**
+   * The event moved to another venue: to everyone holding a ticket, once per change (`changeId` is the audit entry
+   * of that move, so moving again tells them again, but a retry of the same move doesn't).
+   */
+  venueChanged(e: { id: string; title: string }, venue: { name: string; city: string }, changeId: string, userIds: string[]) {
+    return this.guard(`event.venue ${e.id}`, async () => {
+      await this.push.send(
+        'event.venue',
+        'orders',
+        userIds.map((userId) => ({
+          userId,
+          title: `New venue: ${e.title}`,
+          body: `Now at ${venue.name}, ${venue.city}. Same date and time, and your tickets still work.`,
+          data: link('/tickets', { type: 'event.venue', eventId: e.id }),
+          dedupeKey: `event.venue:${e.id}:${changeId}:${userId}`,
         })),
       );
     });

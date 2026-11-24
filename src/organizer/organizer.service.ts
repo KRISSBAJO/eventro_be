@@ -16,7 +16,9 @@ import { isTimeZone, placeTimezone, timezoneAt } from '../geo/geo.module';
 import { FxService } from '../fx/fx.module';
 import { PriceDropService } from '../price-drops/price-drops.module';
 import { EventCancellation } from '../admin/cancel-event';
+import { VenueChange } from './venue-change';
 import type {
+  ChangeVenueDto,
   CreateEventDto,
   CreateOrgDto,
   InviteDto,
@@ -55,6 +57,7 @@ export class OrganizerService {
     private readonly fx: FxService,
     private readonly priceDrops: PriceDropService,
     private readonly cancellation: EventCancellation,
+    private readonly venues: VenueChange,
   ) {}
 
   /* ---------- access ---------- */
@@ -164,17 +167,9 @@ export class OrganizerService {
     };
   }
 
-  private async sameVenue(v: { name: string; city: string; lat?: number; lng?: number }, country: string | undefined) {
-    const named = await this.prisma.venue.findFirst({
-      where: { hiddenAt: null, name: { equals: v.name.trim(), mode: 'insensitive' }, city: { equals: v.city.trim(), mode: 'insensitive' }, ...(country ? { OR: [{ country }, { country: null }] } : {}) },
-    });
-    if (named || v.lat === undefined || v.lng === undefined) return named;
-    // ~150 m box around the point, then a venue there whose name shares a word with this one
-    const d = 0.0014;
-    const near = await this.prisma.venue.findMany({ where: { hiddenAt: null, lat: { gte: v.lat - d, lte: v.lat + d }, lng: { gte: v.lng - d, lte: v.lng + d } }, take: 10 });
-    const words = (s: string) => new Set(s.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2));
-    const mine = words(v.name);
-    return near.find((n) => [...words(n.name)].some((w) => mine.has(w))) ?? null;
+  /** The same place picked again is the venue already on Eventro (see VenueChange.sameVenue). */
+  private sameVenue(v: { name: string; city: string; lat?: number; lng?: number }, country: string | undefined) {
+    return this.venues.sameVenue(v, country);
   }
 
   async createEvent(orgId: string, user: AuthUser, dto: CreateEventDto) {
@@ -339,6 +334,12 @@ export class OrganizerService {
       ...(dto.transferCutoffMinutes !== undefined ? { transferCutoffMinutes: dto.transferCutoffMinutes } : {}),
     };
     return this.prisma.event.update({ where: { id }, data });
+  }
+
+  /** Moves an in-person event to another venue; see VenueChange. Admins and managers, like editing. */
+  async changeVenue(id: string, user: AuthUser, dto: ChangeVenueDto) {
+    const ev = await this.eventFor(id, user, EDIT);
+    return this.venues.change(ev, user, dto);
   }
 
   async addTicketType(id: string, user: AuthUser, dto: TicketTypeInputDto) {

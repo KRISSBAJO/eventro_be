@@ -1,6 +1,7 @@
 import { Body, Controller, Delete, Get, Header, HttpCode, Module, Param, Patch, Post, Put, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { OrganizerService } from './organizer.service';
+import { VenueChange } from './venue-change';
 import { BankAccountDto, PayoutAccounts } from './payout-accounts';
 import { CheckoutModule } from '../checkout/checkout.module';
 import { AdminModule } from '../admin/admin-console';
@@ -9,6 +10,7 @@ import { RATE_RULES, RateLimit } from '../common/rate-limit';
 import { config } from '../config';
 import {
   CancelEventDto,
+  ChangeVenueDto,
   CheckInDto,
   CheckInSyncDto,
   CreateEventDto,
@@ -107,6 +109,13 @@ export class OrganizerController {
   }
   @Patch('events/:id') updateEvent(@Param('id') id: string, @CurrentUser() u: AuthUser, @Body() dto: UpdateEventDto) {
     return this.svc.updateEvent(id, u, dto);
+  }
+  /**
+   * Moves an in-person event to another venue (admins and managers). Times keep their wall-clock value in the new
+   * venue's zone; ticket holders of a published event are emailed and notified once.
+   */
+  @Put('events/:id/venue') changeVenue(@Param('id') id: string, @CurrentUser() u: AuthUser, @Body() dto: ChangeVenueDto) {
+    return this.svc.changeVenue(id, u, dto);
   }
   @Post('events/:id/ticket-types') addTicketType(@Param('id') id: string, @CurrentUser() u: AuthUser, @Body() dto: TicketTypeInputDto) {
     return this.svc.addTicketType(id, u, dto);
@@ -207,6 +216,6 @@ export class OrganizerController {
 @Module({
   imports: [CheckoutModule, AdminModule],
   controllers: [OrganizerController],
-  providers: [OrganizerService, PayoutAccounts],
+  providers: [OrganizerService, PayoutAccounts, VenueChange],
 })
 export class OrganizerModule {}
