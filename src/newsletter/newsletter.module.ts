@@ -35,7 +35,7 @@ import { Public } from '../common/auth';
 import { config } from '../config';
 import { MailService, render } from '../mail/mail.module';
 
-export const CATEGORIES = ['Concerts', 'Sports', 'Comedy', 'Theater', 'Festivals', 'Family'] as const;
+export const CATEGORIES = ['Concerts', 'Sports', 'Comedy', 'Theater', 'Festivals', 'Family', 'Faith'] as const;
 const SOURCES = ['footer', 'newsletter', 'event', 'checkout'] as const;
 
 const lower = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim().toLowerCase() : value);

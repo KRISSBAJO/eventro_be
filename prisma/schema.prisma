@@ -26,6 +26,8 @@ enum Category {
   NIGHTLIFE
   CONFERENCE
   WORKSHOP
+  /// church services, worship nights, crusades, conferences and retreats
+  FAITH
   OTHER
 }
 
