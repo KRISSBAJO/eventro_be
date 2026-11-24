@@ -86,6 +86,29 @@ Fulfilment can safely run more than once. If a hold expired during payment and t
 - **Exchange rates:** `GET /fx/rates` (USD base) from ExchangeRate-API's open endpoint, refreshed every 6 hours,
   with built-in fallback rates. They're for display only ("₦25,000 ≈ $16"). Set `FX_OFFLINE=1` to never call out.
 
+## Email, price drops and the admin console
+
+- **Email:** Resend sends receipts (once per paid order), the newsletter welcome, price-drop alerts and admin
+  broadcasts. Set `RESEND_API_KEY` and `MAIL_FROM` (a sender on a domain verified in Resend). Every attempt is logged
+  (`EmailLog`: SENT, FAILED or SKIPPED) and shown in the admin console; without a key emails are SKIPPED, never sent.
+  Newsletter and alert emails carry a `List-Unsubscribe` link. Tests run their own Resend stand-in.
+- **Price drops:** when an organizer lowers a ticket price on a published event, the drop is recorded and emailed to
+  fans watching the event (`POST /events/:slug/price-watch`) and to newsletter subscribers whose categories and city
+  match, one email per address. Cuts under 5%, repeat cuts within 12 hours and events that already started are
+  recorded but not emailed. `GET /events/:slug/price-drop` drives the "Price dropped" badge; organizers see the
+  audience first at `GET /organizer/events/:id/price-drops`.
+- **Admin console** (`ADMIN` role): overview with GMV in USD, users (roles, suspend), organizers (verify, suspend:
+  pauses their sales and blocks resuming or submitting), all events (take down, publish, pause sales), orders
+  (search, refund), subscribers (CSV export, broadcasts with a test send), price drops, the email log and the audit
+  log. Suspended accounts can't sign in and their tokens stop working at once.
+
+## Venues
+
+Organizers pick a venue in the create-event wizard: `GET /geo/search?q&country` suggests places from OpenStreetMap
+(biased towards the chosen country, and retried as "name, country" when a short name only matches places abroad), or
+they type the address themselves. The venue record is created with the event; picking the same place again (same name
+in the same city, or within about 150 m with a shared word in the name) reuses the existing venue instead of adding a copy.
+
 ## Online events
 
 Events created with `online: true` have no venue; `streamUrl` is the private link. `GET /me/tickets` includes it
@@ -102,11 +125,17 @@ Developers in mediaEX). The key never leaves this server:
    streams it to mediaEX with the key (when mediaEX stores files on its own disk).
 3. `POST /media/uploads/:id/complete`, then `GET /media/uploads/:id` until `status` is `ready` (videos are encoded to HLS).
 4. `PUT /organizer/events/:id/media` `{ items: [{ id, kind, alt? }] }` sets the event's photos and videos in order.
-   Only files uploaded by the organization's members are accepted. The first photo becomes the event's cover.
+   Only files uploaded by the organization's members are accepted. The first item is the cover: a photo, or a video
+   (cards show a frame from it, and the event page plays it silently behind the title; ready videos keep their HLS
+   `playbackUrl` for that).
 
 Limits: 12 photos (25 MB each) and 3 videos (2 GB each) per event. `GET /media/config` tells the website whether
 uploads are on. Public event responses include `media` with ready-to-use URLs (resized images, video posters and the
 mediaEX player). Without a key, uploads are off and events use stock covers.
+
+If mediaEX answers with something other than its JSON (usually `MEDIAEX_URL` pointing at the wrong host, e.g. the
+mediaEX website instead of its API), uploads fail with a readable 503 and the API logs the status and the first part of
+the reply.
 
 ## How inventory works
 
@@ -156,11 +185,13 @@ All routes are under `/api/v1`. Send `Authorization: Bearer <token>` from `/auth
 | Browse | `GET /events?q&category&city&from&to&maxPrice&sort&page`, `GET /events/:slug`, `GET /events/:slug/availability?qty`, `GET /events/:slug/sections/:id/seats`, `GET /venues`, `GET /venues/:slug` |
 | Checkout | `POST /holds`, `GET /holds/:id`, `DELETE /holds/:id`, `POST /quote`, `POST /orders`, `GET /orders/:id`, `POST /orders/:id/pay` (mock), `POST /orders/:id/verify` (Paystack), `POST /orders/:id/refund-requests`, `POST /webhooks/stripe`, `POST /webhooks/paystack` |
 | Places & money | `GET /geo/countries`, `GET /geo/countries/:code/regions`, `GET /geo/search?q&country`, `GET /geo/timezone?lat&lng`, `GET /geo/me`, `GET /geo/currencies`, `GET /fx/rates` |
-| Newsletter | `POST /newsletter` (sign up; returns a private preferences token only when it creates or reopens the subscription), `GET/PATCH/DELETE /newsletter/:token` (preferences and unsubscribe). Limited to 20 sign-ups per IP per hour. |
+| Newsletter | `POST /newsletter` (sign up; returns a private preferences token only when it creates or reopens the subscription), `GET/PATCH/DELETE /newsletter/:token` (preferences and unsubscribe). Limited to `SIGNUPS_PER_IP_PER_HOUR` (default 20) sign-ups per IP per hour. |
 | Tickets | `GET /me/tickets`, `GET /tickets/:id/qr`, `POST/DELETE /tickets/:id/transfer`, `POST /tickets/:id/accept`, `POST/DELETE /tickets/:id/listing` |
 | Media | `GET /media/config`, `POST /media/uploads`, `PUT /media/uploads/:id`, `POST /media/uploads/:id/complete`, `GET /media/uploads/:id`, `PUT /organizer/events/:id/media` |
 | Organizer | `POST/GET /organizer/orgs`, `PATCH /organizer/orgs/:orgId`, `GET …/orders/recent`, team `GET/POST /organizer/orgs/:orgId/team`, `PATCH/DELETE …/team/:memberId`, `POST /organizer/invites/accept`, payouts `GET /organizer/orgs/:orgId/payouts`, `PUT …/payout-settings`, `POST …/payouts/onboarding` |
 | Organizer events | `POST/GET /organizer/orgs/:orgId/events`, `GET/PATCH /organizer/events/:id`, ticket types `POST/PATCH/DELETE …/ticket-types/:ttId`, `POST …/submit`, `POST …/pause`, `POST …/resume`, `PUT …/seat-map`, `POST …/seat-map/template`, `GET …/stats?days=30`, `GET …/attendees`, `GET …/attendees.csv`, `POST …/check-in`, `DELETE …/check-in/:ticketId`, promos `GET/POST …/promos`, `PATCH/DELETE …/promos/:code` |
+| Price drops | `POST /events/:slug/price-watch`, `GET /events/:slug/price-drop`, `DELETE /price-watch/:token`, `GET /organizer/events/:id/price-drops` |
+| Admin console | `GET /admin/overview`, `GET/PATCH /admin/users[/:id]`, `GET/PATCH /admin/orgs[/:id]`, `GET /admin/events`, `POST /admin/events/:id/takedown`, `…/publish`, `…/sales`, `GET /admin/orders`, `POST /admin/orders/:id/refund`, `GET /admin/subscribers`, `GET /admin/subscribers.csv`, `GET /admin/broadcast/audience`, `POST /admin/broadcast`, `GET /admin/price-drops`, `GET /admin/emails` |
 | Admin | `GET /admin/reviews`, `POST /admin/events/:id/approve`, `POST /admin/events/:id/reject`, `GET /admin/refunds`, `POST /admin/refunds/:id/decide`, `GET /admin/fraud`, `POST /admin/fraud/:id/decide`, `GET /admin/audit` |
 
 Team roles: **ADMIN** (everything, including payouts and team), **MANAGER** (events, attendees, promos), **DOOR** (check-in only).
@@ -168,7 +199,7 @@ Team roles: **ADMIN** (everything, including payouts and team), **MANAGER** (eve
 ## Not done yet
 
 - **Card payments in the browser:** with Stripe keys set, `POST /orders` returns a PaymentIntent, but the website doesn't load Stripe's card form yet, so it only completes test-mode (mock) payments today.
-- **Email** (receipts, transfer invites, password reset, and the newsletter itself: sign-ups and preferences are stored, but nothing sends the emails yet).
+- **More email:** transfer invites and password reset aren't sent yet (receipts, newsletter, price drops and broadcasts are).
 - **Rate limiting** on auth and checkout. Put it behind a gateway, or add `@nestjs/throttler`.
 - **Resale purchases:** listing works, but buying a listed ticket doesn't yet.
 - **Cancelling a whole event** with bulk refunds.

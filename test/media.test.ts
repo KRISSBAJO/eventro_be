@@ -11,6 +11,7 @@ import type { INestApplication } from '@nestjs/common';
 
 const KEY = `mx_live_${'t'.repeat(32)}`;
 let mock: Server;
+let setBroken: (b: boolean) => void = () => {};
 let mockUrl = '';
 const received = new Map<string, number>(); // asset id → bytes received
 let seq = 0;
@@ -40,6 +41,8 @@ const ok = async (p: ReturnType<typeof call>) => {
 
 before(async () => {
   // Stand-in for the mediaEX API: checks the key, accepts single uploads, reports assets as ready.
+  let broken = false;
+  setBroken = (b) => (broken = b);
   mock = createServer((req, res) => {
     const send = (status: number, json: unknown) => {
       res.writeHead(status, { 'content-type': 'application/json' });
@@ -48,6 +51,11 @@ before(async () => {
     if (req.headers.authorization !== `Bearer ${KEY}`) return send(401, { error: 'bad key' });
     const url = req.url ?? '';
     if (req.method === 'POST' && url === '/api/v1/uploads') {
+      // A misconfigured host answers with an HTML page, not mediaEX's JSON.
+      if (broken) {
+        res.writeHead(404, { 'content-type': 'text/html' });
+        return res.end('<!DOCTYPE html><html><body>404 page not found</body></html>');
+      }
       const id = `ast_test${String(++seq).padStart(4, '0')}`;
       return send(201, { asset: { id }, upload: { kind: 'single', url: `${mockUrl}/api/v1/uploads/${id}`, method: 'PUT', headers: {} } });
     }
@@ -64,7 +72,9 @@ before(async () => {
     m = /^\/api\/v1\/uploads\/(ast_\w+)\/complete$/.exec(url);
     if (req.method === 'POST' && m) return send(200, { asset: { id: m[1], status: 'queued' } });
     m = /^\/api\/v1\/assets\/(ast_\w+)$/.exec(url);
-    if (req.method === 'GET' && m) return send(200, { asset: { id: m[1], status: 'ready', progress: 100, error: null, width: 1600, height: 900, duration: 0 } });
+    if (req.method === 'GET' && m) {
+      return send(200, { asset: { id: m[1], status: 'ready', progress: 100, error: null, width: 1600, height: 900, duration: 0, playbackUrl: `${mockUrl}/hls/${m[1]}/master.m3u8` } });
+    }
     send(404, { error: 'not found' });
   });
   await new Promise<void>((r) => mock.listen(0, '127.0.0.1', r));
@@ -136,4 +146,46 @@ test('media: upload through Eventro, attach to an event, and only your team’s 
   assert.equal(detail.media[0].id, s.id);
   assert.equal(detail.media[0].alt, 'The stage');
   assert.equal(detail.imageUrl, set.imageUrl);
+});
+
+test('media: a video can be the cover, and a broken media host gives a clear error instead of a crash', async () => {
+  const stamp = Date.now();
+  const org = (await ok(call('POST', '/auth/signup', { email: `vid${stamp}@media.test`, name: 'Vid Test', password: 'test-password-123' }))).token as string;
+  const o = await ok(call('POST', '/organizer/orgs', { name: 'Video Org' }, org));
+  const ev = await ok(
+    call(
+      'POST',
+      `/organizer/orgs/${o.id}/events`,
+      { title: 'Video Night', category: 'CONCERTS', startsAt: new Date(Date.now() + 20 * 86_400_000).toISOString(), venue: { name: 'Hall', address: '1 Road', city: 'Lagos' }, ticketTypes: [{ name: 'GA', basePriceCents: 1000, capacity: 50 }] },
+      org,
+    ),
+  );
+  const upload = async (fileName: string, mimeType: string) => {
+    const bytes = Buffer.alloc(4096, 3);
+    const s = await ok(call('POST', '/media/uploads', { fileName, size: bytes.length, mimeType }, org));
+    await ok(call('PUT', `/media/uploads/${s.id}`, undefined, org, { data: bytes, type: mimeType }));
+    return ok(call('POST', `/media/uploads/${s.id}/complete`, undefined, org));
+  };
+  const clip = await upload('teaser.mp4', 'video/mp4');
+  assert.match(clip.playbackUrl, /master\.m3u8$/, 'ready videos report their stream');
+  const still = await upload('crowd.jpg', 'image/jpeg');
+
+  // Video first: it's the cover. The card image is a frame from the video; the stream is kept for the event page.
+  const set = await ok(call('PUT', `/organizer/events/${ev.id}/media`, { items: [{ id: clip.id, kind: 'video' }, { id: still.id, kind: 'image' }] }, org));
+  assert.ok(set.imageUrl.includes(`/api/media/${clip.id}/transform?t=1&`), set.imageUrl);
+  assert.equal(set.media[0].kind, 'video');
+  assert.match(set.media[0].playbackUrl, /master\.m3u8$/);
+  const detail = await ok(call('GET', `/organizer/events/${ev.id}`, undefined, org));
+  assert.equal(detail.media[0].playbackUrl, set.media[0].playbackUrl);
+
+  // Photo first again: the photo is the cover.
+  const back = await ok(call('PUT', `/organizer/events/${ev.id}/media`, { items: [{ id: still.id, kind: 'image' }, { id: clip.id, kind: 'video' }] }, org));
+  assert.ok(back.imageUrl.includes(`/api/media/${still.id}/transform?w=1200`), back.imageUrl);
+
+  // MEDIAEX_URL pointing at the wrong host: a readable 503, not "Internal server error".
+  setBroken(true);
+  const r = await call('POST', '/media/uploads', { fileName: 'x.jpg', size: 10, mimeType: 'image/jpeg' }, org);
+  setBroken(false);
+  assert.equal(r.status, 503);
+  assert.match(r.body.message, /media service/);
 });

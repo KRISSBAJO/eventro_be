@@ -7,11 +7,12 @@ import { Payments } from '../checkout/payments';
 import { randomSuffix, slugify } from '../domain/codes';
 import { buyerPrice, organizerNet, type FeeMode } from '../domain/money';
 import { verifyQr } from '../domain/qr';
-import { arenaTemplate, capacityByTicketType, validateSeatMap, type SeatMap } from '../domain/seatmap';
+import { arenaTemplate, capacityByTicketType, rowLabel, validateSeatMap, type SeatMap } from '../domain/seatmap';
 import type { AuthUser } from '../common/auth';
 import { mediaUrls, type MediaItem } from '../media/media.module';
 import { countryTimezone, isTimeZone, timezoneAt } from '../geo/geo.module';
 import { FxService } from '../fx/fx.module';
+import { PriceDropService } from '../price-drops/price-drops.module';
 import type {
   CreateEventDto,
   CreateOrgDto,
@@ -39,6 +40,7 @@ export class OrganizerService {
     private readonly audit: AuditService,
     private readonly payments: Payments,
     private readonly fx: FxService,
+    private readonly priceDrops: PriceDropService,
   ) {}
 
   /* ---------- access ---------- */
@@ -146,6 +148,19 @@ export class OrganizerService {
     };
   }
 
+  private async sameVenue(v: { name: string; city: string; lat?: number; lng?: number }, country: string | undefined) {
+    const named = await this.prisma.venue.findFirst({
+      where: { name: { equals: v.name.trim(), mode: 'insensitive' }, city: { equals: v.city.trim(), mode: 'insensitive' }, ...(country ? { OR: [{ country }, { country: null }] } : {}) },
+    });
+    if (named || v.lat === undefined || v.lng === undefined) return named;
+    // ~150 m box around the point, then a venue there whose name shares a word with this one
+    const d = 0.0014;
+    const near = await this.prisma.venue.findMany({ where: { lat: { gte: v.lat - d, lte: v.lat + d }, lng: { gte: v.lng - d, lte: v.lng + d } }, take: 10 });
+    const words = (s: string) => new Set(s.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2));
+    const mine = words(v.name);
+    return near.find((n) => [...words(n.name)].some((w) => mine.has(w))) ?? null;
+  }
+
   async createEvent(orgId: string, user: AuthUser, dto: CreateEventDto) {
     await this.member(orgId, user, EDIT);
     if (!dto.online && !dto.venueId && !dto.venue) throw new BadRequestException('Add a venue, or mark the event as online.');
@@ -158,7 +173,9 @@ export class OrganizerService {
       const country = dto.venue.country?.toUpperCase();
       // The venue's time zone, from its map position or else its country's main zone.
       const tz = dto.venue.lat !== undefined && dto.venue.lng !== undefined ? timezoneAt(dto.venue.lat, dto.venue.lng) : countryTimezone(country);
-      const v = await this.prisma.venue.create({ data: { ...dto.venue, country, timezone: tz, slug: `${slugify(dto.venue.name)}-${randomSuffix()}` } });
+      // The same place picked again (same name in the same city, or within ~150 m on the map) reuses its venue,
+      // so a venue keeps one page and one history of events instead of a copy per event.
+      const v = (await this.sameVenue(dto.venue, country)) ?? (await this.prisma.venue.create({ data: { ...dto.venue, country, timezone: tz, slug: `${slugify(dto.venue.name)}-${randomSuffix()}` } }));
       venueId = v.id;
       timezone = dto.timezone ?? tz ?? 'UTC';
     }
@@ -285,7 +302,7 @@ export class OrganizerService {
     if (dto.capacity !== undefined && ev.seatMap && (ev.seatMap as SeatMap).sections.some((s) => s.ticketTypeId === ttId)) {
       throw new BadRequestException('This ticket type’s capacity comes from the seat map. Change the sections instead.');
     }
-    return this.prisma.ticketType.update({
+    const updated = await this.prisma.ticketType.update({
       where: { id: ttId },
       data: {
         ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
@@ -295,6 +312,23 @@ export class OrganizerService {
         ...(dto.maxPerOrder !== undefined ? { maxPerOrder: dto.maxPerOrder } : {}),
       },
     });
+    let priceDrop: Awaited<ReturnType<PriceDropService['record']>> = null;
+    if (updated.priceCents !== tt.priceCents) {
+      await this.audit.log(user.id, 'ticket_type.price', 'TicketType', ttId, { eventId: id, fromCents: tt.priceCents, toCents: updated.priceCents, currency: ev.currency });
+      const venue = ev.venueId ? await this.prisma.venue.findUnique({ where: { id: ev.venueId }, select: { name: true, city: true } }) : null;
+      priceDrop = await this.priceDrops.record({ ...ev, venue }, updated, tt.priceCents, updated.priceCents, user.id);
+    }
+    return { ...updated, priceDrop };
+  }
+
+  /** How many people a price drop on this event would reach right now (for the organizer's price screen). */
+  async priceDropAudience(id: string, user: AuthUser) {
+    const ev = await this.eventFor(id, user, EDIT);
+    const venue = ev.venueId ? await this.prisma.venue.findUnique({ where: { id: ev.venueId }, select: { name: true, city: true } }) : null;
+    const audience = await this.priceDrops.audience({ ...ev, venue });
+    const watchers = audience.filter((a) => a.via === 'watch').length;
+    const drops = await this.prisma.priceDrop.findMany({ where: { eventId: id }, orderBy: { createdAt: 'desc' }, take: 10 });
+    return { watchers, subscribers: audience.length - watchers, total: audience.length, published: ev.status === 'PUBLISHED', drops };
   }
 
   async deleteTicketType(id: string, ttId: string, user: AuthUser) {
@@ -308,15 +342,23 @@ export class OrganizerService {
     return { deleted: true };
   }
 
+  /** Suspended organizers can't put events in front of fans. */
+  private async notSuspended(orgId: string) {
+    const org = await this.prisma.organization.findUnique({ where: { id: orgId }, select: { suspendedAt: true, suspendReason: true } });
+    if (org?.suspendedAt) throw new ForbiddenException(`This organizer account is suspended${org.suspendReason ? `: ${org.suspendReason}` : '.'} Contact Eventro support.`);
+  }
+
   async submit(id: string, user: AuthUser) {
     const ev = await this.eventFor(id, user, EDIT);
+    await this.notSuspended(ev.orgId);
     if (ev.status !== 'DRAFT' && ev.status !== 'REJECTED') throw new BadRequestException('Only drafts and rejected events can be submitted.');
     if (ev.startsAt <= new Date()) throw new BadRequestException('The event date is in the past.');
     return this.prisma.event.update({ where: { id }, data: { status: 'IN_REVIEW', reviewNote: null } });
   }
 
   async setPaused(id: string, user: AuthUser, paused: boolean) {
-    await this.eventFor(id, user, EDIT);
+    const ev = await this.eventFor(id, user, EDIT);
+    if (!paused) await this.notSuspended(ev.orgId);
     await this.audit.log(user.id, paused ? 'event.pause' : 'event.resume', 'Event', id);
     return this.prisma.event.update({ where: { id }, data: { salesPaused: paused } });
   }
@@ -334,12 +376,24 @@ export class OrganizerService {
         throw new BadRequestException(`${t.name}: the seat map has ${cap} places but ${t.sold} are already sold.`);
       }
     }
-    if (ev.status === 'PUBLISHED') {
-      // Sold seats must still exist in the new layout.
-      const sold = await this.prisma.ticket.findMany({ where: { eventId: id, section: { not: null }, status: { not: 'VOID' } }, select: { section: true }, distinct: ['section'] });
-      const kept = new Set(result.map.sections.map((s) => s.id));
-      const missing = sold.map((s) => s.section!).filter((s) => !kept.has(s));
+    // Every sold seat must still exist in the new layout: its section, and for reserved seating its row and seat
+    // number (shrinking rows or seats under a sold seat would leave a fan with a seat that isn't on the map).
+    const sold = await this.prisma.ticket.findMany({ where: { eventId: id, section: { not: null }, status: { not: 'VOID' } }, select: { section: true, row: true, seat: true } });
+    if (sold.length) {
+      const byId = new Map(result.map.sections.map((s) => [s.id, s]));
+      const missing = [...new Set(sold.map((t) => t.section!).filter((s) => !byId.has(s)))];
       if (missing.length) throw new BadRequestException(`Sections with sold tickets can’t be removed: ${missing.join(', ')}`);
+      const lost = new Set<string>();
+      for (const t of sold) {
+        const s = byId.get(t.section!)!;
+        if (s.seating !== 'reserved' || !t.row || t.seat === null) continue;
+        const rows = new Set(Array.from({ length: s.rows ?? 0 }, (_, i) => rowLabel(i)));
+        if (!rows.has(t.row) || t.seat > (s.seatsPerRow ?? 0)) lost.add(`${t.section} row ${t.row} seat ${t.seat}`);
+      }
+      if (lost.size) {
+        const list = [...lost];
+        throw new BadRequestException(`Sold seats would no longer be on the map: ${list.slice(0, 5).join(', ')}${list.length > 5 ? ` and ${list.length - 5} more` : ''}. Keep those rows and seats.`);
+      }
     }
     await this.prisma.$transaction([
       this.prisma.event.update({ where: { id }, data: { seatMap: result.map as unknown as Prisma.InputJsonValue } }),

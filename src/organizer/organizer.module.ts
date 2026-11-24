@@ -109,6 +109,10 @@ export class OrganizerController {
 
   /* stats, attendees, check-in */
   @ApiQuery({ name: 'days', required: false })
+  /** Who a price drop would reach (watchers + matching subscribers) and the event's recent drops. */
+  @Get('events/:id/price-drops') priceDrops(@Param('id') id: string, @CurrentUser() u: AuthUser) {
+    return this.svc.priceDropAudience(id, u);
+  }
   @Get('events/:id/stats') stats(@Param('id') id: string, @CurrentUser() u: AuthUser, @Query('days') days?: string) {
     const n = Math.min(365, Math.max(1, Number(days) || 30));
     return this.svc.stats(id, u, n);

@@ -46,6 +46,13 @@ export const config = {
   /** mediaEX hosts event photos and videos. Without a key, uploads are switched off. */
   mediaexUrl: (process.env.MEDIAEX_URL || 'http://localhost:3400').replace(/\/$/, ''),
   mediaexApiKey: process.env.MEDIAEX_API_KEY || '',
+  /** Resend (resend.com) sends Eventro's email. Without a key, emails are logged as SKIPPED instead of sent. */
+  resendApiKey: process.env.RESEND_API_KEY || '',
+  /** Resend API base; only changed by tests, which run a local stand-in. */
+  resendUrl: (process.env.RESEND_API_URL || 'https://api.resend.com').replace(/\/$/, ''),
+  mailFrom: process.env.MAIL_FROM || 'Eventro <onboarding@resend.dev>',
+  /** Newsletter sign-ups and price alerts allowed per IP address per hour (anti-spam). */
+  signupsPerIpPerHour: int('SIGNUPS_PER_IP_PER_HOUR', 20),
   isProduction: process.env.NODE_ENV === 'production',
 };
 

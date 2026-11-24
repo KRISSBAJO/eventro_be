@@ -32,6 +32,8 @@ import { ArrayMaxSize, IsArray, IsEmail, IsIn, IsOptional, IsString, Matches, Ma
 import type { Request } from 'express';
 import { PrismaService } from '../prisma.service';
 import { Public } from '../common/auth';
+import { config } from '../config';
+import { MailService, render } from '../mail/mail.module';
 
 export const CATEGORIES = ['Concerts', 'Sports', 'Comedy', 'Theater', 'Festivals', 'Family'] as const;
 const SOURCES = ['footer', 'newsletter', 'event', 'checkout'] as const;
@@ -67,17 +69,35 @@ const mask = (email: string) => {
 
 const newToken = () => randomBytes(24).toString('base64url');
 
-/** Per-address limit on sign-ups, so the form can't be used to flood the table. */
-const PER_IP_PER_HOUR = 20;
 
 @Injectable()
 export class NewsletterService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly mail: MailService,
+  ) {}
+
+  /** The welcome email, with the private link to change preferences or leave. */
+  private welcome(email: string, token: string) {
+    const manage = `${config.webUrl}/newsletter/manage?t=${token}`;
+    const { html, text } = render({
+      preheader: 'Presale codes, new shows near you and price drops, before everyone else.',
+      heading: 'You’re on the list',
+      paragraphs: [
+        'From now on you’ll hear about presale codes, new shows in your city and price drops before they go public.',
+        'One email a week at most. Pick the kinds of events you care about and we’ll skip the rest.',
+      ],
+      cta: { label: 'Choose what you hear about', url: manage },
+      footer: 'You signed up for drops and presales on Eventro.',
+      footerLink: { label: 'Unsubscribe', url: manage },
+    });
+    void this.mail.send('newsletter.welcome', { to: email, subject: 'You’re on the Eventro list', html, text, unsubscribeUrl: manage });
+  }
 
   async subscribe(dto: SubscribeDto, clientIp: string | null) {
     if (clientIp) {
       const recent = await this.prisma.subscriber.count({ where: { clientIp, createdAt: { gte: new Date(Date.now() - 3600_000) } } });
-      if (recent >= PER_IP_PER_HOUR) throw new HttpException('Too many sign-ups from this connection. Try again later.', HttpStatus.TOO_MANY_REQUESTS);
+      if (recent >= config.signupsPerIpPerHour) throw new HttpException('Too many sign-ups from this connection. Try again later.', HttpStatus.TOO_MANY_REQUESTS);
     }
     const prefs = { interests: dto.interests ?? [], city: dto.city || null };
     const existing = await this.prisma.subscriber.findUnique({ where: { email: dto.email } });
@@ -90,11 +110,13 @@ export class NewsletterService {
         where: { id: existing.id },
         data: { ...prefs, token: newToken(), unsubscribedAt: null, source: dto.source ?? 'footer' },
       });
+      this.welcome(s.email, s.token);
       return { subscribed: true, already: false, token: s.token };
     }
     const s = await this.prisma.subscriber.create({
       data: { email: dto.email, token: newToken(), source: dto.source ?? 'footer', clientIp, ...prefs },
     });
+    this.welcome(s.email, s.token);
     return { subscribed: true, already: false, token: s.token };
   }
 

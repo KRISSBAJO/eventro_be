@@ -25,6 +25,11 @@ const env = {
   PAYSTACK_SECRET_KEY: '',
   PAYSTACK_API_URL: 'http://127.0.0.1:9',
   IPINFO_TOKEN: '',
+  // Email: never sent from tests (logged as SKIPPED); mail tests run their own Resend stand-in.
+  RESEND_API_KEY: '',
+  // Every test request comes from 127.0.0.1, so the anti-spam limit would trip across runs.
+  SIGNUPS_PER_IP_PER_HOUR: '100000',
+  RESEND_API_URL: 'http://127.0.0.1:9',
   FX_OFFLINE: '1',
 };
 const run = (cmd) => execSync(cmd, { stdio: 'inherit', env, shell: true });

@@ -12,11 +12,13 @@ import { EventsModule } from './events/events.module';
 import { CheckoutModule } from './checkout/checkout.module';
 import { TicketsModule } from './tickets/tickets.module';
 import { OrganizerModule } from './organizer/organizer.module';
-import { AdminModule } from './admin/admin.module';
+import { AdminModule } from './admin/admin-console';
 import { MediaModule } from './media/media.module';
 import { GeoModule } from './geo/geo.module';
 import { FxModule } from './fx/fx.module';
 import { NewsletterModule } from './newsletter/newsletter.module';
+import { MailModule } from './mail/mail.module';
+import { PriceDropModule } from './price-drops/price-drops.module';
 import { Payments } from './checkout/payments';
 
 @ApiTags('health')
@@ -54,6 +56,8 @@ class CoreModule {}
     GeoModule,
     FxModule,
     NewsletterModule,
+    MailModule,
+    PriceDropModule,
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_GUARD, useClass: AuthGuard }],

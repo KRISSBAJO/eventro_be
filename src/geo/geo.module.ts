@@ -31,6 +31,8 @@ type Suggestion = {
   timezone: string | null;
 };
 
+type PhotonFeature = { geometry: { coordinates: [number, number] }; properties: Record<string, string | undefined> };
+
 /** A small time-limited cache (address searches repeat a lot while typing). */
 class Cache<T> {
   private readonly map = new Map<string, { at: number; value: T }>();
@@ -102,6 +104,26 @@ export class GeoService {
       .sort((a, b) => a.name.localeCompare(b.name));
   }
 
+  /** One Photon (OpenStreetMap) query; null when the service can't be reached. */
+  private async photon(q: string, bias: { lat: number; lng: number } | undefined, limit: number): Promise<PhotonFeature[] | null> {
+    const url = new URL('https://photon.komoot.io/api/');
+    url.searchParams.set('q', q);
+    url.searchParams.set('limit', String(limit));
+    url.searchParams.set('lang', 'en');
+    if (bias && Number.isFinite(bias.lat) && Number.isFinite(bias.lng)) {
+      url.searchParams.set('lat', String(bias.lat));
+      url.searchParams.set('lon', String(bias.lng));
+    }
+    try {
+      const res = await fetch(url, { headers: { 'user-agent': 'Eventro/1.0 (event venue search)' }, signal: AbortSignal.timeout(6000) });
+      if (!res.ok) throw new Error(`status ${res.status}`);
+      return ((await res.json()) as { features?: PhotonFeature[] }).features ?? [];
+    } catch (e) {
+      this.log.warn(`Address search failed: ${(e as Error).message}`);
+      return null;
+    }
+  }
+
   async search(q: string, country?: string, lat?: number, lng?: number): Promise<Suggestion[]> {
     const text = q.trim().replace(/\s+/g, ' ');
     if (text.length < 3) return [];
@@ -110,36 +132,31 @@ export class GeoService {
     const hit = this.searches.get(key);
     if (hit) return hit;
 
-    const url = new URL('https://photon.komoot.io/api/');
-    url.searchParams.set('q', text);
-    url.searchParams.set('limit', '12');
-    url.searchParams.set('lang', 'en');
-    if (lat !== undefined && lng !== undefined) {
-      url.searchParams.set('lat', String(lat));
-      url.searchParams.set('lon', String(lng));
-    }
-    let data: { features?: { geometry: { coordinates: [number, number] }; properties: Record<string, string | undefined> }[] };
-    try {
-      const res = await fetch(url, { headers: { 'user-agent': 'Eventro/1.0 (event venue search)' }, signal: AbortSignal.timeout(6000) });
-      if (!res.ok) throw new Error(`status ${res.status}`);
-      data = (await res.json()) as typeof data;
-    } catch (e) {
-      this.log.warn(`Address search failed: ${(e as Error).message}`);
-      return [];
-    }
+    // Short names ("Eko") match places worldwide first, so a country search is biased towards that country and,
+    // if that still finds little, asked again as "Eko, Nigeria".
+    const countryInfo = cc ? Country.getCountryByCode(cc) : undefined;
+    const bias = lat !== undefined && lng !== undefined ? { lat, lng } : countryInfo ? { lat: Number(countryInfo.latitude), lng: Number(countryInfo.longitude) } : undefined;
     const out: Suggestion[] = [];
-    for (const f of data.features ?? []) {
-      const p = f.properties;
-      const code = p.countrycode?.toUpperCase() ?? null;
-      if (cc && code !== cc) continue;
-      const [lngF, latF] = f.geometry.coordinates;
-      const street = [p.housenumber, p.street].filter(Boolean).join(' ') || null;
-      const city = p.city ?? p.town ?? p.village ?? p.county ?? null;
-      const name = p.name && p.name !== p.street ? p.name : null;
-      const label = [name, street, city, p.state, code ? Country.getCountryByCode(code)?.name : null].filter(Boolean).join(', ');
-      if (!label || out.some((o) => o.label === label)) continue;
-      out.push({ label, name, street, city, region: p.state ?? null, postalCode: p.postcode ?? null, country: code, lat: latF, lng: lngF, timezone: timezoneAt(latF, lngF) });
-      if (out.length >= 6) break;
+    const collect = (features: PhotonFeature[]) => {
+      for (const f of features) {
+        if (out.length >= 6) return;
+        const p = f.properties;
+        const code = p.countrycode?.toUpperCase() ?? null;
+        if (cc && code !== cc) continue;
+        const [lngF, latF] = f.geometry.coordinates;
+        const street = [p.housenumber, p.street].filter(Boolean).join(' ') || null;
+        const city = p.city ?? p.town ?? p.village ?? p.county ?? null;
+        const name = p.name && p.name !== p.street ? p.name : null;
+        const label = [name, street, city, p.state, code ? Country.getCountryByCode(code)?.name : null].filter(Boolean).join(', ');
+        if (!label || out.some((o) => o.label === label)) continue;
+        out.push({ label, name, street, city, region: p.state ?? null, postalCode: p.postcode ?? null, country: code, lat: latF, lng: lngF, timezone: timezoneAt(latF, lngF) });
+      }
+    };
+    const first = await this.photon(text, bias, cc ? 30 : 12);
+    if (!first) return [];
+    collect(first);
+    if (cc && out.length < 3 && countryInfo && !text.toLowerCase().includes(countryInfo.name.toLowerCase())) {
+      collect((await this.photon(`${text}, ${countryInfo.name}`, bias, 30)) ?? []);
     }
     this.searches.set(key, out);
     return out;

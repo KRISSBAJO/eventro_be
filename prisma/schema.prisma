@@ -106,6 +106,9 @@ model User {
   name         String
   passwordHash String
   roles        Role[]   @default([FAN])
+  /// Set by an admin: the account can't sign in or use the API until it's lifted.
+  suspendedAt   DateTime?
+  suspendReason String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -127,6 +130,11 @@ model Organization {
   bankLast4      String?
   bankName       String?
   bankCountry    String?
+  /// Checked by Eventro (shown as a badge; skips the "new organizer" review flag).
+  verifiedAt     DateTime?
+  /// Suspended organizers can't submit events, and sales on their events are paused.
+  suspendedAt    DateTime?
+  suspendReason  String?
   createdAt      DateTime       @default(now())
 
   members OrganizationMember[]
@@ -209,6 +217,8 @@ model Event {
   orders      Order[]
   tickets     Ticket[]
   promos      Promo[]
+  priceDrops  PriceDrop[]
+  priceWatches PriceWatch[]
 
   @@index([status, startsAt])
   @@index([orgId])
@@ -402,4 +412,58 @@ model Subscriber {
   unsubscribedAt DateTime?
 
   @@index([clientIp, createdAt])
+}
+
+/// A ticket type got cheaper on a published event. Fans watching the event (and matching newsletter subscribers) hear about it.
+model PriceDrop {
+  id           String   @id @default(cuid())
+  eventId      String
+  ticketTypeId String
+  ticketName   String
+  fromCents    Int
+  toCents      Int
+  currency     String
+  /// How many people were emailed; 0 when the drop was too small or another alert went out recently.
+  notified     Int      @default(0)
+  skipReason   String?
+  createdBy    String?
+  createdAt    DateTime @default(now())
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@index([eventId, createdAt])
+}
+
+/// "Tell me if the price drops" on an event page. `token` is the secret in the stop link.
+model PriceWatch {
+  id         String    @id @default(cuid())
+  eventId    String
+  email      String
+  userId     String?
+  token      String    @unique
+  clientIp   String?
+  notifiedAt DateTime?
+  stoppedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, email])
+  @@index([clientIp, createdAt])
+}
+
+/// Every email Eventro tried to send, for support and the admin console.
+model EmailLog {
+  id         String   @id @default(cuid())
+  to         String
+  subject    String
+  kind       String // newsletter.welcome, price_drop, order.receipt, broadcast…
+  /// SENT, FAILED, or SKIPPED (no email provider configured)
+  status     String
+  providerId String?
+  error      String?
+  createdAt  DateTime @default(now())
+
+  @@index([kind, createdAt])
+  @@index([to])
 }

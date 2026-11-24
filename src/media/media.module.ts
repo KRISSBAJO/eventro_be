@@ -46,7 +46,8 @@ export const MEDIA_LIMITS = {
 
 const ASSET_ID = /^ast_[a-z0-9]{6,20}$/;
 
-export type MediaItem = { id: string; kind: 'image' | 'video'; alt?: string };
+/** `playbackUrl` (HLS) is saved for videos that were ready when the event's media was set; it plays a video cover. */
+export type MediaItem = { id: string; kind: 'image' | 'video'; alt?: string; playbackUrl?: string };
 
 /** Public URLs for one media item (mediaEX serves public assets without a token). */
 export function mediaUrls(m: MediaItem) {
@@ -56,8 +57,9 @@ export function mediaUrls(m: MediaItem) {
     : { ...m, posterUrl: `${base}?t=1&w=1280&h=720&fit=cover&f=auto&q=75`, thumbUrl: `${base}?t=1&w=480&h=320&fit=cover&f=auto&q=72`, embedUrl: `${config.mediaexUrl}/embed/${m.id}` };
 }
 
-/** The cover image URL for an event card (first image, wide crop). */
-export const coverUrl = (id: string) => `${config.mediaexUrl}/api/media/${id}/transform?w=1200&h=675&fit=cover&pos=attention&f=auto&q=78`;
+/** The cover image for event cards: a wide crop of the first photo, or a frame from the first video. */
+export const coverUrl = (id: string, kind: MediaItem['kind'] = 'image') =>
+  `${config.mediaexUrl}/api/media/${id}/transform?${kind === 'video' ? 't=1&' : ''}w=1200&h=675&fit=cover&pos=attention&f=auto&q=78`;
 
 export class StartUploadDto {
   @ApiProperty() @IsString() @MaxLength(255) fileName: string;
@@ -104,7 +106,18 @@ export class MediaService {
       throw new ServiceUnavailableException('The media service isn’t reachable right now. Try again in a minute.');
     }
     const text = await res.text();
-    const data = text ? (JSON.parse(text) as unknown) : null;
+    let data: unknown = null;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      // Not mediaEX's JSON: usually MEDIAEX_URL points at the wrong host, or a proxy in front of it is failing.
+      this.log.error(`mediaEX answered ${res.status} with non-JSON for ${init.method ?? 'GET'} ${path}: ${text.replace(/\s+/g, ' ').slice(0, 160)}`);
+      throw new ServiceUnavailableException(
+        res.status === 404
+          ? 'Uploads aren’t working right now: the media service isn’t answering (Eventro’s MEDIAEX_URL may be wrong). Try again later.'
+          : 'Uploads aren’t working right now: the media service sent an unexpected reply. Try again in a minute.',
+      );
+    }
     if (!res.ok) {
       const msg = (data as { error?: string } | null)?.error ?? `mediaEX error ${res.status}`;
       if (res.status === 401 || res.status === 403) {
@@ -167,10 +180,11 @@ export class MediaService {
   /** Processing progress, so the uploader can show "Processing 40%" until a video is ready to play. */
   async status(id: string, user: AuthUser) {
     const u = await this.own(id, user);
-    type Asset = { status: string; progress: number; error: string | null; width: number | null; height: number | null; duration: number };
+    type Asset = { status: string; progress: number; error: string | null; width: number | null; height: number | null; duration: number; playbackUrl?: string | null };
     const r = await this.mediaex<{ asset: Asset } | Asset>(`/assets/${id}`);
     const a = 'asset' in r ? r.asset : r;
-    return { ...mediaUrls({ id, kind: u.kind as MediaItem['kind'] }), status: a.status, progress: a.progress, error: a.error, width: a.width, height: a.height, duration: a.duration };
+    const playbackUrl = u.kind === 'video' && a.status === 'ready' && a.playbackUrl ? a.playbackUrl : undefined;
+    return { ...mediaUrls({ id, kind: u.kind as MediaItem['kind'], playbackUrl }), status: a.status, progress: a.progress, error: a.error, width: a.width, height: a.height, duration: a.duration };
   }
 
   /** Sets an event's photos and videos (in order). Only media uploaded by the organization's members can be used. */
@@ -197,13 +211,37 @@ export class MediaService {
       if (u.kind !== i.kind) throw new BadRequestException(`${u.fileName} isn’t a ${i.kind}.`);
     }
 
-    const clean = items.map((i) => ({ id: i.id, kind: i.kind, ...(i.alt?.trim() ? { alt: i.alt.trim() } : {}) }));
-    const cover = clean.find((i) => i.kind === 'image');
+    const clean: MediaItem[] = items.map((i) => ({ id: i.id, kind: i.kind, ...(i.alt?.trim() ? { alt: i.alt.trim() } : {}) }));
+    // Videos that have finished processing keep their stream address, so a video cover can play on the event page.
+    const before = new Map(((ev.media as MediaItem[] | null) ?? []).map((m) => [m.id, m]));
+    await Promise.all(
+      clean
+        .filter((i) => i.kind === 'video')
+        .map(async (i) => {
+          const known = before.get(i.id)?.playbackUrl;
+          i.playbackUrl = known ?? (await this.playbackUrl(i.id));
+          if (!i.playbackUrl) delete i.playbackUrl;
+        }),
+    );
+    // The first item is the cover, photo or video (a video's card image is a frame from it).
+    const cover = clean[0];
+    const imageUrl = cover ? coverUrl(cover.id, cover.kind) : null;
     await this.prisma.event.update({
       where: { id: eventId },
-      data: { media: clean as unknown as Prisma.InputJsonValue, ...(cover ? { imageUrl: coverUrl(cover.id) } : {}) },
+      data: { media: clean as unknown as Prisma.InputJsonValue, ...(imageUrl ? { imageUrl } : {}) },
     });
-    return { media: clean.map(mediaUrls), imageUrl: cover ? coverUrl(cover.id) : null };
+    return { media: clean.map(mediaUrls), imageUrl };
+  }
+
+  /** A ready video's HLS address, or undefined while it's still processing (or mediaEX can't say). */
+  private async playbackUrl(id: string) {
+    try {
+      const r = await this.mediaex<{ asset: { status: string; playbackUrl?: string | null } } | { status: string; playbackUrl?: string | null }>(`/assets/${id}`);
+      const a = 'asset' in r ? r.asset : r;
+      return a.status === 'ready' && a.playbackUrl ? a.playbackUrl : undefined;
+    } catch {
+      return undefined;
+    }
   }
 }
 

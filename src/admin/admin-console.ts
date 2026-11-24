@@ -1,0 +1,565 @@
+/**
+ * The admin console beyond moderation queues: platform overview, people, organizers, events, orders,
+ * newsletter subscribers and broadcasts, price drops and the email log. Every change is written to the audit log.
+ * All routes need the ADMIN role.
+ */
+import { BadRequestException, Body, Controller, ForbiddenException, Get, HttpCode, Injectable, Module, NotFoundException, Param, Patch, Post, Query, Res } from '@nestjs/common';
+import { ApiBearerAuth, ApiProperty, ApiPropertyOptional, ApiTags } from '@nestjs/swagger';
+import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsInt, IsOptional, IsString, IsUrl, Matches, MaxLength, Min, MinLength } from 'class-validator';
+import type { Prisma } from '@prisma/client';
+import type { Response } from 'express';
+import { PrismaService } from '../prisma.service';
+import { AuditService } from '../common/audit.service';
+import { CurrentUser, Roles, type AuthUser, type Role } from '../common/auth';
+import { config } from '../config';
+import { FxService } from '../fx/fx.module';
+import { MailService, render, type Mail } from '../mail/mail.module';
+import { CATEGORIES } from '../newsletter/newsletter.module';
+import { CheckoutModule } from '../checkout/checkout.module';
+import { AdminController, AdminService } from './admin.module';
+
+const PAGE = 25;
+const DAY = 86400_000;
+const ROLES: Role[] = ['FAN', 'ORGANIZER', 'ADMIN'];
+const EVENT_STATUSES = ['DRAFT', 'IN_REVIEW', 'PUBLISHED', 'REJECTED', 'CANCELLED'] as const;
+const ORDER_STATUSES = ['PENDING', 'PAID', 'CANCELLED', 'REFUNDED', 'PARTIALLY_REFUNDED'] as const;
+
+const pageOf = (raw?: string) => Math.max(1, Math.min(10_000, Number(raw) || 1));
+const like = (q?: string) => (q ?? '').trim().slice(0, 100);
+const dayKey = (d: Date) => d.toISOString().slice(0, 10);
+
+/* ---------- DTOs ---------- */
+
+export class UpdateUserDto {
+  @ApiPropertyOptional({ enum: ROLES, isArray: true }) @IsOptional() @IsArray() @ArrayMaxSize(3) @IsIn(ROLES, { each: true }) roles?: Role[];
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() suspended?: boolean;
+  @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(300) reason?: string;
+}
+
+export class UpdateOrgDto {
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() verified?: boolean;
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() suspended?: boolean;
+  @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(300) reason?: string;
+}
+
+export class NoteDto {
+  @ApiProperty() @IsString() @MinLength(5) @MaxLength(500) note: string;
+}
+
+export class SalesDto {
+  @ApiProperty() @IsBoolean() paused: boolean;
+}
+
+export class AdminRefundDto {
+  @ApiPropertyOptional({ description: 'Minor units; leave out for a full refund of what is left' }) @IsOptional() @IsInt() @Min(1) amountCents?: number;
+  @ApiProperty() @IsString() @MinLength(5) @MaxLength(300) reason: string;
+}
+
+export class BroadcastDto {
+  @ApiProperty() @IsString() @MinLength(3) @MaxLength(150) subject: string;
+  @ApiProperty() @IsString() @MinLength(3) @MaxLength(150) heading: string;
+  @ApiProperty({ description: 'Plain text; blank lines start new paragraphs' }) @IsString() @MinLength(10) @MaxLength(5000) body: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(40) ctaLabel?: string;
+  @ApiPropertyOptional() @IsOptional() @IsUrl({ require_protocol: true, protocols: ['https', 'http'] }) ctaUrl?: string;
+  @ApiPropertyOptional({ enum: CATEGORIES }) @IsOptional() @IsIn(CATEGORIES) category?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() @Matches(/^[a-z0-9-]{1,60}$/) city?: string;
+  @ApiPropertyOptional({ description: 'Send only to yourself' }) @IsOptional() @IsBoolean() test?: boolean;
+}
+
+/* ---------- service ---------- */
+
+@Injectable()
+export class AdminConsoleService {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditService,
+    private readonly fx: FxService,
+    private readonly mail: MailService,
+    private readonly admin: AdminService,
+  ) {}
+
+  private usd = (cents: number, currency: string) => this.fx.convert(cents, currency, 'USD');
+
+  async overview() {
+    const since = new Date(Date.now() - 29 * DAY);
+    since.setUTCHours(0, 0, 0, 0);
+    const paidStatuses = { in: ['PAID', 'PARTIALLY_REFUNDED', 'REFUNDED'] as ('PAID' | 'PARTIALLY_REFUNDED' | 'REFUNDED')[] };
+    const [users, suspendedUsers, organizers, orgs, verifiedOrgs, suspendedOrgs, byStatus, upcoming, subscribers, watchers, openRefunds, openFraud, byCurrency, recent, recentOrders, emailStats, ticketsSold] =
+      await Promise.all([
+        this.prisma.user.count(),
+        this.prisma.user.count({ where: { suspendedAt: { not: null } } }),
+        this.prisma.user.count({ where: { roles: { has: 'ORGANIZER' } } }),
+        this.prisma.organization.count(),
+        this.prisma.organization.count({ where: { verifiedAt: { not: null } } }),
+        this.prisma.organization.count({ where: { suspendedAt: { not: null } } }),
+        this.prisma.event.groupBy({ by: ['status'], _count: { _all: true } }),
+        this.prisma.event.count({ where: { status: 'PUBLISHED', startsAt: { gte: new Date() } } }),
+        this.prisma.subscriber.count({ where: { unsubscribedAt: null } }),
+        this.prisma.priceWatch.count({ where: { stoppedAt: null } }),
+        this.prisma.refundRequest.count({ where: { status: 'OPEN' } }),
+        this.prisma.fraudFlag.count({ where: { status: 'OPEN' } }),
+        this.prisma.order.groupBy({ by: ['currency'], where: { status: paidStatuses }, _sum: { totalCents: true, refundedCents: true, quantity: true }, _count: { _all: true } }),
+        this.prisma.order.findMany({ where: { status: paidStatuses, paidAt: { gte: since } }, select: { paidAt: true, quantity: true, totalCents: true, refundedCents: true, currency: true } }),
+        this.prisma.order.findMany({
+          orderBy: { createdAt: 'desc' },
+          take: 8,
+          select: { id: true, email: true, buyerName: true, totalCents: true, currency: true, status: true, createdAt: true, quantity: true, event: { select: { title: true, slug: true } } },
+        }),
+        this.prisma.emailLog.groupBy({ by: ['status'], where: { createdAt: { gte: new Date(Date.now() - 7 * DAY) } }, _count: { _all: true } }),
+        this.prisma.ticket.count({ where: { status: { not: 'VOID' } } }),
+      ]);
+
+    const currencies = byCurrency.map((c) => ({ currency: c.currency, orders: c._count._all, grossCents: c._sum.totalCents ?? 0, refundedCents: c._sum.refundedCents ?? 0 }));
+    const grossUsd = currencies.reduce((s, c) => s + this.usd(c.grossCents, c.currency), 0);
+    const refundedUsd = currencies.reduce((s, c) => s + this.usd(c.refundedCents, c.currency), 0);
+
+    const keys = Array.from({ length: 30 }, (_, i) => dayKey(new Date(since.getTime() + i * DAY)));
+    const daily = new Map(keys.map((k) => [k, { day: k, orders: 0, tickets: 0, grossUsdCents: 0 }]));
+    for (const o of recent) {
+      const d = daily.get(dayKey(o.paidAt!));
+      if (!d) continue;
+      d.orders += 1;
+      d.tickets += o.quantity;
+      d.grossUsdCents += this.usd(o.totalCents - o.refundedCents, o.currency);
+    }
+
+    const top = await this.prisma.event.findMany({
+      where: { status: 'PUBLISHED' },
+      select: { id: true, slug: true, title: true, currency: true, ticketTypes: { select: { sold: true, capacity: true, priceCents: true } } },
+    });
+    const topEvents = top
+      .map((e) => ({
+        id: e.id,
+        slug: e.slug,
+        title: e.title,
+        sold: e.ticketTypes.reduce((s, t) => s + t.sold, 0),
+        capacity: e.ticketTypes.reduce((s, t) => s + t.capacity, 0),
+        grossUsdCents: this.usd(e.ticketTypes.reduce((s, t) => s + t.sold * t.priceCents, 0), e.currency),
+      }))
+      .sort((a, b) => b.grossUsdCents - a.grossUsdCents)
+      .slice(0, 5);
+
+    const events = Object.fromEntries(EVENT_STATUSES.map((s) => [s, byStatus.find((b) => b.status === s)?._count._all ?? 0]));
+    const mailCounts = Object.fromEntries(['SENT', 'FAILED', 'SKIPPED'].map((s) => [s, emailStats.find((e) => e.status === s)?._count._all ?? 0]));
+    return {
+      counts: { users, suspendedUsers, organizers, orgs, verifiedOrgs, suspendedOrgs, events, upcomingPublished: upcoming, ordersPaid: currencies.reduce((s, c) => s + c.orders, 0), ticketsSold, subscribers, priceWatchers: watchers, openRefunds, openFraud },
+      money: {
+        currencies,
+        usd: { grossCents: grossUsd, refundedCents: refundedUsd, netCents: grossUsd - refundedUsd, estFeeCents: Math.round(((grossUsd - refundedUsd) * config.organizerFeePermille) / 1000) },
+      },
+      daily: [...daily.values()],
+      recentOrders,
+      topEvents,
+      email: { enabled: this.mail.enabled, from: config.mailFrom, last7d: mailCounts },
+    };
+  }
+
+  /* ----- people ----- */
+
+  async users(q?: string, role?: string, status?: string, pageRaw?: string) {
+    const page = pageOf(pageRaw);
+    const s = like(q);
+    const where: Prisma.UserWhereInput = {
+      ...(s ? { OR: [{ email: { contains: s, mode: 'insensitive' } }, { name: { contains: s, mode: 'insensitive' } }, { id: s }] } : {}),
+      ...(role && ROLES.includes(role as Role) ? { roles: { has: role as Role } } : {}),
+      ...(status === 'suspended' ? { suspendedAt: { not: null } } : status === 'active' ? { suspendedAt: null } : {}),
+    };
+    const [total, rows] = await Promise.all([
+      this.prisma.user.count({ where }),
+      this.prisma.user.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * PAGE,
+        take: PAGE,
+        select: { id: true, email: true, name: true, roles: true, createdAt: true, suspendedAt: true, suspendReason: true, _count: { select: { orders: true, memberships: true, tickets: true } } },
+      }),
+    ]);
+    return { total, page, pageSize: PAGE, items: rows.map(({ _count, ...u }) => ({ ...u, orders: _count.orders, orgs: _count.memberships, tickets: _count.tickets })) };
+  }
+
+  async updateUser(id: string, me: AuthUser, dto: UpdateUserDto) {
+    const u = await this.prisma.user.findUnique({ where: { id } });
+    if (!u) throw new NotFoundException('User not found.');
+    if (id === me.id && (dto.suspended || (dto.roles && !dto.roles.includes('ADMIN')))) {
+      throw new ForbiddenException('You can’t suspend yourself or remove your own admin role.');
+    }
+    if (dto.roles && u.roles.includes('ADMIN') && !dto.roles.includes('ADMIN')) {
+      const admins = await this.prisma.user.count({ where: { roles: { has: 'ADMIN' }, suspendedAt: null } });
+      if (admins <= 1) throw new BadRequestException('Eventro needs at least one admin.');
+    }
+    const data: Prisma.UserUpdateInput = {};
+    if (dto.roles) data.roles = { set: [...new Set<Role>(['FAN', ...dto.roles])] };
+    if (dto.suspended !== undefined) {
+      data.suspendedAt = dto.suspended ? new Date() : null;
+      data.suspendReason = dto.suspended ? (dto.reason?.trim() || null) : null;
+    }
+    const out = await this.prisma.user.update({ where: { id }, data, select: { id: true, email: true, name: true, roles: true, createdAt: true, suspendedAt: true, suspendReason: true } });
+    if (dto.roles) await this.audit.log(me.id, 'user.roles', 'User', id, { from: u.roles, to: out.roles });
+    if (dto.suspended !== undefined) await this.audit.log(me.id, dto.suspended ? 'user.suspend' : 'user.unsuspend', 'User', id, { reason: dto.reason ?? null });
+    return out;
+  }
+
+  /* ----- organizers ----- */
+
+  async orgs(q?: string, status?: string, pageRaw?: string) {
+    const page = pageOf(pageRaw);
+    const s = like(q);
+    const where: Prisma.OrganizationWhereInput = {
+      ...(s ? { OR: [{ name: { contains: s, mode: 'insensitive' } }, { supportEmail: { contains: s, mode: 'insensitive' } }, { id: s }] } : {}),
+      ...(status === 'suspended' ? { suspendedAt: { not: null } } : {}),
+      ...(status === 'verified' ? { verifiedAt: { not: null } } : {}),
+      ...(status === 'unverified' ? { verifiedAt: null } : {}),
+    };
+    const [total, rows] = await Promise.all([
+      this.prisma.organization.count({ where }),
+      this.prisma.organization.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * PAGE,
+        take: PAGE,
+        include: {
+          _count: { select: { members: true } },
+          events: { select: { status: true, currency: true, ticketTypes: { select: { sold: true, priceCents: true } } } },
+        },
+      }),
+    ]);
+    return {
+      total,
+      page,
+      pageSize: PAGE,
+      items: rows.map((o) => ({
+        id: o.id,
+        name: o.name,
+        supportEmail: o.supportEmail,
+        website: o.website,
+        createdAt: o.createdAt,
+        verifiedAt: o.verifiedAt,
+        suspendedAt: o.suspendedAt,
+        suspendReason: o.suspendReason,
+        payoutsReady: !!o.stripeAccountId || !!o.bankLast4,
+        members: o._count.members,
+        events: { total: o.events.length, published: o.events.filter((e) => e.status === 'PUBLISHED').length },
+        ticketsSold: o.events.reduce((s, e) => s + e.ticketTypes.reduce((a, t) => a + t.sold, 0), 0),
+        grossUsdCents: o.events.reduce((s, e) => s + this.usd(e.ticketTypes.reduce((a, t) => a + t.sold * t.priceCents, 0), e.currency), 0),
+      })),
+    };
+  }
+
+  async updateOrg(id: string, me: AuthUser, dto: UpdateOrgDto) {
+    const o = await this.prisma.organization.findUnique({ where: { id } });
+    if (!o) throw new NotFoundException('Organizer not found.');
+    const data: Prisma.OrganizationUpdateInput = {};
+    if (dto.verified !== undefined) data.verifiedAt = dto.verified ? (o.verifiedAt ?? new Date()) : null;
+    if (dto.suspended !== undefined) {
+      data.suspendedAt = dto.suspended ? new Date() : null;
+      data.suspendReason = dto.suspended ? (dto.reason?.trim() || null) : null;
+    }
+    const out = await this.prisma.organization.update({ where: { id }, data });
+    // Suspending stops sales at once; lifting it leaves resuming to the organizer, event by event.
+    let paused = 0;
+    if (dto.suspended) paused = (await this.prisma.event.updateMany({ where: { orgId: id, salesPaused: false }, data: { salesPaused: true } })).count;
+    if (dto.verified !== undefined) await this.audit.log(me.id, dto.verified ? 'org.verify' : 'org.unverify', 'Organization', id);
+    if (dto.suspended !== undefined) await this.audit.log(me.id, dto.suspended ? 'org.suspend' : 'org.unsuspend', 'Organization', id, { reason: dto.reason ?? null, pausedEvents: paused });
+    return { ...out, pausedEvents: paused };
+  }
+
+  /* ----- events ----- */
+
+  async events(q?: string, status?: string, pageRaw?: string) {
+    const page = pageOf(pageRaw);
+    const s = like(q);
+    const where: Prisma.EventWhereInput = {
+      ...(s ? { OR: [{ title: { contains: s, mode: 'insensitive' } }, { slug: { contains: s, mode: 'insensitive' } }, { org: { name: { contains: s, mode: 'insensitive' } } }] } : {}),
+      ...(status && (EVENT_STATUSES as readonly string[]).includes(status) ? { status: status as (typeof EVENT_STATUSES)[number] } : {}),
+    };
+    const [total, rows] = await Promise.all([
+      this.prisma.event.count({ where }),
+      this.prisma.event.findMany({
+        where,
+        orderBy: { startsAt: 'desc' },
+        skip: (page - 1) * PAGE,
+        take: PAGE,
+        include: {
+          org: { select: { id: true, name: true, verifiedAt: true, suspendedAt: true } },
+          venue: { select: { name: true, city: true } },
+          ticketTypes: { select: { sold: true, capacity: true, priceCents: true } },
+          _count: { select: { priceWatches: true, priceDrops: true } },
+        },
+      }),
+    ]);
+    return {
+      total,
+      page,
+      pageSize: PAGE,
+      items: rows.map((e) => ({
+        id: e.id,
+        slug: e.slug,
+        title: e.title,
+        status: e.status,
+        category: e.category,
+        startsAt: e.startsAt,
+        currency: e.currency,
+        salesPaused: e.salesPaused,
+        reviewNote: e.reviewNote,
+        online: e.online,
+        org: { id: e.org.id, name: e.org.name, verified: !!e.org.verifiedAt, suspended: !!e.org.suspendedAt },
+        venue: e.venue,
+        sold: e.ticketTypes.reduce((s, t) => s + t.sold, 0),
+        capacity: e.ticketTypes.reduce((s, t) => s + t.capacity, 0),
+        grossCents: e.ticketTypes.reduce((s, t) => s + t.sold * t.priceCents, 0),
+        priceWatchers: e._count.priceWatches,
+        priceDrops: e._count.priceDrops,
+        createdAt: e.createdAt,
+      })),
+    };
+  }
+
+  async takedown(id: string, me: AuthUser, note: string) {
+    const { count } = await this.prisma.event.updateMany({ where: { id, status: 'PUBLISHED' }, data: { status: 'REJECTED', reviewNote: `Taken down by Eventro: ${note}`, salesPaused: true } });
+    if (!count) throw new NotFoundException('No published event with that id.');
+    await this.audit.log(me.id, 'event.takedown', 'Event', id, { note });
+    return { status: 'REJECTED' };
+  }
+
+  async publish(id: string, me: AuthUser) {
+    const e = await this.prisma.event.findUnique({ where: { id }, include: { org: { select: { suspendedAt: true } } } });
+    if (!e || !['REJECTED', 'IN_REVIEW'].includes(e.status)) throw new NotFoundException('Only events in review or taken down can be published.');
+    if (e.org.suspendedAt) throw new BadRequestException('The organizer is suspended. Lift the suspension first.');
+    await this.prisma.event.update({ where: { id }, data: { status: 'PUBLISHED', reviewNote: null, salesPaused: false } });
+    await this.audit.log(me.id, 'event.publish', 'Event', id);
+    return { status: 'PUBLISHED' };
+  }
+
+  async setSales(id: string, me: AuthUser, paused: boolean) {
+    const e = await this.prisma.event.findUnique({ where: { id }, select: { id: true } });
+    if (!e) throw new NotFoundException('Event not found.');
+    await this.prisma.event.update({ where: { id }, data: { salesPaused: paused } });
+    await this.audit.log(me.id, paused ? 'event.admin_pause' : 'event.admin_resume', 'Event', id);
+    return { salesPaused: paused };
+  }
+
+  /* ----- orders ----- */
+
+  async orders(q?: string, status?: string, pageRaw?: string) {
+    const page = pageOf(pageRaw);
+    const s = like(q);
+    const where: Prisma.OrderWhereInput = {
+      ...(s ? { OR: [{ id: { contains: s.toUpperCase() } }, { email: { contains: s, mode: 'insensitive' } }, { buyerName: { contains: s, mode: 'insensitive' } }, { event: { title: { contains: s, mode: 'insensitive' } } }] } : {}),
+      ...(status && (ORDER_STATUSES as readonly string[]).includes(status) ? { status: status as (typeof ORDER_STATUSES)[number] } : {}),
+    };
+    const [total, items] = await Promise.all([
+      this.prisma.order.count({ where }),
+      this.prisma.order.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * PAGE,
+        take: PAGE,
+        select: {
+          id: true,
+          email: true,
+          buyerName: true,
+          quantity: true,
+          totalCents: true,
+          refundedCents: true,
+          currency: true,
+          status: true,
+          provider: true,
+          promoCode: true,
+          createdAt: true,
+          paidAt: true,
+          event: { select: { title: true, slug: true } },
+          ticketType: { select: { name: true } },
+          fraudFlag: { select: { score: true, status: true } },
+          _count: { select: { refunds: true } },
+        },
+      }),
+    ]);
+    return { total, page, pageSize: PAGE, items: items.map(({ fraudFlag, _count, ...o }) => ({ ...o, fraud: fraudFlag, refundRequests: _count.refunds })) };
+  }
+
+  async refund(id: string, me: AuthUser, dto: AdminRefundDto) {
+    const o = await this.prisma.order.findUnique({ where: { id } });
+    if (!o) throw new NotFoundException('Order not found.');
+    if (!['PAID', 'PARTIALLY_REFUNDED'].includes(o.status)) throw new BadRequestException('Only paid orders can be refunded.');
+    const left = o.totalCents - o.refundedCents;
+    await this.admin.refundOrder(id, dto.amountCents ?? left, me, dto.reason);
+    return this.prisma.order.findUnique({ where: { id }, select: { id: true, status: true, refundedCents: true, totalCents: true, currency: true } });
+  }
+
+  /* ----- subscribers & broadcasts ----- */
+
+  private subscriberWhere(q?: string, status?: string): Prisma.SubscriberWhereInput {
+    const s = like(q);
+    return {
+      ...(s ? { email: { contains: s, mode: 'insensitive' } } : {}),
+      ...(status === 'unsubscribed' ? { unsubscribedAt: { not: null } } : status === 'active' ? { unsubscribedAt: null } : {}),
+    };
+  }
+
+  async subscribers(q?: string, status?: string, pageRaw?: string) {
+    const page = pageOf(pageRaw);
+    const where = this.subscriberWhere(q, status);
+    const [total, active, unsubscribed, items] = await Promise.all([
+      this.prisma.subscriber.count({ where }),
+      this.prisma.subscriber.count({ where: { unsubscribedAt: null } }),
+      this.prisma.subscriber.count({ where: { unsubscribedAt: { not: null } } }),
+      this.prisma.subscriber.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * PAGE,
+        take: PAGE,
+        select: { id: true, email: true, source: true, interests: true, city: true, createdAt: true, unsubscribedAt: true },
+      }),
+    ]);
+    return { total, page, pageSize: PAGE, counts: { active, unsubscribed }, items };
+  }
+
+  async subscribersCsv(status?: string) {
+    const rows = await this.prisma.subscriber.findMany({ where: this.subscriberWhere(undefined, status), orderBy: { createdAt: 'asc' } });
+    const cell = (v: string) => (/[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
+    return ['email,status,source,interests,city,signed_up,unsubscribed_at']
+      .concat(rows.map((r) => [r.email, r.unsubscribedAt ? 'unsubscribed' : 'active', r.source, r.interests.join(' '), r.city ?? '', r.createdAt.toISOString(), r.unsubscribedAt?.toISOString() ?? ''].map(cell).join(',')))
+      .join('\n');
+  }
+
+  private audienceWhere(category?: string, city?: string): Prisma.SubscriberWhereInput {
+    return {
+      unsubscribedAt: null,
+      ...(category ? { OR: [{ interests: { isEmpty: true } }, { interests: { has: category } }] } : {}),
+      ...(city ? { AND: [{ OR: [{ city: null }, { city }] }] } : {}),
+    };
+  }
+
+  async broadcastAudience(category?: string, city?: string) {
+    return { count: await this.prisma.subscriber.count({ where: this.audienceWhere(category, city) }) };
+  }
+
+  async broadcast(me: AuthUser, dto: BroadcastDto) {
+    const recipients = dto.test
+      ? [{ email: me.email, token: '' }]
+      : await this.prisma.subscriber.findMany({ where: this.audienceWhere(dto.category, dto.city), select: { email: true, token: true } });
+    if (!recipients.length) throw new BadRequestException('No subscribers match that audience.');
+    const paragraphs = dto.body.split(/\n\s*\n/).map((p) => p.replace(/\s*\n\s*/g, ' ').trim()).filter(Boolean);
+    const mails: Mail[] = recipients.map((r) => {
+      const manage = r.token ? `${config.webUrl}/newsletter/manage?t=${r.token}` : `${config.webUrl}/newsletter`;
+      const { html, text } = render({
+        preheader: paragraphs[0]?.slice(0, 120) ?? dto.subject,
+        heading: dto.heading,
+        paragraphs,
+        cta: dto.ctaLabel && dto.ctaUrl ? { label: dto.ctaLabel, url: dto.ctaUrl } : undefined,
+        footer: dto.test ? 'Test send: only you got this.' : 'You get drops and presales from Eventro.',
+        footerLink: { label: 'Change preferences or unsubscribe', url: manage },
+      });
+      return { to: r.email, subject: dto.test ? `[Test] ${dto.subject}` : dto.subject, html, text, unsubscribeUrl: manage };
+    });
+    if (!dto.test) await this.audit.log(me.id, 'newsletter.broadcast', 'Subscriber', 'broadcast', { subject: dto.subject, category: dto.category ?? null, city: dto.city ?? null, recipients: mails.length });
+    // Big lists go out in the background; the admin sees progress in the email log.
+    const sending = this.mail.sendMany(dto.test ? 'broadcast.test' : 'broadcast', mails);
+    if (dto.test) {
+      const [ok] = await sending;
+      return { test: true, recipients: 1, sent: ok, emailEnabled: this.mail.enabled };
+    }
+    void sending;
+    return { test: false, recipients: mails.length, queued: true, emailEnabled: this.mail.enabled };
+  }
+
+  /* ----- price drops & email log ----- */
+
+  async priceDrops(pageRaw?: string) {
+    const page = pageOf(pageRaw);
+    const [total, items] = await Promise.all([
+      this.prisma.priceDrop.count(),
+      this.prisma.priceDrop.findMany({ orderBy: { createdAt: 'desc' }, skip: (page - 1) * PAGE, take: PAGE, include: { event: { select: { title: true, slug: true } } } }),
+    ]);
+    return { total, page, pageSize: PAGE, items };
+  }
+
+  async emails(kind?: string, status?: string, q?: string, pageRaw?: string) {
+    const page = pageOf(pageRaw);
+    const s = like(q);
+    const where: Prisma.EmailLogWhereInput = {
+      ...(kind ? { kind: { startsWith: kind } } : {}),
+      ...(status && ['SENT', 'FAILED', 'SKIPPED'].includes(status) ? { status } : {}),
+      ...(s ? { OR: [{ to: { contains: s, mode: 'insensitive' } }, { subject: { contains: s, mode: 'insensitive' } }] } : {}),
+    };
+    const [total, items, kinds] = await Promise.all([
+      this.prisma.emailLog.count({ where }),
+      this.prisma.emailLog.findMany({ where, orderBy: { createdAt: 'desc' }, skip: (page - 1) * PAGE, take: PAGE }),
+      this.prisma.emailLog.groupBy({ by: ['kind'], _count: { _all: true } }),
+    ]);
+    return { total, page, pageSize: PAGE, enabled: this.mail.enabled, from: config.mailFrom, kinds: kinds.map((k) => ({ kind: k.kind, count: k._count._all })), items };
+  }
+}
+
+/* ---------- routes ---------- */
+
+@ApiTags('admin')
+@ApiBearerAuth()
+@Roles('ADMIN')
+@Controller('admin')
+export class AdminConsoleController {
+  constructor(private readonly svc: AdminConsoleService) {}
+
+  @Get('overview') overview() {
+    return this.svc.overview();
+  }
+
+  @Get('users') users(@Query('q') q?: string, @Query('role') role?: string, @Query('status') status?: string, @Query('page') page?: string) {
+    return this.svc.users(q, role, status, page);
+  }
+  @Patch('users/:id') updateUser(@Param('id') id: string, @CurrentUser() u: AuthUser, @Body() dto: UpdateUserDto) {
+    return this.svc.updateUser(id, u, dto);
+  }
+
+  @Get('orgs') orgs(@Query('q') q?: string, @Query('status') status?: string, @Query('page') page?: string) {
+    return this.svc.orgs(q, status, page);
+  }
+  @Patch('orgs/:id') updateOrg(@Param('id') id: string, @CurrentUser() u: AuthUser, @Body() dto: UpdateOrgDto) {
+    return this.svc.updateOrg(id, u, dto);
+  }
+
+  @Get('events') events(@Query('q') q?: string, @Query('status') status?: string, @Query('page') page?: string) {
+    return this.svc.events(q, status, page);
+  }
+  @Post('events/:id/takedown') @HttpCode(200) takedown(@Param('id') id: string, @CurrentUser() u: AuthUser, @Body() dto: NoteDto) {
+    return this.svc.takedown(id, u, dto.note);
+  }
+  @Post('events/:id/publish') @HttpCode(200) publish(@Param('id') id: string, @CurrentUser() u: AuthUser) {
+    return this.svc.publish(id, u);
+  }
+  @Post('events/:id/sales') @HttpCode(200) sales(@Param('id') id: string, @CurrentUser() u: AuthUser, @Body() dto: SalesDto) {
+    return this.svc.setSales(id, u, dto.paused);
+  }
+
+  @Get('orders') orders(@Query('q') q?: string, @Query('status') status?: string, @Query('page') page?: string) {
+    return this.svc.orders(q, status, page);
+  }
+  @Post('orders/:id/refund') @HttpCode(200) refund(@Param('id') id: string, @CurrentUser() u: AuthUser, @Body() dto: AdminRefundDto) {
+    return this.svc.refund(id, u, dto);
+  }
+
+  @Get('subscribers') subscribers(@Query('q') q?: string, @Query('status') status?: string, @Query('page') page?: string) {
+    return this.svc.subscribers(q, status, page);
+  }
+  @Get('subscribers.csv') async subscribersCsv(@Res() res: Response, @Query('status') status?: string) {
+    res.setHeader('content-type', 'text/csv; charset=utf-8');
+    res.setHeader('content-disposition', `attachment; filename="eventro-subscribers-${new Date().toISOString().slice(0, 10)}.csv"`);
+    res.send(await this.svc.subscribersCsv(status));
+  }
+  @Get('broadcast/audience') audience(@Query('category') category?: string, @Query('city') city?: string) {
+    return this.svc.broadcastAudience(category, city);
+  }
+  @Post('broadcast') @HttpCode(200) broadcast(@CurrentUser() u: AuthUser, @Body() dto: BroadcastDto) {
+    return this.svc.broadcast(u, dto);
+  }
+
+  @Get('price-drops') priceDrops(@Query('page') page?: string) {
+    return this.svc.priceDrops(page);
+  }
+  @Get('emails') emails(@Query('kind') kind?: string, @Query('status') status?: string, @Query('q') q?: string, @Query('page') page?: string) {
+    return this.svc.emails(kind, status, q, page);
+  }
+}
+
+@Module({ imports: [CheckoutModule], controllers: [AdminController, AdminConsoleController], providers: [AdminService, AdminConsoleService] })
+export class AdminModule {}

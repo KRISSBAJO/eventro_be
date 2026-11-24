@@ -10,6 +10,7 @@ import { FRAUD_FLAG_THRESHOLD, scoreOrder } from '../domain/fraud';
 import { pickFromSections, type SeatMap, type SeatPick } from '../domain/seatmap';
 import { Payments } from './payments';
 import { FxService } from '../fx/fx.module';
+import { MailService, formatMoney, render } from '../mail/mail.module';
 import { isCurrency, type Currency } from '../domain/currency';
 import type { AuthUser } from '../common/auth';
 
@@ -28,6 +29,7 @@ export class CheckoutService {
     private readonly payments: Payments,
     private readonly audit: AuditService,
     private readonly fx: FxService,
+    private readonly mail: MailService,
   ) {}
 
   /* ---------- holds ---------- */
@@ -258,7 +260,7 @@ export class CheckoutService {
         await tx.$queryRaw`SELECT id FROM "Order" WHERE id = ${orderId} FOR UPDATE`;
         const order = await tx.order.findUnique({ where: { id: orderId }, include: { hold: true, event: true, ticketType: true } });
         if (!order) throw new NotFoundException('Order not found.');
-        if (order.status !== 'PENDING') return { order, refund: false };
+        if (order.status !== 'PENDING') return { order, refund: false, fresh: false };
         await lockTicketType(tx, order.ticketTypeId);
 
         const now = new Date();
@@ -269,7 +271,7 @@ export class CheckoutService {
           if (left < order.quantity) {
             await tx.order.update({ where: { id: order.id }, data: { status: 'CANCELLED' } });
             if (order.hold) await tx.hold.update({ where: { id: order.hold.id }, data: { status: 'EXPIRED' } });
-            return { order, refund: true };
+            return { order, refund: true, fresh: false };
           }
         }
 
@@ -297,7 +299,7 @@ export class CheckoutService {
           await tx.promo.update({ where: { eventId_code: { eventId: order.eventId, code: order.promoCode } }, data: { used: { increment: 1 } } });
         }
         const paid = await tx.order.update({ where: { id: order.id }, data: { status: 'PAID', paidAt: now, buyerId: owner } });
-        return { order: paid, refund: false };
+        return { order: paid, refund: false, fresh: true };
       },
       { timeout: 20_000 },
     );
@@ -307,7 +309,39 @@ export class CheckoutService {
       await this.audit.log(null, 'order.auto_refund', 'Order', orderId, { reason: 'seats no longer available after hold expired' });
       throw new ConflictException('Your seats were released before payment finished. You have been refunded in full.');
     }
+    // Only the call that actually marked it paid sends the receipt (webhook retries don't send it again).
+    if (result.fresh) void this.sendReceipt(orderId).catch((e) => this.log.warn(`Receipt for ${orderId}: ${(e as Error).message}`));
     return this.orderView(orderId);
+  }
+
+  private async sendReceipt(orderId: string) {
+    const o = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: {
+        event: { select: { title: true, startsAt: true, online: true, venue: { select: { name: true, city: true } } } },
+        ticketType: { select: { name: true } },
+        tickets: { select: { section: true, row: true, seat: true }, orderBy: { id: 'asc' } },
+      },
+    });
+    if (!o) return;
+    const when = new Intl.DateTimeFormat('en-US', { weekday: 'long', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'UTC' }).format(o.event.startsAt);
+    const where = o.event.online ? 'Online' : o.event.venue ? `${o.event.venue.name}, ${o.event.venue.city}` : '';
+    const seats = o.tickets.filter((t) => t.seat !== null).map((t) => `${t.section} · Row ${t.row} · Seat ${t.seat}`);
+    const { html, text } = render({
+      preheader: `${o.quantity} × ${o.ticketType.name} for ${o.event.title}. Order ${o.id}.`,
+      heading: `You're going to ${o.event.title}`,
+      highlight: { label: `Order ${o.id} · paid`, value: formatMoney(o.totalCents, o.currency) },
+      paragraphs: [
+        `${o.quantity} × ${o.ticketType.name}`,
+        `${when}${where ? ` · ${where}` : ''}`,
+        ...(seats.length ? [`Seats: ${seats.join('; ')}`] : []),
+        'Your tickets are in your Eventro account. The QR code refreshes every few seconds, so screenshots won’t work at the door.',
+      ],
+      cta: { label: 'View my tickets', url: `${config.webUrl}/tickets` },
+      footer: 'You got this email because you bought tickets on Eventro. Need help?',
+      footerLink: { label: 'Visit the help centre', url: `${config.webUrl}/help` },
+    });
+    await this.mail.send('order.receipt', { to: o.email, subject: `Your tickets: ${o.event.title} (${o.id})`, html, text });
   }
 
   /** Best-available seats for a paid order. GA sections and events without a map get no seat numbers. */

@@ -1,4 +1,4 @@
-import { Body, ConflictException, Controller, Get, HttpCode, Injectable, Module, Patch, Post, UnauthorizedException } from '@nestjs/common';
+import { Body, ConflictException, Controller, ForbiddenException, Get, HttpCode, Injectable, Module, Patch, Post, UnauthorizedException } from '@nestjs/common';
 import { ApiBearerAuth, ApiProperty, ApiTags } from '@nestjs/swagger';
 import { JwtService } from '@nestjs/jwt';
 import { IsEmail, IsString, MaxLength, MinLength } from 'class-validator';
@@ -58,6 +58,7 @@ export class AuthService {
     // Same message and similar timing whether or not the email exists.
     const ok = await bcrypt.compare(dto.password, user?.passwordHash ?? '$2a$11$invalidinvalidinvalidinvalidinvalidinvalidinvalidinv');
     if (!user || !ok) throw new UnauthorizedException('Email or password is incorrect.');
+    if (user.suspendedAt) throw new ForbiddenException('This account is suspended. Contact Eventro support.');
     return this.session(user);
   }
 

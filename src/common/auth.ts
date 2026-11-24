@@ -15,6 +15,8 @@ import { PrismaService } from '../prisma.service';
 export type Role = 'FAN' | 'ORGANIZER' | 'ADMIN';
 export type AuthUser = { id: string; email: string; name: string; roles: Role[] };
 
+class SuspendedError extends Error {}
+
 const PUBLIC = 'eventro:public';
 const OPTIONAL = 'eventro:optional-auth';
 const ROLES = 'eventro:roles';
@@ -56,8 +58,11 @@ export class AuthGuard implements CanActivate {
       try {
         const payload = await this.jwt.verifyAsync<{ sub: string }>(token);
         const u = await this.prisma.user.findUnique({ where: { id: payload.sub } });
+        if (u?.suspendedAt) throw new SuspendedError();
         if (u) req.user = { id: u.id, email: u.email, name: u.name, roles: u.roles as Role[] };
-      } catch {
+      } catch (e) {
+        // A suspended account is refused everywhere, even on public routes, so it can't keep buying.
+        if (e instanceof SuspendedError) throw new ForbiddenException('This account is suspended. Contact Eventro support.');
         if (!isPublic && !optional) throw new UnauthorizedException('Your session has expired. Please sign in again.');
       }
     }

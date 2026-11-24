@@ -1,9 +1,8 @@
-import { BadRequestException, Body, Controller, Get, HttpCode, Injectable, Module, NotFoundException, Param, Post, Query } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, HttpCode, Injectable, NotFoundException, Param, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiProperty, ApiPropertyOptional, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { IsIn, IsInt, IsOptional, IsString, MaxLength, Min, MinLength } from 'class-validator';
 import { PrismaService } from '../prisma.service';
 import { AuditService } from '../common/audit.service';
-import { CheckoutModule } from '../checkout/checkout.module';
 import { Payments } from '../checkout/payments';
 import { CurrentUser, Roles, type AuthUser } from '../common/auth';
 
@@ -65,7 +64,7 @@ export class AdminService {
   }
 
   /** Refunds through the payment provider; a full refund voids the tickets and returns them to sale. */
-  private async refundOrder(orderId: string, amountCents: number, admin: AuthUser, reason: string) {
+  async refundOrder(orderId: string, amountCents: number, admin: AuthUser, reason: string) {
     const o = await this.prisma.order.findUnique({ where: { id: orderId } });
     if (!o) throw new NotFoundException('Order not found.');
     const remaining = o.totalCents - o.refundedCents;
@@ -171,5 +170,4 @@ export class AdminController {
   }
 }
 
-@Module({ imports: [CheckoutModule], controllers: [AdminController], providers: [AdminService] })
-export class AdminModule {}
+// The Nest module that registers these lives in admin-console.ts (it also needs AdminService).
