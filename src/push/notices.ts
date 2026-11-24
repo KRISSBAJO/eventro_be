@@ -12,6 +12,7 @@
  *   event.cancelled          ticket holders        orders      event.cancelled:<eventId>:<userId>
  *   reminder.day             holders of ACTIVE     reminders   reminder.day:<eventId>:<userId>
  *   reminder.doors           holders of ACTIVE     reminders   reminder.doors:<eventId>:<userId>
+ *   order.sale               org admins, managers  sales       order.sale:<orderId>:<userId>
  *
  * Every method swallows its own errors (logged), so callers can `void` them.
  */
@@ -93,6 +94,45 @@ export class NoticeService implements OnModuleInit, OnModuleDestroy {
             dedupeKey: `order.paid:${orderId}`,
           };
       await this.push.send('order.paid', 'orders', [msg]);
+    });
+  }
+
+  /**
+   * "New sale": to the organization's active admins and managers (door staff don't see sales), opening the event's
+   * organizer page. Resale orders are fans selling to fans, not the organizer's sale, so they're left out.
+   */
+  newSale(orderId: string) {
+    return this.guard(`order.sale ${orderId}`, async () => {
+      const o = await this.prisma.order.findUnique({
+        where: { id: orderId },
+        select: {
+          status: true,
+          quantity: true,
+          totalCents: true,
+          currency: true,
+          resaleListingId: true,
+          ticketType: { select: { name: true } },
+          event: { select: { id: true, title: true, orgId: true } },
+        },
+      });
+      if (!o || o.status !== 'PAID' || o.resaleListingId) return;
+      const members = await this.prisma.organizationMember.findMany({
+        where: { orgId: o.event.orgId, status: 'ACTIVE', role: { in: ['ADMIN', 'MANAGER'] }, userId: { not: null } },
+        select: { userId: true },
+      });
+      const ids = [...new Set(members.map((m) => m.userId!))];
+      const amount = o.totalCents > 0 ? formatMoney(o.totalCents, o.currency) : 'Free';
+      await this.push.send(
+        'order.sale',
+        'sales',
+        ids.map((userId) => ({
+          userId,
+          title: `New sale: ${o.event.title}`,
+          body: `${o.quantity} × ${o.ticketType.name} · ${amount}`,
+          data: link(`/organizer/events/${o.event.id}`, { type: 'order.sale', orderId, eventId: o.event.id }),
+          dedupeKey: `order.sale:${orderId}:${userId}`,
+        })),
+      );
     });
   }
 

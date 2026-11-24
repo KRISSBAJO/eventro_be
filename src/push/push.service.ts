@@ -38,11 +38,11 @@ import { CurrentUser, type AuthUser } from '../common/auth';
 
 /* ---------- preferences ---------- */
 
-export const NOTIFY_PREFS = ['orders', 'tickets', 'priceDrops', 'reminders', 'marketing'] as const;
+export const NOTIFY_PREFS = ['orders', 'tickets', 'priceDrops', 'reminders', 'marketing', 'sales'] as const;
 export type NotifyPref = (typeof NOTIFY_PREFS)[number];
 export type NotifyPrefs = Record<NotifyPref, boolean>;
-/** Everything on except marketing. */
-export const DEFAULT_PREFS: NotifyPrefs = { orders: true, tickets: true, priceDrops: true, reminders: true, marketing: false };
+/** Everything on except marketing. A key missing from saved choices means its default, so new kinds need no migration. */
+export const DEFAULT_PREFS: NotifyPrefs = { orders: true, tickets: true, priceDrops: true, reminders: true, marketing: false, sales: true };
 
 export function prefsOf(raw: unknown): NotifyPrefs {
   const out = { ...DEFAULT_PREFS };
@@ -74,6 +74,7 @@ export class NotifyPrefsDto {
   @ApiPropertyOptional() @IsOptional() @IsBoolean() priceDrops?: boolean;
   @ApiPropertyOptional({ description: 'The day before and when doors open' }) @IsOptional() @IsBoolean() reminders?: boolean;
   @ApiPropertyOptional({ description: 'Off unless turned on' }) @IsOptional() @IsBoolean() marketing?: boolean;
+  @ApiPropertyOptional({ description: 'Organizers (admins and managers): each new sale on their events' }) @IsOptional() @IsBoolean() sales?: boolean;
 }
 
 /* ---------- sending ---------- */

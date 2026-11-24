@@ -476,8 +476,9 @@ export class CheckoutService {
       void this.sendReceipt(orderId).catch((e) => this.log.warn(`Receipt for ${orderId}: ${(e as Error).message}`));
       void this.gifts.afterPaid(orderId).catch((e) => this.log.warn(`Gift for ${orderId}: ${(e as Error).message}`));
       if (result.order.resaleListingId) void this.resale.soldEmail(result.order.resaleListingId).catch((e) => this.log.warn(`Resale email for ${orderId}: ${(e as Error).message}`));
-      // Push (never throws): the buyer's "You're going", and the seller's "Your ticket sold".
+      // Push (never throws): the buyer's "You're going", the organizer team's "New sale", and the seller's "Your ticket sold".
       void this.notices.orderPaid(orderId);
+      void this.notices.newSale(orderId);
       if (result.order.resaleListingId) void this.notices.resaleSold(result.order.resaleListingId);
     }
     return this.orderView(orderId);

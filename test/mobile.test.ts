@@ -352,9 +352,9 @@ test('push devices and notification choices', async () => {
   await ok(call('POST', '/me/push-devices', { token }, b.token));
   assert.equal((await prisma.pushDevice.findUniqueOrThrow({ where: { token } })).disabledAt, null);
 
-  assert.deepEqual(await ok(call('GET', '/me/notify-prefs', undefined, a.token)), { orders: true, tickets: true, priceDrops: true, reminders: true, marketing: false });
-  assert.deepEqual(await ok(call('PATCH', '/me/notify-prefs', { marketing: true, priceDrops: false }, a.token)), { orders: true, tickets: true, priceDrops: false, reminders: true, marketing: true });
-  assert.deepEqual(await ok(call('PATCH', '/me/notify-prefs', { marketing: false }, a.token)), { orders: true, tickets: true, priceDrops: false, reminders: true, marketing: false });
+  assert.deepEqual(await ok(call('GET', '/me/notify-prefs', undefined, a.token)), { orders: true, tickets: true, priceDrops: true, reminders: true, marketing: false, sales: true });
+  assert.deepEqual(await ok(call('PATCH', '/me/notify-prefs', { marketing: true, priceDrops: false }, a.token)), { orders: true, tickets: true, priceDrops: false, reminders: true, marketing: true, sales: true });
+  assert.deepEqual(await ok(call('PATCH', '/me/notify-prefs', { marketing: false }, a.token)), { orders: true, tickets: true, priceDrops: false, reminders: true, marketing: false, sales: true });
   assert.equal((await call('PATCH', '/me/notify-prefs', { orders: 'yes' }, a.token)).status, 400);
   assert.equal((await call('PATCH', '/me/notify-prefs', { sms: true }, a.token)).status, 400);
 });
@@ -436,6 +436,51 @@ test('push: order paid, transfer sent and accepted, with deep links; switched-of
   assert.ok(adminLog.items.some((x: Json) => x.dedupeKey === `order.paid:${paid.id}`));
   assert.ok(adminLog.activeDevices >= 1);
   assert.equal((await call('GET', '/admin/notifications', undefined, buyer.token)).status, 403);
+});
+
+test('push: a new sale reaches the organization’s admins and managers (not door staff), unless they switch sales off', async () => {
+  const admin = await account('admin@test.local', 'Admin');
+  const owner = await phone(`ns-owner-${run}@test.local`, 'Nora Owner');
+  const manager = await phone(`ns-mgr-${run}@test.local`, 'Mo Manager');
+  const door = await phone(`ns-door-${run}@test.local`, 'Dee Door');
+  const { org: o, ev, tt } = await publishedEvent(owner.token, admin.token, 'Sale Push');
+  await ok(call('POST', `/organizer/orgs/${o.id}/team`, { email: `ns-mgr-${run}@test.local`, role: 'MANAGER' }, owner.token));
+  await ok(call('POST', `/organizer/orgs/${o.id}/team`, { email: `ns-door-${run}@test.local`, role: 'DOOR' }, owner.token));
+  await ok(call('POST', '/organizer/invites/accept', undefined, manager.token));
+  await ok(call('POST', '/organizer/invites/accept', undefined, door.token));
+  const to = expoToken('SaleOwner');
+  const tm = expoToken('SaleMgr');
+  const td = expoToken('SaleDoor');
+  await ok(call('POST', '/me/push-devices', { token: to }, owner.token));
+  await ok(call('POST', '/me/push-devices', { token: tm }, manager.token));
+  await ok(call('POST', '/me/push-devices', { token: td }, door.token));
+  // Saved choices from before "sales" existed: the missing key counts as on.
+  await prisma.user.update({ where: { id: owner.user.id }, data: { notifyPrefs: { orders: true, tickets: true, priceDrops: true, reminders: true, marketing: false } } });
+  assert.equal((await ok(call('GET', '/me/notify-prefs', undefined, owner.token))).sales, true);
+
+  const paid = await buy(tt.id, 2, `ns-fan-${run}@example.com`, 'Fola Fan');
+  const p = await waitFor(() => pushesTo(to).find((x) => x.data?.type === 'order.sale' && x.data.orderId === paid.id));
+  assert.equal(p.title, `New sale: ${ev.title}`);
+  assert.equal(p.body, `2 × General · ${(await import('../src/mail/mail.module')).formatMoney(paid.totalCents, 'USD')}`);
+  assert.equal(p.data.path, `/organizer/events/${ev.id}`);
+  assert.equal(p.data.url, `eventro://organizer/events/${ev.id}`);
+  await waitFor(() => pushesTo(tm).find((x) => x.data?.type === 'order.sale' && x.data.orderId === paid.id));
+  const logs = await waitFor(async () => {
+    const rows = await prisma.notificationLog.findMany({ where: { kind: 'order.sale', dedupeKey: { startsWith: `order.sale:${paid.id}:` }, status: { not: 'PENDING' } } });
+    return rows.length === 2 ? rows : null;
+  });
+  assert.deepEqual(logs.map((l) => l.userId).sort(), [owner.user.id, manager.user.id].sort());
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(pushesTo(td).length, 0, 'door staff get no sales');
+
+  // The manager switches sales off: logged as SKIPPED; the owner still hears.
+  assert.equal((await ok(call('PATCH', '/me/notify-prefs', { sales: false }, manager.token))).sales, false);
+  const second = await buy(tt.id, 1, `ns-fan-${run}@example.com`, 'Fola Fan');
+  await waitFor(() => pushesTo(to).find((x) => x.data?.orderId === second.id));
+  const skipped = await waitFor(() => prisma.notificationLog.findFirst({ where: { dedupeKey: `order.sale:${second.id}:${manager.user.id}`, status: { not: 'PENDING' } } }));
+  assert.equal(skipped.status, 'SKIPPED');
+  assert.match(skipped.error ?? '', /sales/);
+  assert.equal(pushesTo(tm).filter((x) => x.data?.orderId === second.id).length, 0);
 });
 
 test('gifts: the recipient gets a push with the gift link; claiming changes the QR seed', async () => {

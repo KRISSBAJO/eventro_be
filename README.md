@@ -264,8 +264,8 @@ Everything the Expo app needs is additive: the website keeps working unchanged.
 - `POST /me/push-devices { token, platform?, deviceName? }` registers an Expo push token (`ExponentPushToken[…]` or
   `ExpoPushToken[…]`); call it after every sign-in. A token moves to whoever registered it last.
   `DELETE /me/push-devices/:token` (URL-encoded) turns it off.
-- `GET /me/notify-prefs`, `PATCH /me/notify-prefs` with any of `orders`, `tickets`, `priceDrops`, `reminders`, `marketing`
-  (booleans; all on except `marketing`).
+- `GET /me/notify-prefs`, `PATCH /me/notify-prefs` with any of `orders`, `tickets`, `priceDrops`, `reminders`, `marketing`,
+  `sales` (booleans; all on except `marketing`; a key missing from saved choices means its default).
 - Sent through Expo (`EXPO_PUSH_URL`, optional `EXPO_ACCESS_TOKEN`) 100 at a time, in the background. Every message is
   logged in `NotificationLog` (SENT, FAILED, or SKIPPED: no phones, or that kind switched off), shown at
   `GET /admin/notifications`. `DeviceNotRegistered` (from the send or from Expo's receipts, checked every 15 minutes)
@@ -283,6 +283,7 @@ Everything the Expo app needs is additive: the website keeps working unchanged.
 | Event cancelled | ticket holders | orders | `/tickets` | `event.cancelled:<eventId>:<userId>` |
 | "Tomorrow: …" (start 20–24 h away) | holders of ACTIVE tickets | reminders | `/tickets/<ticketId>` | `reminder.day:<eventId>:<userId>` |
 | "Doors open soon" (hour before doors, or start) | holders of ACTIVE tickets | reminders | `/tickets/<ticketId>` | `reminder.doors:<eventId>:<userId>` |
+| New sale ("New sale: …", quantity × type · total) | the org's active admins and managers (not door staff; resales left out) | sales | `/organizer/events/<eventId>` | `order.sale:<orderId>:<userId>` |
 
   Only people with an Eventro account get pushes. Reminders run every 5 minutes and use the venue's real time
   (event times are stored as wall-clock in the venue zone).
