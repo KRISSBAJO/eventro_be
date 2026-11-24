@@ -6,8 +6,11 @@
  * the venue who claimed its page and were approved. Managers and admins can save an official seat layout, which
  * organizers then start from.
  *
- * Public:   GET /venues, GET /venues/:slug, GET /venues/:slug/layout
- * Signed in: POST /venues/:slug/claims, GET /me/venues, PATCH /me/venues/:id, PUT /me/venues/:id/layout
+ * Venue owners can also add a venue that isn't on Eventro yet (POST /me/venues): it's created hidden with a pending
+ * claim marked `newVenue`, and approving that claim shows it. The claimant hears about decisions by email and push.
+ *
+ * Public:   GET /venues (?q= to find one to claim), GET /venues/:slug, GET /venues/:slug/layout
+ * Signed in: POST /venues/:slug/claims, POST /me/venues, GET /me/venues, PATCH /me/venues/:id, PUT /me/venues/:id/layout
  * Hiring a venue (listing, availability, booking requests): see venue-bookings.ts.
  * Admin:    GET /admin/venues, PATCH /admin/venues/:id, GET /admin/venues/:id/duplicates, POST /admin/venues/:id/merge,
  *           GET /admin/venue-claims, POST /admin/venue-claims/:id/decide
@@ -15,8 +18,10 @@
 import {
   BadRequestException,
   Body,
+  ConflictException,
   Controller,
   ForbiddenException,
+  Logger,
   Get,
   HttpCode,
   Injectable,
@@ -28,7 +33,7 @@ import {
   Put,
   Query,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiProperty, ApiPropertyOptional, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiProperty, ApiPropertyOptional, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { IsBoolean, IsIn, IsInt, IsNumber, IsObject, IsOptional, IsString, IsUrl, Matches, Max, MaxLength, Min, MinLength } from 'class-validator';
 import type { Prisma, Venue } from '@prisma/client';
 import { PrismaService } from '../prisma.service';
@@ -37,6 +42,9 @@ import { config } from '../config';
 import { CurrentUser, Public, Roles, type AuthUser } from '../common/auth';
 import { MailService, render } from '../mail/mail.module';
 import { sectionCapacity, validateSeatMap, type SeatMap } from '../domain/seatmap';
+import { randomSuffix, slugify } from '../domain/codes';
+import { placeTimezone } from '../geo/geo.module';
+import { PushService } from '../push/push.service';
 import { OrganizerBookingsController, VenueBookingPublicController, VenueBookingService, VenueManagerBookingsController, publicListing } from './venue-bookings';
 
 const PAGE = 25;
@@ -51,6 +59,32 @@ export class ClaimDto {
   @ApiProperty({ description: 'Who you are at the venue and how we can check it' }) @IsString() @MinLength(10) @MaxLength(600) message: string;
   @ApiPropertyOptional() @IsOptional() @IsUrl({ require_protocol: true }) @MaxLength(200) website?: string;
 }
+
+const PHONE = /^[+\d][\d\s()-]{5,24}$/;
+
+/** POST /me/venues: a venue that isn't on Eventro yet, added by someone who runs it (hidden until approved). */
+export class OnboardVenueDto {
+  @ApiProperty() @IsString() @MinLength(2, { message: 'Give the venue’s name.' }) @MaxLength(120) name: string;
+  @ApiProperty() @IsString() @MinLength(3, { message: 'Give the street address.' }) @MaxLength(200) address: string;
+  @ApiProperty() @IsString() @MinLength(2, { message: 'Give the city.' }) @MaxLength(80) city: string;
+  @ApiPropertyOptional({ description: 'State, province or region' }) @IsOptional() @IsString() @MaxLength(80) region?: string;
+  @ApiProperty({ description: 'ISO 3166-1 alpha-2, e.g. NG' }) @IsString() @Matches(/^[A-Za-z]{2}$/, { message: 'Pick the country.' }) country: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(20) postalCode?: string;
+  @ApiPropertyOptional() @IsOptional() @IsInt() @Min(1, { message: 'Capacity has to be at least 1.' }) @Max(500_000) capacity?: number;
+  @ApiPropertyOptional() @IsOptional() @IsString() @Matches(PHONE, { message: 'That phone number doesn’t look right.' }) phone?: string;
+  @ApiPropertyOptional() @IsOptional() @IsUrl({ require_protocol: true }, { message: 'The website should start with https://' }) @MaxLength(200) website?: string;
+  @ApiPropertyOptional() @IsOptional() @IsUrl({ require_protocol: true }, { message: 'The photo link should start with https://' }) @MaxLength(500) imageUrl?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(2000) about?: string;
+  @ApiProperty({ enum: ROLES }) @IsIn(ROLES, { message: 'Say whether you’re the owner, a manager or staff.' }) role: string;
+  @ApiProperty({ description: 'Who you are at the venue and how we can check it' })
+  @IsString()
+  @MinLength(10, { message: 'Tell us a little more about your role (at least 10 characters).' })
+  @MaxLength(600)
+  message: string;
+}
+
+/** How many venues one person can have waiting for approval at once. */
+const MAX_WAITING_NEW = 5;
 
 /** What a venue manager can change. */
 export class ManagerVenueDto {
@@ -92,10 +126,13 @@ export class ClaimDecisionDto {
 
 @Injectable()
 export class VenuesService {
+  private readonly log = new Logger('Venues');
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly mail: MailService,
+    private readonly push: PushService,
   ) {}
 
   private layoutInfo(v: Pick<Venue, 'layout'>) {
@@ -109,8 +146,42 @@ export class VenuesService {
     return this.prisma.venue.findMany({
       where: { hiddenAt: null },
       orderBy: [{ city: 'asc' }, { name: 'asc' }],
-      select: { slug: true, name: true, city: true, address: true, capacity: true, lat: true, lng: true, imageUrl: true, verifiedAt: true },
+      select: { slug: true, name: true, city: true, region: true, country: true, address: true, capacity: true, lat: true, lng: true, imageUrl: true, verifiedAt: true },
     });
+  }
+
+  /**
+   * Finding a venue to claim: visible venues whose name, address or city contains `q` (2+ characters), optionally
+   * in one country or city; at most 20, verified first. `managed` says whether someone already manages it.
+   */
+  async find(q: string, country?: string, city?: string) {
+    const s = q.trim().slice(0, 100);
+    if (s.length < 2) return [];
+    const cc = (country ?? '').trim().toUpperCase();
+    const c = (city ?? '').trim().slice(0, 80);
+    const rows = await this.prisma.venue.findMany({
+      where: {
+        hiddenAt: null,
+        OR: [{ name: { contains: s, mode: 'insensitive' } }, { address: { contains: s, mode: 'insensitive' } }, { city: { contains: s, mode: 'insensitive' } }],
+        ...(/^[A-Z]{2}$/.test(cc) ? { country: cc } : {}),
+        ...(c ? { city: { contains: c, mode: 'insensitive' } } : {}),
+      },
+      orderBy: [{ verifiedAt: { sort: 'desc', nulls: 'last' } }, { name: 'asc' }],
+      take: 20,
+      select: {
+        slug: true,
+        name: true,
+        address: true,
+        city: true,
+        region: true,
+        country: true,
+        capacity: true,
+        imageUrl: true,
+        verifiedAt: true,
+        _count: { select: { claims: { where: { status: 'APPROVED' } } } },
+      },
+    });
+    return rows.map(({ _count, ...v }) => ({ ...v, verified: !!v.verifiedAt, managed: _count.claims > 0 }));
   }
 
   async one(slug: string) {
@@ -154,12 +225,75 @@ export class VenuesService {
     const existing = await this.prisma.venueClaim.findUnique({ where: { venueId_userId: { venueId: v.id, userId: user.id } } });
     if (existing?.status === 'APPROVED') throw new BadRequestException('You already manage this venue.');
     if (existing?.status === 'PENDING') throw new BadRequestException('Your request is already with our team.');
-    const data = { role: dto.role, message: dto.message.trim(), website: dto.website ?? null, status: 'PENDING', note: null, decidedBy: null, decidedAt: null };
+    // A claim on a page that's already public: approving it never changes whether the venue is shown.
+    const data = { role: dto.role, message: dto.message.trim(), website: dto.website ?? null, status: 'PENDING', newVenue: false, note: null, decidedBy: null, decidedAt: null };
     const c = existing
       ? await this.prisma.venueClaim.update({ where: { id: existing.id }, data })
       : await this.prisma.venueClaim.create({ data: { ...data, venueId: v.id, userId: user.id } });
     await this.audit.log(user.id, 'venue.claim', 'Venue', v.id, { role: dto.role });
     return { id: c.id, status: c.status };
+  }
+
+  /**
+   * Adds a venue that isn't on Eventro yet (POST /me/venues). It's created hidden, in its place's time zone, with a
+   * PENDING claim marked `newVenue` for this person; approving the claim shows it. A visible venue with the same
+   * name in the same city and country is refused with 409 VENUE_EXISTS, so the person can claim that one instead.
+   */
+  async onboard(user: AuthUser, dto: OnboardVenueDto) {
+    const name = dto.name.trim().replace(/\s+/g, ' ');
+    const city = dto.city.trim().replace(/\s+/g, ' ');
+    const country = dto.country.toUpperCase();
+    if (name.length < 2) throw new BadRequestException('Give the venue’s name.');
+    if (city.length < 2) throw new BadRequestException('Give the city.');
+    const same = await this.prisma.venue.findFirst({
+      where: { hiddenAt: null, name: { equals: name, mode: 'insensitive' }, city: { equals: city, mode: 'insensitive' }, OR: [{ country }, { country: null }] },
+      select: { slug: true, name: true, city: true, address: true },
+    });
+    if (same) {
+      throw new ConflictException({
+        statusCode: 409,
+        code: 'VENUE_EXISTS',
+        message: `${same.name} in ${same.city} is already on Eventro. If it’s yours, claim it instead of adding it again.`,
+        venue: same,
+      });
+    }
+    const waiting = await this.prisma.venueClaim.findMany({
+      where: { userId: user.id, status: 'PENDING', newVenue: true },
+      select: { venue: { select: { name: true, city: true } } },
+    });
+    if (waiting.some((w) => w.venue.name.toLowerCase() === name.toLowerCase() && w.venue.city.toLowerCase() === city.toLowerCase())) {
+      throw new BadRequestException(`You’ve already asked to add ${name}. Our team will get back to you, usually within a day.`);
+    }
+    if (waiting.length >= MAX_WAITING_NEW) throw new BadRequestException('You have several venues waiting for approval already. Wait for our team to get back to you first.');
+
+    const region = dto.region?.trim() || null;
+    const { venue, claim } = await this.prisma.$transaction(async (tx) => {
+      const venue = await tx.venue.create({
+        data: {
+          slug: `${slugify(name) || 'venue'}-${randomSuffix()}`,
+          name,
+          address: dto.address.trim(),
+          city,
+          region,
+          country,
+          postalCode: dto.postalCode?.trim() || null,
+          timezone: placeTimezone(country, region),
+          capacity: dto.capacity ?? null,
+          phone: dto.phone?.trim() || null,
+          website: dto.website || null,
+          imageUrl: dto.imageUrl || null,
+          about: dto.about?.trim() || null,
+          // Not public or bookable until Eventro approves the claim below.
+          hiddenAt: new Date(),
+        },
+      });
+      const claim = await tx.venueClaim.create({
+        data: { venueId: venue.id, userId: user.id, role: dto.role, message: dto.message.trim(), website: dto.website ?? null, status: 'PENDING', newVenue: true },
+      });
+      return { venue, claim };
+    });
+    await this.audit.log(user.id, 'venue.onboard', 'Venue', venue.id, { claimId: claim.id, role: dto.role });
+    return { id: claim.id, status: claim.status, newVenue: true, venue: { id: venue.id, slug: venue.slug, name: venue.name, city: venue.city } };
   }
 
   /** Approved claims (venues I manage) and my other requests. */
@@ -189,7 +323,17 @@ export class VenuesService {
         }),
       requests: claims
         .filter((c) => c.status !== 'APPROVED')
-        .map((c) => ({ id: c.id, status: c.status, role: c.role, note: c.note, createdAt: c.createdAt, venue: { slug: c.venue.slug, name: c.venue.name, city: c.venue.city } })),
+        .map((c) => ({
+          id: c.id,
+          status: c.status,
+          role: c.role,
+          note: c.note,
+          createdAt: c.createdAt,
+          decidedAt: c.decidedAt,
+          /** they added this venue themselves; while it's waiting it's hidden, so don't link to its page */
+          newVenue: c.newVenue,
+          venue: { id: c.venue.id, slug: c.venue.slug, name: c.venue.name, city: c.venue.city, address: c.venue.address, country: c.venue.country, hidden: !!c.venue.hiddenAt },
+        })),
     };
   }
 
@@ -269,11 +413,16 @@ export class VenuesService {
         include: { _count: { select: { events: true, claims: { where: { status: 'APPROVED' } } } } },
       }),
     ]);
+    // Hidden because an owner added them and their claim is still waiting, not hidden by Eventro.
+    const hiddenIds = rows.filter((v) => v.hiddenAt).map((v) => v.id);
+    const awaiting = new Set(
+      hiddenIds.length ? (await this.prisma.venueClaim.findMany({ where: { venueId: { in: hiddenIds }, newVenue: true, status: 'PENDING' }, select: { venueId: true } })).map((c) => c.venueId) : [],
+    );
     return {
       total,
       page,
       pageSize: PAGE,
-      items: rows.map(({ layout, _count, ...v }) => ({ ...v, events: _count.events, managers: _count.claims, layout: this.layoutInfo({ layout }) })),
+      items: rows.map(({ layout, _count, ...v }) => ({ ...v, events: _count.events, managers: _count.claims, awaitingApproval: awaiting.has(v.id), layout: this.layoutInfo({ layout }) })),
     };
   }
 
@@ -370,7 +519,29 @@ export class VenuesService {
         orderBy: { createdAt: 'asc' },
         skip: (page - 1) * PAGE,
         take: PAGE,
-        include: { venue: { select: { id: true, slug: true, name: true, city: true, verifiedAt: true } }, user: { select: { id: true, name: true, email: true } } },
+        include: {
+          // The whole venue, so a claim for a venue the person added themselves (newVenue) can be checked before it goes public.
+          venue: {
+            select: {
+              id: true,
+              slug: true,
+              name: true,
+              address: true,
+              city: true,
+              region: true,
+              country: true,
+              postalCode: true,
+              capacity: true,
+              phone: true,
+              website: true,
+              imageUrl: true,
+              about: true,
+              verifiedAt: true,
+              hiddenAt: true,
+            },
+          },
+          user: { select: { id: true, name: true, email: true } },
+        },
       }),
     ]);
     return { total, page, pageSize: PAGE, items };
@@ -381,22 +552,52 @@ export class VenuesService {
     if (!c) throw new NotFoundException('Request not found.');
     if (dto.decision === 'REVOKE' ? c.status !== 'APPROVED' : c.status !== 'PENDING') throw new BadRequestException('That request has already been decided.');
     const status = dto.decision === 'APPROVE' ? 'APPROVED' : dto.decision === 'REJECT' ? 'REJECTED' : 'REVOKED';
-    const out = await this.prisma.venueClaim.update({ where: { id }, data: { status, note: dto.note?.trim() || null, decidedBy: admin.id, decidedAt: new Date() } });
-    await this.audit.log(admin.id, `venue_claim.${status.toLowerCase()}`, 'VenueClaim', id, { venueId: c.venueId, userId: c.userId });
-    if (status !== 'REVOKED') {
-      const approved = status === 'APPROVED';
+    const decidedAt = new Date();
+    // A venue the claimant added themselves goes public when their claim is approved; declined, it stays hidden.
+    // Venues hidden by Eventro (no newVenue claim) are left as they are.
+    const show = status === 'APPROVED' && c.newVenue && !!c.venue.hiddenAt;
+    const out = await this.prisma.$transaction(async (tx) => {
+      const claim = await tx.venueClaim.update({ where: { id }, data: { status, note: dto.note?.trim() || null, decidedBy: admin.id, decidedAt } });
+      if (show) await tx.venue.update({ where: { id: c.venueId }, data: { hiddenAt: null } });
+      return claim;
+    });
+    await this.audit.log(admin.id, `venue_claim.${status.toLowerCase()}`, 'VenueClaim', id, { venueId: c.venueId, userId: c.userId, newVenue: c.newVenue, venueShown: show });
+    if (status !== 'REVOKED') void this.notifyDecision(c, status === 'APPROVED', dto.note?.trim() || null, decidedAt);
+    return { ...out, venueShown: show };
+  }
+
+  /** The claimant hears about the decision by email and push (push choice "orders"). Never throws. */
+  private async notifyDecision(c: { id: string; venueId: string; newVenue: boolean; venue: Venue; user: { id: string; email: string } }, approved: boolean, note: string | null, decidedAt: Date) {
+    const kind = `venue_claim.${approved ? 'approved' : 'rejected'}`;
+    const name = c.venue.name;
+    const path = approved ? '/venues/manage' : '/venues/list';
+    try {
       const { html, text } = render({
-        preheader: approved ? `You now manage ${c.venue.name} on Eventro.` : `About your request to manage ${c.venue.name}.`,
-        heading: approved ? `You now manage ${c.venue.name}` : `We couldn’t confirm you manage ${c.venue.name}`,
+        preheader: approved ? (c.newVenue ? `${name} is now on Eventro, and you manage it.` : `You now manage ${name} on Eventro.`) : `About your request for ${name}.`,
+        heading: approved ? (c.newVenue ? `${name} is on Eventro` : `You now manage ${name}`) : c.newVenue ? `We couldn’t add ${name} yet` : `We couldn’t confirm you manage ${name}`,
         paragraphs: approved
-          ? ['You can now keep the venue’s details, photo and official seat layout up to date. Organizers booking it will start from your layout.']
-          : [dto.note?.trim() || 'We couldn’t check that you work at this venue. Reply with something we can verify, like an email at the venue’s domain.'],
-        ...(approved ? { cta: { label: 'Manage your venue', url: `${config.webUrl}/venues/manage` } } : {}),
-        footer: 'You asked to manage a venue page on Eventro.',
+          ? [
+              ...(c.newVenue ? [`We checked your details, so ${name} now has its own page on Eventro and you manage it.`] : []),
+              'You can keep the venue’s details, photo and official seat layout up to date. Organizers booking it will start from your layout.',
+              'To get booked by organizers, list it for hire: set your price, opening hours and any blocked-out time. Requests wait up to 48 hours for your answer, and payment is arranged directly between you and the organizer.',
+            ]
+          : [note || (c.newVenue ? 'We couldn’t check that you run this venue. Reply with something we can verify, like an email at the venue’s domain or a link to its official page.' : 'We couldn’t check that you work at this venue. Reply with something we can verify, like an email at the venue’s domain.')],
+        cta: approved ? { label: 'Set up your venue', url: `${config.webUrl}${path}` } : { label: 'Try again', url: `${config.webUrl}${path}` },
+        footer: c.newVenue ? 'You asked to add a venue to Eventro.' : 'You asked to manage a venue page on Eventro.',
       });
-      void this.mail.send(`venue_claim.${status.toLowerCase()}`, { to: c.user.email, subject: approved ? `You now manage ${c.venue.name}` : `Your request for ${c.venue.name}`, html, text });
+      void this.mail.send(kind, { to: c.user.email, subject: approved ? (c.newVenue ? `${name} is on Eventro` : `You now manage ${name}`) : `Your request for ${name}`, html, text });
+      await this.push.send(kind, 'orders', [
+        {
+          userId: c.user.id,
+          title: approved ? (c.newVenue ? `${name} is on Eventro` : `You now manage ${name}`) : `About your request for ${name}`,
+          body: approved ? 'You’re approved. List it for hire: set your price, hours and blocked-out time.' : (note ?? 'We couldn’t confirm it yet. Open Eventro to see why and try again.'),
+          data: { url: `eventro:/${path}`, path, type: kind, claimId: c.id, venueId: c.venueId },
+          dedupeKey: `${kind}:${c.id}:${decidedAt.getTime()}`,
+        },
+      ]);
+    } catch (e) {
+      this.log.warn(`${kind} ${c.id}: ${(e as Error).message}`);
     }
-    return out;
   }
 }
 
@@ -407,8 +608,14 @@ export class VenuesService {
 export class VenueDirectoryController {
   constructor(private readonly venues: VenuesService) {}
 
-  @Public() @Get('venues') list() {
-    return this.venues.list();
+  /** Every visible venue; with `q` (2+ characters), up to 20 matches to claim (optionally in a country or city). */
+  @ApiQuery({ name: 'q', required: false, description: 'Name, address or city (2+ characters)' })
+  @ApiQuery({ name: 'country', required: false, description: 'ISO 3166-1 alpha-2, with q' })
+  @ApiQuery({ name: 'city', required: false, description: 'With q' })
+  @Public()
+  @Get('venues')
+  list(@Query('q') q?: string, @Query('country') country?: string, @Query('city') city?: string) {
+    return q !== undefined ? this.venues.find(q, country, city) : this.venues.list();
   }
   @Public() @Get('venues/:slug') one(@Param('slug') slug: string) {
     return this.venues.one(slug);
@@ -419,6 +626,10 @@ export class VenueDirectoryController {
 
   @ApiBearerAuth() @Post('venues/:slug/claims') claim(@Param('slug') slug: string, @CurrentUser() u: AuthUser, @Body() dto: ClaimDto) {
     return this.venues.claim(slug, u, dto);
+  }
+  /** Add a venue that isn't on Eventro yet: hidden, with a pending claim, until Eventro approves it. */
+  @ApiBearerAuth() @Post('me/venues') onboard(@CurrentUser() u: AuthUser, @Body() dto: OnboardVenueDto) {
+    return this.venues.onboard(u, dto);
   }
   @ApiBearerAuth() @Get('me/venues') mine(@CurrentUser() u: AuthUser) {
     return this.venues.mine(u);

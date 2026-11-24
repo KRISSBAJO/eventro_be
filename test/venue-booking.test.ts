@@ -533,3 +533,96 @@ test('instant booking: a free time is confirmed at once, priced per day', async 
   assert.equal((await call('GET', `/me/venue-bookings?venueId=${venue.id}`, undefined, o.token)).status, 403);
 });
 
+test('cancelling an event cancels its venue booking, and the venue’s managers hear', async () => {
+  const admin = await account('admin@test.local', 'Admin');
+  const { mgr, venue } = await venueWithManager('evcancel');
+  const o = await organizer('evcancel');
+  const show = (title: string, b: Json, start: number, day = nextDay(5)) => ({
+    title,
+    category: 'CONCERTS',
+    startsAt: at(start, 0, day),
+    endsAt: at(start + 2, 0, day),
+    venueBookingId: b.id,
+    ticketTypes: [{ name: 'General', basePriceCents: 500_000, capacity: 100 }],
+    currency: 'NGN',
+  });
+
+  // A confirmed booking, cancelled by the organizer with the event.
+  const b1 = await ok(request(o.org.id, o.token, { venueId: venue.id, startsAt: at(9, 0, nextDay(5)), endsAt: at(13, 0, nextDay(5)) }));
+  await ok(call('POST', `/me/venue-bookings/${b1.id}/confirm`, {}, mgr.token));
+  const ev1 = await ok(call('POST', `/organizer/orgs/${o.org.id}/events`, show(`Morning Gig ${run}`, b1, 10), o.token));
+  const out = await ok(call('POST', `/organizer/events/${ev1.id}/cancel`, { reason: 'The headliner is unwell.', confirmTitle: `Morning Gig ${run}` }, o.token));
+  assert.equal(out.venueBookingCancelled, b1.code);
+  const c1 = await prisma.venueBooking.findUniqueOrThrow({ where: { id: b1.id } });
+  assert.deepEqual([c1.status, c1.cancelReason, c1.cancelledById], ['CANCELLED', 'The event was cancelled', o.user.id]);
+  const push = await waitFor(() => prisma.notificationLog.findUnique({ where: { dedupeKey: `venue_booking.cancelled:${b1.id}:${mgr.user.id}` } }));
+  assert.match(push.body, /was cancelled/);
+  await waitFor(() => prisma.emailLog.findFirst({ where: { kind: 'venue_booking.cancelled', to: `vb-mgr-evcancel-${run}@test.local` } }));
+  // The time is free again.
+  const av = await ok(call('GET', `/venues/${venue.slug}/availability?from=${nextDay(5)}&to=${nextDay(5)}`));
+  assert.equal(av.busy.length, 0);
+  // Cancelling again (a retry) leaves it alone.
+  const retry = await ok(call('POST', `/organizer/events/${ev1.id}/cancel`, { reason: 'The headliner is unwell.', confirmTitle: `Morning Gig ${run}` }, o.token));
+  assert.equal(retry.venueBookingCancelled, null);
+
+  // A request still waiting, cancelled by Eventro with the event.
+  const b2 = await ok(request(o.org.id, o.token, { venueId: venue.id, startsAt: at(15, 0, nextDay(5)), endsAt: at(19, 0, nextDay(5)) }));
+  const ev2 = await ok(call('POST', `/organizer/orgs/${o.org.id}/events`, show(`Afternoon Gig ${run}`, b2, 16), o.token));
+  const byAdmin = await ok(call('POST', `/admin/events/${ev2.id}/cancel`, { reason: 'Cancelled by Eventro support.' }, admin.token));
+  assert.equal(byAdmin.venueBookingCancelled, b2.code);
+  assert.equal((await prisma.venueBooking.findUniqueOrThrow({ where: { id: b2.id } })).status, 'CANCELLED');
+  await waitFor(() => prisma.notificationLog.findUnique({ where: { dedupeKey: `venue_booking.cancelled:${b2.id}:${mgr.user.id}` } }));
+
+  // A booking that already fell through is left as it was.
+  const b3 = await ok(request(o.org.id, o.token, { venueId: venue.id, startsAt: at(9, 0, nextDay(6)), endsAt: at(13, 0, nextDay(6)) }));
+  const ev3 = await ok(call('POST', `/organizer/orgs/${o.org.id}/events`, show(`Declined Gig ${run}`, b3, 10, nextDay(6)), o.token));
+  await ok(call('POST', `/me/venue-bookings/${b3.id}/decline`, { reason: 'Closed for a private event.' }, mgr.token));
+  const none = await ok(call('POST', `/organizer/events/${ev3.id}/cancel`, { reason: 'No venue for it after all.', confirmTitle: `Declined Gig ${run}` }, o.token));
+  assert.equal(none.venueBookingCancelled, null);
+  const c3 = await prisma.venueBooking.findUniqueOrThrow({ where: { id: b3.id } });
+  assert.deepEqual([c3.status, c3.cancelReason], ['DECLINED', null]);
+});
+
+test('admin console publish: refused, like review approval, while the venue booking isn’t confirmed', async () => {
+  const admin = await account('admin@test.local', 'Admin');
+  const { mgr, venue } = await venueWithManager('publish');
+  const o = await organizer('publish');
+  const booked = async (title: string, day: string, from: number, to: number) => {
+    const b = await ok(request(o.org.id, o.token, { venueId: venue.id, startsAt: at(from, 0, day), endsAt: at(to, 0, day) }));
+    await ok(call('POST', `/me/venue-bookings/${b.id}/confirm`, {}, mgr.token));
+    const ev = await ok(
+      call(
+        'POST',
+        `/organizer/orgs/${o.org.id}/events`,
+        { title, category: 'CONCERTS', startsAt: at(from + 1, 0, day), endsAt: at(to - 1, 0, day), venueBookingId: b.id, ticketTypes: [{ name: 'General', basePriceCents: 500_000, capacity: 100 }], currency: 'NGN' },
+        o.token,
+      ),
+    );
+    await ok(call('POST', `/organizer/events/${ev.id}/submit`, undefined, o.token));
+    return { b, ev };
+  };
+  const refused = async (evId: string) => {
+    const r = await call('POST', `/admin/events/${evId}/publish`, undefined, admin.token);
+    assert.equal(r.status, 409, JSON.stringify(r.body));
+    assert.equal(r.body.code, 'VENUE_BOOKING_NOT_CONFIRMED');
+    assert.match(r.body.message, /cancelled, not confirmed/);
+  };
+
+  // In review, the venue cancels: neither approval nor the console's publish lets it go live.
+  const { b, ev } = await booked(`Publish Test ${run}`, nextDay(7), 17, 23);
+  await ok(call('POST', `/me/venue-bookings/${b.id}/cancel`, { reason: 'Double-booked by mistake' }, mgr.token));
+  assert.equal((await call('POST', `/admin/events/${ev.id}/approve`, undefined, admin.token)).body.code, 'VENUE_BOOKING_NOT_CONFIRMED');
+  await refused(ev.id);
+  assert.equal((await prisma.event.findUniqueOrThrow({ where: { id: ev.id } })).status, 'IN_REVIEW');
+
+  // Taken down after going live: publishing again works while the booking is confirmed, and not once it's gone.
+  const t = await booked(`Takedown Test ${run}`, nextDay(8), 9, 15);
+  await ok(call('POST', `/admin/events/${t.ev.id}/approve`, undefined, admin.token));
+  await ok(call('POST', `/admin/events/${t.ev.id}/takedown`, { note: 'Checking the venue licence' }, admin.token));
+  await ok(call('POST', `/admin/events/${t.ev.id}/publish`, undefined, admin.token));
+  await ok(call('POST', `/admin/events/${t.ev.id}/takedown`, { note: 'Checking the venue licence' }, admin.token));
+  await ok(call('POST', `/me/venue-bookings/${t.b.id}/cancel`, { reason: 'Licence not renewed' }, mgr.token));
+  await refused(t.ev.id);
+  assert.equal((await prisma.event.findUniqueOrThrow({ where: { id: t.ev.id } })).status, 'REJECTED');
+});
+

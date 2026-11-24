@@ -14,7 +14,8 @@
  * can't both get in.
  *
  * An event can be booked at the venue (on create, on request, or later): it stays on hold, and can't be submitted for
- * review, until the booking is CONFIRMED (see OrganizerService.submit).
+ * review, until the booking is CONFIRMED (see OrganizerService.submit). Cancelling the event cancels its pending or
+ * confirmed booking too (cancelForEvent, called from EventCancellation).
  *
  * Public:     GET /venue-listings, GET /venues/:slug/availability
  * Managers:   GET|PUT /me/venues/:id/listing, GET|POST /me/venues/:id/blackouts, DELETE /me/venues/:id/blackouts/:blackoutId,
@@ -28,7 +29,8 @@
  *   venue_booking.confirmed  organizer        the venue confirmed (or it was booked instantly)
  *   venue_booking.declined   organizer        declined by the venue, or because the venue confirmed another booking
  *   venue_booking.expired    organizer        nobody answered within the hold
- *   venue_booking.cancelled  the other side   cancelled; an organizer whose event is in review or on sale is told to act
+ *   venue_booking.cancelled  the other side   cancelled; an organizer whose event is in review or on sale is told to act;
+ *                                             the venue also hears when the booking goes because its event was cancelled
  *   venue_booking.message    the other side   a new message
  * "Organizer" means the org's active admins and managers and whoever made the request.
  */
@@ -749,6 +751,29 @@ export class VenueBookingService implements OnModuleInit, OnModuleDestroy {
     return { statusCode: 409, code: 'VENUE_BOOKING_UNAVAILABLE', bookingCode: b.code, bookingStatus: status, message: `Booking ${b.code} at ${b.venue.name} was ${what}. Pick another venue or time, then submit again.` };
   }
 
+  /**
+   * The event was cancelled (by its organizer or by Eventro): its venue booking, if it's still pending or confirmed
+   * and hasn't ended, is cancelled too, with the reason "The event was cancelled", and the venue's managers hear.
+   * Answers with the booking's code, or null when there was nothing to cancel. Safe to call again.
+   */
+  async cancelForEvent(eventId: string, actor: AuthUser) {
+    const b = await this.prisma.venueBooking.findUnique({ where: { eventId }, include: BOOKING_INCLUDE });
+    if (!b) return null;
+    const now = new Date();
+    const status = effectiveStatus(b, now);
+    if (status !== 'PENDING' && status !== 'CONFIRMED') return null;
+    if (wallClockToInstant(b.endsAt, venueZone(b.venue)) <= now) return null;
+    const reason = 'The event was cancelled';
+    const { count } = await this.prisma.venueBooking.updateMany({
+      where: { id: b.id, status: b.status },
+      data: { status: 'CANCELLED', cancelledById: actor.id, cancelledAt: now, cancelReason: reason },
+    });
+    if (!count) return null;
+    await this.audit.log(actor.id, 'venue_booking.cancel', 'VenueBooking', b.id, { side: 'ORGANIZER', reason, was: b.status, eventId });
+    void this.notifyVenueEventCancelled({ ...b, status: 'CANCELLED', cancelReason: reason });
+    return b.code;
+  }
+
   /** The booking summary shown on the organizer's event screens. */
   static eventSummary(b: Pick<VenueBooking, 'id' | 'code' | 'status' | 'startsAt' | 'endsAt' | 'holdUntil' | 'quotedCents' | 'currency' | 'declineReason' | 'cancelReason'> | null) {
     if (!b) return null;
@@ -989,6 +1014,29 @@ export class VenueBookingService implements OnModuleInit, OnModuleDestroy {
         cta: 'See your bookings',
         title: `Cancelled: ${b.org.name}`,
         body: `${when} at ${b.venue.name} is free again.`,
+      },
+      venueBookingPath(b.id),
+      { bookingId: b.id, venueId: b.venueId },
+      `You’re getting this because you manage ${b.venue.name} on Eventro.`,
+    );
+  }
+
+  private async notifyVenueEventCancelled(b: BookingRow) {
+    const to = await this.managers(b.venueId);
+    const when = this.when(b);
+    const title = b.event?.title ?? 'their event';
+    await this.tell(
+      'venue_booking.cancelled',
+      b.id,
+      to,
+      {
+        subject: `Cancelled: ${b.org.name}, ${when}`,
+        heading: `${title} was cancelled`,
+        preheader: `${when} at ${b.venue.name} is free again.`,
+        paragraphs: [`${b.org.name}’s event ${title} was cancelled, so booking ${b.code} for ${when} is cancelled too. The time is free again.`, 'If any payment was arranged for this booking, settle it directly with the organizer.'],
+        cta: 'See your bookings',
+        title: `Cancelled: ${b.org.name}`,
+        body: `${title} was cancelled. ${when} at ${b.venue.name} is free again.`,
       },
       venueBookingPath(b.id),
       { bookingId: b.id, venueId: b.venueId },

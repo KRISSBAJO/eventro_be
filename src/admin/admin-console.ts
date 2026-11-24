@@ -17,6 +17,7 @@ import { FxService } from '../fx/fx.module';
 import { MailService, render, type Mail } from '../mail/mail.module';
 import { CATEGORIES } from '../newsletter/newsletter.module';
 import { CheckoutModule } from '../checkout/checkout.module';
+import { VenuesModule } from '../venues/venues.module';
 import { AdminController, AdminService } from './admin.module';
 import { EventCancellation } from './cancel-event';
 
@@ -499,6 +500,8 @@ export class AdminConsoleService {
     const e = await this.prisma.event.findUnique({ where: { id }, include: { org: { select: { suspendedAt: true } } } });
     if (!e || !['REJECTED', 'IN_REVIEW'].includes(e.status)) throw new NotFoundException('Only events in review or taken down can be published.');
     if (e.org.suspendedAt) throw new BadRequestException('The organizer is suspended. Lift the suspension first.');
+    // Same rule as review approval: held at a booked venue, only with the booking confirmed.
+    await this.admin.assertVenueBookingConfirmed(id, 'Leave it unpublished so the organizer can pick another venue.');
     await this.prisma.event.update({ where: { id }, data: { status: 'PUBLISHED', reviewNote: null, salesPaused: false } });
     await this.audit.log(me.id, 'event.publish', 'Event', id);
     return { status: 'PUBLISHED' };
@@ -813,7 +816,8 @@ export class AdminConsoleController {
 }
 
 @Module({
-  imports: [CheckoutModule],
+  // VenuesModule: cancelling an event cancels its venue booking too.
+  imports: [CheckoutModule, VenuesModule],
   controllers: [AdminController, AdminConsoleController],
   providers: [AdminService, AdminConsoleService, EventCancellation],
   // The organizer module cancels events through the same service.

@@ -54,12 +54,19 @@ export class AdminService {
     return events.map((e) => ({ ...e, previewToken: previewToken(e.slug, e.status), flags: this.flags(e, pub.get(e.orgId) ?? 0) }));
   }
 
-  async approve(id: string, admin: AuthUser) {
-    // Held at a venue booked on Eventro: the booking has to still be confirmed (it can be cancelled during review).
-    const booking = await this.prisma.venueBooking.findUnique({ where: { eventId: id }, select: { code: true, status: true, holdUntil: true } });
+  /**
+   * An event held at a venue booked on Eventro goes live only while that booking is confirmed (it can be cancelled
+   * during review, or after a takedown). Used by review approval and by the console's publish.
+   */
+  async assertVenueBookingConfirmed(eventId: string, hint = 'Reject it so the organizer can pick another venue.') {
+    const booking = await this.prisma.venueBooking.findUnique({ where: { eventId }, select: { code: true, status: true, holdUntil: true } });
     if (booking && effectiveStatus(booking) !== 'CONFIRMED') {
-      throw new ConflictException({ statusCode: 409, code: 'VENUE_BOOKING_NOT_CONFIRMED', message: `This event’s venue booking (${booking.code}) is ${effectiveStatus(booking).toLowerCase()}, not confirmed. Reject it so the organizer can pick another venue.` });
+      throw new ConflictException({ statusCode: 409, code: 'VENUE_BOOKING_NOT_CONFIRMED', message: `This event’s venue booking (${booking.code}) is ${effectiveStatus(booking).toLowerCase()}, not confirmed. ${hint}` });
     }
+  }
+
+  async approve(id: string, admin: AuthUser) {
+    await this.assertVenueBookingConfirmed(id);
     const { count } = await this.prisma.event.updateMany({ where: { id, status: 'IN_REVIEW' }, data: { status: 'PUBLISHED', reviewNote: null } });
     if (!count) throw new NotFoundException('No event waiting for review with that id.');
     await this.audit.log(admin.id, 'event.approve', 'Event', id);

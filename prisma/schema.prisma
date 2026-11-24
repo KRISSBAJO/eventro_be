@@ -28,6 +28,8 @@ enum Category {
   WORKSHOP
   /// church services, worship nights, crusades, conferences and retreats
   FAITH
+  /// food festivals, tastings, supper clubs, brunches and drinks events
+  FOOD
   OTHER
 }
 
@@ -293,6 +295,9 @@ model VenueClaim {
   website    String?
   /// PENDING, APPROVED, REJECTED or REVOKED
   status     String    @default("PENDING")
+  /// The claimant added this venue to Eventro themselves (POST /me/venues): it stays hidden until the claim is
+  /// approved, and approving it shows the venue. Hidden venues with no such claim were hidden by Eventro.
+  newVenue   Boolean   @default(false)
   note       String?
   decidedBy  String?
   decidedAt  DateTime?

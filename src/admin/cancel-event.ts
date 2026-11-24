@@ -4,7 +4,8 @@
  * The event becomes CANCELLED with sales paused; active holds are released and resale listings taken down; every
  * paid order is refunded for what's left on it, one at a time through AdminService.refundOrder (the same path as
  * an admin refund, so resale payouts are held the same way); every ticket is voided; each buyer gets one email;
- * and the whole run is audited.
+ * a pending or confirmed venue booking for it is cancelled ("The event was cancelled") and the venue's managers
+ * hear; and the whole run is audited.
  *
  * A refund that fails leaves its order PAID and is listed in the answer and the audit entry. Calling cancel again
  * retries only those: orders already refunded are skipped, so nothing is refunded twice.
@@ -17,6 +18,7 @@ import { config } from '../config';
 import type { AuthUser } from '../common/auth';
 import { AdminService } from './admin.module';
 import { NoticeService } from '../push/notices';
+import { VenueBookingService } from '../venues/venue-bookings';
 
 const REFUNDABLE = ['PAID', 'PARTIALLY_REFUNDED'] as const;
 
@@ -33,6 +35,8 @@ export type CancelSummary = {
   ticketsVoided: number;
   listingsCancelled: number;
   holdsReleased: number;
+  /** the code of the venue booking cancelled with the event (it was pending or confirmed), else null */
+  venueBookingCancelled: string | null;
 };
 
 @Injectable()
@@ -47,6 +51,7 @@ export class EventCancellation {
     private readonly admin: AdminService,
     private readonly mail: MailService,
     private readonly notices: NoticeService,
+    private readonly bookings: VenueBookingService,
   ) {}
 
   /** What cancelling would do: the paid orders that would be refunded and how much, per currency. */
@@ -98,6 +103,11 @@ export class EventCancellation {
       this.prisma.hold.updateMany({ where: { eventId, status: 'ACTIVE' }, data: { status: 'RELEASED' } }),
       this.prisma.resaleListing.updateMany({ where: { eventId, status: { in: ['ACTIVE', 'HELD'] } }, data: { status: 'CANCELLED', cancelReason: 'Event cancelled', heldBy: null, heldUntil: null } }),
     ]);
+    // The venue booked for it on Eventro is let go, and its managers hear. Never stops the refunds.
+    const venueBookingCancelled = await this.bookings.cancelForEvent(eventId, actor).catch((err) => {
+      this.log.warn(`Venue booking of cancelled event ${eventId}: ${(err as Error).message}`);
+      return null;
+    });
 
     // Counted now: refunds void their own tickets as they go.
     const liveTickets = await this.prisma.ticket.count({ where: { eventId, status: { not: 'VOID' } } });
@@ -139,6 +149,7 @@ export class EventCancellation {
       ticketsVoided: liveTickets,
       listingsCancelled: listings.count,
       holdsReleased: holds.count,
+      venueBookingCancelled,
     });
 
     // 4. One email per order, after replying: refunded ones say how much; failed ones that a refund is coming.
@@ -156,6 +167,7 @@ export class EventCancellation {
       ticketsVoided: liveTickets,
       listingsCancelled: listings.count,
       holdsReleased: holds.count,
+      venueBookingCancelled,
     };
   }
 
