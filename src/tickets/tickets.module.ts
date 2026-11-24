@@ -8,6 +8,12 @@ import { qrToken } from '../domain/qr';
 import { permilleOf } from '../domain/money';
 import { sectionName, type SeatMap } from '../domain/seatmap';
 import { CurrentUser, type AuthUser } from '../common/auth';
+import { AuditService } from '../common/audit.service';
+import { MailService, render } from '../mail/mail.module';
+import { pastCutoff } from '../resale/resale.module';
+
+/** A pending transfer goes back to the sender after a week (or at the event's cutoff, if sooner). */
+const TRANSFER_DAYS = 7;
 
 export class TransferDto {
   @ApiProperty() @Transform(({ value }) => (typeof value === 'string' ? value.trim().toLowerCase() : value)) @IsEmail() email: string;
@@ -19,7 +25,16 @@ export class ListDto {
 
 @Injectable()
 export class TicketsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditService,
+    private readonly mail: MailService,
+  ) {}
+
+  /** Transfers nobody accepted in time go back to the sender. */
+  private async expireTransfers() {
+    await this.prisma.ticket.updateMany({ where: { status: 'TRANSFER_PENDING', transferExpiresAt: { lt: new Date() } }, data: { status: 'ACTIVE', transferTo: null, transferExpiresAt: null } });
+  }
 
   private async owned(id: string, user: AuthUser) {
     const t = await this.prisma.ticket.findUnique({ where: { id }, include: { ticketType: true, event: true } });
@@ -28,12 +43,23 @@ export class TicketsService {
   }
 
   async mine(user: AuthUser) {
+    await this.expireTransfers();
     const rows = await this.prisma.ticket.findMany({
       where: { OR: [{ ownerId: user.id }, { holderEmail: user.email }], status: { not: 'VOID' } },
       include: {
         ticketType: { select: { name: true, priceCents: true } },
-        order: { select: { id: true, createdAt: true, quantity: true, totalCents: true, status: true, currency: true } },
-        event: { select: { slug: true, title: true, subtitle: true, startsAt: true, doorsAt: true, imageUrl: true, seatMap: true, online: true, streamUrl: true, timezone: true, venue: { select: { name: true, address: true, city: true } } } },
+        order: {
+          select: {
+            id: true,
+            createdAt: true,
+            quantity: true,
+            totalCents: true,
+            status: true,
+            currency: true,
+            gift: { select: { id: true, recipientName: true, recipientEmail: true, sendAt: true, sentAt: true, claimedAt: true } },
+          },
+        },
+        event: { select: { slug: true, title: true, subtitle: true, startsAt: true, doorsAt: true, imageUrl: true, seatMap: true, online: true, streamUrl: true, timezone: true, resaleEnabled: true, resaleCapPercent: true, resaleRoyaltyPermille: true, transfersEnabled: true, transferCutoffMinutes: true, venue: { select: { name: true, address: true, city: true } } } },
       },
       orderBy: [{ event: { startsAt: 'asc' } }, { id: 'asc' }],
     });
@@ -46,9 +72,10 @@ export class TicketsService {
     });
     const incoming = await this.prisma.ticket.findMany({
       where: { transferTo: user.email, status: 'TRANSFER_PENDING' },
-      select: { id: true, holderName: true, event: { select: { title: true, startsAt: true } }, ticketType: { select: { name: true } } },
+      select: { id: true, holderName: true, transferExpiresAt: true, event: { select: { title: true, startsAt: true } }, ticketType: { select: { name: true } } },
     });
-    return { tickets, incomingTransfers: incoming };
+    // The event rules above and the fee rate let the website show the resale breakdown before listing.
+    return { tickets, incomingTransfers: incoming, resaleFeePermille: config.resaleFeePermille };
   }
 
   async qr(id: string, user: AuthUser) {
@@ -61,35 +88,70 @@ export class TicketsService {
     const t = await this.owned(id, user);
     if (email === user.email) throw new BadRequestException('That’s your own email.');
     if (t.status !== 'ACTIVE') throw new BadRequestException('Only active tickets can be transferred.');
-    return this.prisma.ticket.update({ where: { id }, data: { status: 'TRANSFER_PENDING', transferTo: email } });
+    if (!t.event.transfersEnabled) throw new BadRequestException('The organizer doesn’t allow transfers for this event.');
+    if (pastCutoff(t.event)) throw new BadRequestException('Transfers have closed for this event.');
+    const cutoff = t.event.startsAt.getTime() - t.event.transferCutoffMinutes * 60_000;
+    const expires = new Date(Math.min(Date.now() + TRANSFER_DAYS * 86_400_000, cutoff));
+    const out = await this.prisma.ticket.update({ where: { id }, data: { status: 'TRANSFER_PENDING', transferTo: email, transferExpiresAt: expires } });
+    await this.audit.log(user.id, 'ticket.transfer', 'Ticket', id, { to: email });
+    const { html, text } = render({
+      preheader: `${user.name} sent you a ticket to ${t.event.title}.`,
+      heading: `${user.name.split(' ')[0]} sent you a ticket`,
+      paragraphs: [
+        `${t.ticketType.name} for ${t.event.title}.`,
+        `Sign in to Eventro with this email (${email}) to accept it. If you don’t accept by ${expires.toUTCString().slice(0, 16)}, it goes back to ${user.name.split(' ')[0]}.`,
+      ],
+      cta: { label: 'Accept your ticket', url: `${config.webUrl}/signin?next=/tickets` },
+      footer: `${user.name} sent this from their Eventro account. Not expecting it? You can ignore this email.`,
+    });
+    void this.mail.send('ticket.transfer', { to: email, subject: `${user.name.split(' ')[0]} sent you a ticket to ${t.event.title}`, html, text });
+    return out;
   }
 
   async cancelTransfer(id: string, user: AuthUser) {
     const t = await this.owned(id, user);
     if (t.status !== 'TRANSFER_PENDING') throw new BadRequestException('There’s no transfer to cancel.');
-    return this.prisma.ticket.update({ where: { id }, data: { status: 'ACTIVE', transferTo: null } });
+    return this.prisma.ticket.update({ where: { id }, data: { status: 'ACTIVE', transferTo: null, transferExpiresAt: null } });
   }
 
   async accept(id: string, user: AuthUser) {
+    await this.expireTransfers();
     const { count } = await this.prisma.ticket.updateMany({
       where: { id, status: 'TRANSFER_PENDING', transferTo: user.email },
-      data: { status: 'ACTIVE', transferTo: null, ownerId: user.id, holderEmail: user.email, holderName: user.name },
+      data: { status: 'ACTIVE', transferTo: null, transferExpiresAt: null, ownerId: user.id, holderEmail: user.email, holderName: user.name },
     });
-    if (!count) throw new NotFoundException('Transfer not found.');
+    if (!count) throw new NotFoundException('Transfer not found, or it has expired.');
+    await this.audit.log(user.id, 'ticket.accept', 'Ticket', id);
     return this.prisma.ticket.findUnique({ where: { id } });
   }
 
   async list(id: string, user: AuthUser, priceCents: number) {
     const t = await this.owned(id, user);
+    if (t.ownerId !== user.id) throw new BadRequestException('Accept this ticket into your account before selling it.');
     if (t.status !== 'ACTIVE') throw new BadRequestException('Only active tickets can be listed.');
-    if (priceCents > t.ticketType.priceCents * 3) throw new BadRequestException('Resale is capped at 3× face value.');
-    const updated = await this.prisma.ticket.update({ where: { id }, data: { status: 'LISTED', listCents: priceCents } });
-    return { ...updated, payoutCents: priceCents - permilleOf(priceCents, config.resaleFeePermille) };
+    if (!t.event.resaleEnabled) throw new BadRequestException('The organizer doesn’t allow resale for this event.');
+    if (pastCutoff(t.event)) throw new BadRequestException('Resale has closed for this event.');
+    const face = t.ticketType.priceCents;
+    const cap = t.event.resaleCapPercent === null ? null : Math.floor((face * t.event.resaleCapPercent) / 100);
+    if (cap !== null && priceCents > cap) {
+      throw new BadRequestException(`The organizer caps resale at ${t.event.resaleCapPercent}% of face value: at most ${(cap / 100).toFixed(2)} ${t.event.currency}.`);
+    }
+    const royalty = permilleOf(priceCents, t.event.resaleRoyaltyPermille);
+    const fee = permilleOf(priceCents, config.resaleFeePermille);
+    const [updated, listing] = await this.prisma.$transaction([
+      this.prisma.ticket.update({ where: { id }, data: { status: 'LISTED', listCents: priceCents } }),
+      this.prisma.resaleListing.create({ data: { ticketId: id, eventId: t.eventId, sellerId: user.id, priceCents, faceCents: face, currency: t.event.currency } }),
+    ]);
+    await this.audit.log(user.id, 'resale.list', 'Ticket', id, { priceCents, listingId: listing.id });
+    return { ...updated, listingId: listing.id, feeCents: fee, royaltyCents: royalty, payoutCents: priceCents - fee - royalty, capCents: cap };
   }
 
   async unlist(id: string, user: AuthUser) {
     const t = await this.owned(id, user);
     if (t.status !== 'LISTED') throw new BadRequestException('This ticket isn’t listed.');
+    const held = await this.prisma.resaleListing.findFirst({ where: { ticketId: id, status: 'HELD', heldUntil: { gt: new Date() } } });
+    if (held) throw new BadRequestException('Someone is buying this ticket right now. Try again in a few minutes.');
+    await this.prisma.resaleListing.updateMany({ where: { ticketId: id, status: { in: ['ACTIVE', 'HELD'] } }, data: { status: 'CANCELLED', cancelReason: 'Removed by the seller' } });
     return this.prisma.ticket.update({ where: { id }, data: { status: 'ACTIVE', listCents: null } });
   }
 }

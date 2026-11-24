@@ -202,37 +202,9 @@ export class EventsController {
   }
 }
 
-@ApiTags('venues')
-@Controller('venues')
-export class VenuesController {
-  constructor(private readonly prisma: PrismaService) {}
-
-  @Public()
-  @Get()
-  list() {
-    return this.prisma.venue.findMany({ orderBy: [{ city: 'asc' }, { name: 'asc' }], select: { slug: true, name: true, city: true, address: true, capacity: true, lat: true, lng: true } });
-  }
-
-  @Public()
-  @Get(':slug')
-  async one(@Param('slug') slug: string) {
-    const v = await this.prisma.venue.findUnique({
-      where: { slug },
-      include: {
-        events: {
-          where: { status: 'PUBLISHED', visibility: 'PUBLIC', startsAt: { gte: new Date() } },
-          orderBy: { startsAt: 'asc' },
-          select: { slug: true, title: true, subtitle: true, startsAt: true, imageUrl: true },
-        },
-      },
-    });
-    if (!v) throw new NotFoundException('Venue not found.');
-    return v;
-  }
-}
 
 @Module({
-  controllers: [EventsController, VenuesController],
+  controllers: [EventsController],
   providers: [EventsService],
 })
 export class EventsModule {}

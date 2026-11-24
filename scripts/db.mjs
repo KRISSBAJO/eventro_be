@@ -16,6 +16,9 @@ const pg = new EmbeddedPostgres({
   password: 'eventro-local-dev',
   port: PORT,
   persistent: true,
+  // UTF-8 whatever the computer's language: Windows would otherwise pick WIN1252, which can't store emoji or
+  // letters like ọ and ẹ (orders with them failed).
+  initdbFlags: ['--encoding=UTF8', '--locale=C'],
   onLog: () => {},
   onError: (e) => console.error('[postgres]', e),
 });
@@ -28,8 +31,11 @@ if (fresh) {
 await pg.start();
 
 if (fresh) {
-  await pg.createDatabase('eventro');
-  await pg.createDatabase('eventro_test');
+  // template0 so the databases take the cluster's UTF-8 encoding explicitly
+  const client = pg.getPgClient();
+  await client.connect();
+  for (const db of ['eventro', 'eventro_test']) await client.query(`CREATE DATABASE "${db}" TEMPLATE template0 ENCODING 'UTF8' LC_COLLATE 'C' LC_CTYPE 'C'`);
+  await client.end();
 }
 
 console.log(`Postgres ready on 127.0.0.1:${PORT}`);

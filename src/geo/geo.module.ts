@@ -92,12 +92,13 @@ export class GeoService {
     const text = q.trim();
     if (text.length < 2) return [];
     const rows = await this.prisma.venue.findMany({
-      where: { name: { contains: text, mode: 'insensitive' }, ...(country ? { OR: [{ country: country.toUpperCase() }, { country: null }] } : {}) },
+      where: { hiddenAt: null, name: { contains: text, mode: 'insensitive' }, ...(country ? { OR: [{ country: country.toUpperCase() }, { country: null }] } : {}) },
       include: { _count: { select: { events: true } } },
       take: 20,
     });
     return rows
-      .sort((a, b) => b._count.events - a._count.events)
+      // verified venues first, then the most used
+      .sort((a, b) => Number(!!b.verifiedAt) - Number(!!a.verifiedAt) || b._count.events - a._count.events)
       .slice(0, 4)
       .map((v) => ({
         label: [v.name, v.address, v.city, v.region].filter(Boolean).join(', '),

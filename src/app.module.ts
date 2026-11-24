@@ -19,6 +19,9 @@ import { FxModule } from './fx/fx.module';
 import { NewsletterModule } from './newsletter/newsletter.module';
 import { MailModule } from './mail/mail.module';
 import { PriceDropModule } from './price-drops/price-drops.module';
+import { GiftModule } from './gifts/gifts.module';
+import { VenuesModule } from './venues/venues.module';
+import { ResaleModule } from './resale/resale.module';
 import { Payments } from './checkout/payments';
 
 @ApiTags('health')
@@ -58,6 +61,9 @@ class CoreModule {}
     NewsletterModule,
     MailModule,
     PriceDropModule,
+    GiftModule,
+    VenuesModule,
+    ResaleModule,
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_GUARD, useClass: AuthGuard }],

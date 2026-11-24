@@ -1,7 +1,7 @@
 import { BadRequestException, Body, Controller, Delete, Get, Headers, HttpCode, Module, Param, Post, Query, Req } from '@nestjs/common';
 import { ApiBearerAuth, ApiProperty, ApiPropertyOptional, ApiQuery, ApiTags } from '@nestjs/swagger';
-import { Transform } from 'class-transformer';
-import { IsBoolean, IsEmail, IsInt, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength } from 'class-validator';
+import { Transform, Type } from 'class-transformer';
+import { IsBoolean, IsDateString, IsEmail, IsInt, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
 import type { Request } from 'express';
 import { CheckoutService } from './checkout.service';
 import { Payments } from './payments';
@@ -15,12 +15,27 @@ export class CreateHoldDto {
   @ApiPropertyOptional({ description: 'Seat map section id, to sit in a specific section' }) @IsOptional() @IsString() @MaxLength(24) sectionId?: string;
 }
 
+export class GiftDto {
+  @ApiProperty({ example: 'Ada Obi' }) @IsString() @MinLength(2) @MaxLength(80) name: string;
+  @ApiProperty() @Transform(lower) @IsEmail() email: string;
+  @ApiPropertyOptional({ maxLength: 300 }) @IsOptional() @IsString() @MaxLength(300) message?: string;
+  @ApiPropertyOptional({ description: 'When to deliver (ISO time); now if left out' }) @IsOptional() @IsDateString() sendAt?: string;
+  @ApiPropertyOptional({ default: true }) @IsOptional() @IsBoolean() hidePrice?: boolean;
+}
+
 export class CreateOrderDto {
   @ApiProperty() @IsString() @MaxLength(40) holdId: string;
   @ApiProperty() @Transform(lower) @IsEmail() email: string;
   @ApiProperty() @IsString() @MinLength(2) @MaxLength(80) name: string;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() protection?: boolean;
   @ApiPropertyOptional() @IsOptional() @IsString() @Matches(/^[A-Za-z0-9]{3,15}$/) promoCode?: string;
+  @ApiPropertyOptional({ type: GiftDto, description: 'Buy for someone else' }) @IsOptional() @ValidateNested() @Type(() => GiftDto) gift?: GiftDto;
+}
+
+export class ResaleOrderDto {
+  @ApiProperty({ description: 'From POST /resale/:id/hold' }) @IsString() @MaxLength(64) holdKey: string;
+  @ApiProperty() @Transform(lower) @IsEmail() email: string;
+  @ApiProperty() @IsString() @MinLength(2) @MaxLength(80) name: string;
 }
 
 export class QuoteDto {
@@ -64,6 +79,12 @@ export class CheckoutController {
   @Delete('holds/:id')
   release(@Param('id') id: string) {
     return this.checkout.releaseHold(id);
+  }
+
+  @OptionalAuth()
+  @Post('resale/:id/orders')
+  resaleOrder(@Param('id') id: string, @Body() dto: ResaleOrderDto, @CurrentUser() user: AuthUser | null, @Req() req: Request) {
+    return this.checkout.createResaleOrder(id, dto, user, req.ip ?? null);
   }
 
   @OptionalAuth()

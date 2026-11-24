@@ -11,6 +11,8 @@ import { pickFromSections, type SeatMap, type SeatPick } from '../domain/seatmap
 import { Payments } from './payments';
 import { FxService } from '../fx/fx.module';
 import { MailService, formatMoney, render } from '../mail/mail.module';
+import { GiftService, type GiftInput } from '../gifts/gifts.module';
+import { ResaleService } from '../resale/resale.module';
 import { isCurrency, type Currency } from '../domain/currency';
 import type { AuthUser } from '../common/auth';
 
@@ -30,6 +32,8 @@ export class CheckoutService {
     private readonly audit: AuditService,
     private readonly fx: FxService,
     private readonly mail: MailService,
+    private readonly gifts: GiftService,
+    private readonly resale: ResaleService,
   ) {}
 
   /* ---------- holds ---------- */
@@ -132,7 +136,7 @@ export class CheckoutService {
   /* ---------- orders ---------- */
 
   async createOrder(
-    input: { holdId: string; email: string; name: string; protection?: boolean; promoCode?: string },
+    input: { holdId: string; email: string; name: string; protection?: boolean; promoCode?: string; gift?: GiftInput },
     user: AuthUser | null,
     clientIp: string | null,
   ) {
@@ -149,6 +153,7 @@ export class CheckoutService {
       promo = { code: p.code, percent: p.percent };
     }
 
+    const gift = input.gift ? this.gifts.validate(input.gift, input.email, hold.event.startsAt) : null;
     const q = quote(hold.ticketType.priceCents, hold.quantity, promo?.percent ?? null, !!input.protection);
     const since = new Date(now.getTime() - 10 * 60_000);
     const [sameEmail, sameIp] = await Promise.all([
@@ -189,6 +194,7 @@ export class CheckoutService {
         provider: provider.name,
         clientIp,
         ...(risk.score >= FRAUD_FLAG_THRESHOLD ? { fraudFlag: { create: { score: risk.score, reasons: risk.reasons } } } : {}),
+        ...(gift ? { gift: { create: gift } } : {}),
       },
     });
 
@@ -210,6 +216,53 @@ export class CheckoutService {
       redirectUrl: pay.redirectUrl ?? null,
       holdExpiresAt: hold.expiresAt,
       ...q,
+    };
+  }
+
+  /** Pays for a fan-resale listing the buyer is holding (POST /resale/:id/hold gave them the key). */
+  async createResaleOrder(listingId: string, input: { holdKey: string; email: string; name: string }, user: AuthUser | null, clientIp: string | null) {
+    const l = await this.prisma.resaleListing.findUnique({ where: { id: listingId }, include: { event: true, ticket: { include: { ticketType: true } }, order: true } });
+    if (!l || l.status !== 'HELD' || l.heldBy !== input.holdKey || !l.heldUntil || l.heldUntil <= new Date()) {
+      throw new ConflictException('Your hold on that ticket ran out. Pick it again.');
+    }
+    if (l.order) throw new ConflictException('An order already exists for this ticket.');
+    if (user?.id === l.sellerId) throw new BadRequestException('That’s your own listing.');
+    const id = orderCode();
+    const currency: Currency = isCurrency(l.currency) ? l.currency : 'USD';
+    const provider = this.payments.forCurrency(currency);
+    const order = await this.prisma.order.create({
+      data: {
+        id,
+        eventId: l.eventId,
+        ticketTypeId: l.ticket.ticketTypeId,
+        buyerId: user?.id ?? null,
+        email: input.email,
+        buyerName: input.name.trim(),
+        quantity: 1,
+        unitCents: l.priceCents,
+        subtotalCents: l.priceCents,
+        totalCents: l.priceCents,
+        currency,
+        provider: provider.name,
+        clientIp,
+        resaleListingId: l.id,
+      },
+    });
+    const pay = await provider.createPayment({ orderId: id, amountCents: l.priceCents, currency, email: input.email, description: `Resale: ${l.ticket.ticketType.name} — ${l.event.title}` });
+    await this.prisma.order.update({ where: { id }, data: { paymentRef: pay.paymentRef } });
+    return {
+      orderId: order.id,
+      status: order.status,
+      provider: provider.name,
+      currency,
+      clientSecret: pay.clientSecret ?? null,
+      redirectUrl: pay.redirectUrl ?? null,
+      holdExpiresAt: l.heldUntil,
+      unitCents: l.priceCents,
+      subtotalCents: l.priceCents,
+      discountCents: 0,
+      protectionCents: 0,
+      totalCents: l.priceCents,
     };
   }
 
@@ -258,9 +311,55 @@ export class CheckoutService {
     const result = await this.prisma.$transaction(
       async (tx) => {
         await tx.$queryRaw`SELECT id FROM "Order" WHERE id = ${orderId} FOR UPDATE`;
-        const order = await tx.order.findUnique({ where: { id: orderId }, include: { hold: true, event: true, ticketType: true } });
+        const order = await tx.order.findUnique({ where: { id: orderId }, include: { hold: true, event: true, ticketType: true, gift: true } });
         if (!order) throw new NotFoundException('Order not found.');
         if (order.status !== 'PENDING') return { order, refund: false, fresh: false };
+
+        if (order.resaleListingId) {
+          // Fan resale: the seller's ticket is cancelled and the buyer gets a new ticket for the same seat.
+          await tx.$queryRaw`SELECT id FROM "ResaleListing" WHERE id = ${order.resaleListingId} FOR UPDATE`;
+          const l = await tx.resaleListing.findUnique({ where: { id: order.resaleListingId }, include: { ticket: true } });
+          if (!l || l.status !== 'HELD' || l.ticket.status !== 'LISTED') {
+            await tx.order.update({ where: { id: order.id }, data: { status: 'CANCELLED' } });
+            return { order, refund: true, fresh: false };
+          }
+          const old = l.ticket;
+          const owner = order.buyerId ?? (await tx.user.findUnique({ where: { email: order.email }, select: { id: true } }))?.id ?? null;
+          await tx.ticket.update({ where: { id: old.id }, data: { status: 'VOID', listCents: null, resoldAt: new Date(), section: null, row: null, seat: null } });
+          await tx.ticket.create({
+            data: {
+              id: ticketCode(order.id, 0),
+              orderId: order.id,
+              eventId: order.eventId,
+              ticketTypeId: old.ticketTypeId,
+              ownerId: owner,
+              holderName: order.buyerName,
+              holderEmail: order.email,
+              section: old.section,
+              row: old.row,
+              seat: old.seat,
+            },
+          });
+          const fee = Math.round((l.priceCents * config.resaleFeePermille) / 1000);
+          const royalty = Math.round((l.priceCents * order.event.resaleRoyaltyPermille) / 1000);
+          await tx.resaleListing.update({
+            where: { id: l.id },
+            data: {
+              status: 'SOLD',
+              soldAt: new Date(),
+              heldBy: null,
+              sellerFeeCents: fee,
+              royaltyCents: royalty,
+              payoutCents: Math.max(0, l.priceCents - fee - royalty),
+              payoutStatus: 'PENDING',
+              // a day after the event (event times are wall-clock UTC, so a day covers the time zone)
+              payoutAvailableAt: new Date(order.event.startsAt.getTime() + 86_400_000),
+            },
+          });
+          const paid = await tx.order.update({ where: { id: order.id }, data: { status: 'PAID', paidAt: new Date(), buyerId: owner } });
+          return { order: paid, refund: false, fresh: true };
+        }
+
         await lockTicketType(tx, order.ticketTypeId);
 
         const now = new Date();
@@ -286,8 +385,10 @@ export class CheckoutService {
             eventId: order.eventId,
             ticketTypeId: order.ticketTypeId,
             ownerId: owner,
-            holderName: order.buyerName,
+            // A gift's tickets are held for the recipient: nobody can use them until they claim the gift.
+            holderName: order.gift ? order.gift.recipientName : order.buyerName,
             holderEmail: order.email,
+            ...(order.gift ? { status: 'TRANSFER_PENDING' as const } : {}),
             section: s.section,
             row: s.row,
             seat: s.seat,
@@ -310,7 +411,11 @@ export class CheckoutService {
       throw new ConflictException('Your seats were released before payment finished. You have been refunded in full.');
     }
     // Only the call that actually marked it paid sends the receipt (webhook retries don't send it again).
-    if (result.fresh) void this.sendReceipt(orderId).catch((e) => this.log.warn(`Receipt for ${orderId}: ${(e as Error).message}`));
+    if (result.fresh) {
+      void this.sendReceipt(orderId).catch((e) => this.log.warn(`Receipt for ${orderId}: ${(e as Error).message}`));
+      void this.gifts.afterPaid(orderId).catch((e) => this.log.warn(`Gift for ${orderId}: ${(e as Error).message}`));
+      if (result.order.resaleListingId) void this.resale.soldEmail(result.order.resaleListingId).catch((e) => this.log.warn(`Resale email for ${orderId}: ${(e as Error).message}`));
+    }
     return this.orderView(orderId);
   }
 
@@ -321,9 +426,15 @@ export class CheckoutService {
         event: { select: { title: true, startsAt: true, online: true, venue: { select: { name: true, city: true } } } },
         ticketType: { select: { name: true } },
         tickets: { select: { section: true, row: true, seat: true }, orderBy: { id: 'asc' } },
+        gift: true,
       },
     });
     if (!o) return;
+    const giftLine = o.gift
+      ? `This is a gift for ${o.gift.recipientName} (${o.gift.recipientEmail}). ${
+          o.gift.sendAt > new Date() ? `We’ll deliver it on ${o.gift.sendAt.toUTCString().slice(0, 16)}.` : 'We’ve sent it to them.'
+        } The tickets move to their account when they open it.`
+      : null;
     const when = new Intl.DateTimeFormat('en-US', { weekday: 'long', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'UTC' }).format(o.event.startsAt);
     const where = o.event.online ? 'Online' : o.event.venue ? `${o.event.venue.name}, ${o.event.venue.city}` : '';
     const seats = o.tickets.filter((t) => t.seat !== null).map((t) => `${t.section} · Row ${t.row} · Seat ${t.seat}`);
@@ -335,7 +446,7 @@ export class CheckoutService {
         `${o.quantity} × ${o.ticketType.name}`,
         `${when}${where ? ` · ${where}` : ''}`,
         ...(seats.length ? [`Seats: ${seats.join('; ')}`] : []),
-        'Your tickets are in your Eventro account. The QR code refreshes every few seconds, so screenshots won’t work at the door.',
+        giftLine ?? 'Your tickets are in your Eventro account. The QR code refreshes every few seconds, so screenshots won’t work at the door.',
       ],
       cta: { label: 'View my tickets', url: `${config.webUrl}/tickets` },
       footer: 'You got this email because you bought tickets on Eventro. Need help?',
@@ -362,6 +473,7 @@ export class CheckoutService {
         event: { select: { slug: true, title: true, startsAt: true, venue: { select: { name: true, city: true } } } },
         ticketType: { select: { name: true } },
         tickets: { select: { id: true, section: true, row: true, seat: true, status: true, holderName: true }, orderBy: { id: 'asc' } },
+        gift: { select: { id: true, recipientName: true, recipientEmail: true, message: true, sendAt: true, sentAt: true, claimedAt: true } },
       },
     });
     if (!o) throw new NotFoundException('Order not found.');

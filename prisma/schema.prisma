@@ -118,6 +118,7 @@ model User {
   orders      Order[]
   tickets     Ticket[]            @relation("TicketOwner")
   auditLogs   AuditLog[]
+  venueClaims VenueClaim[]
 }
 
 model Organization {
@@ -175,11 +176,44 @@ model Venue {
   lat       Float?
   lng       Float?
   capacity  Int?
-  /// Default seat map for events at this venue (same shape as Event.seatMap).
+  /// Official seat map for this venue (same shape as Event.seatMap), kept by its managers or Eventro.
   layout    Json?
+  about     String?
+  imageUrl  String?
+  website   String?
+  phone     String?
+  /// Checked by Eventro (shown as a badge; listed first in search).
+  verifiedAt DateTime?
+  /// Hidden from search and venue pages (duplicates, spam, closed venues).
+  hiddenAt  DateTime?
   createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 
   events Event[]
+  claims VenueClaim[]
+}
+
+/// Someone asking to manage a venue's page. Approved claims make that person a manager of the venue.
+model VenueClaim {
+  id         String    @id @default(cuid())
+  venueId    String
+  userId     String
+  /// owner, manager or staff: who they are at the venue
+  role       String
+  message    String
+  website    String?
+  /// PENDING, APPROVED, REJECTED or REVOKED
+  status     String    @default("PENDING")
+  note       String?
+  decidedBy  String?
+  decidedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  venue Venue @relation(fields: [venueId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([venueId, userId])
+  @@index([status, createdAt])
 }
 
 model Event {
@@ -221,6 +255,16 @@ model Event {
   promos      Promo[]
   priceDrops  PriceDrop[]
   priceWatches PriceWatch[]
+  resaleListings ResaleListing[]
+
+  /// Fan resale: allowed at all, the most a ticket may be listed for (% of face value; null = no cap),
+  /// the organizer's cut of each resale (per mille), transfers allowed, and how long before the start
+  /// both stop (minutes).
+  resaleEnabled         Boolean @default(true)
+  resaleCapPercent      Int?    @default(150)
+  resaleRoyaltyPermille Int     @default(0)
+  transfersEnabled      Boolean @default(true)
+  transferCutoffMinutes Int     @default(60)
 
   @@index([status, startsAt])
   @@index([orgId])
@@ -305,6 +349,10 @@ model Order {
   tickets    Ticket[]
   refunds    RefundRequest[]
   fraudFlag  FraudFlag?
+  gift       Gift?
+  /// set on orders that bought a fan-resale listing (one ticket, handed over from the seller)
+  resaleListingId String?        @unique
+  resaleListing   ResaleListing? @relation(fields: [resaleListingId], references: [id])
 
   @@index([eventId, status, paidAt])
   @@index([email])
@@ -326,12 +374,17 @@ model Ticket {
   listCents    Int?
   checkedInAt  DateTime?
   checkedInBy  String?
+  /// a pending transfer goes back to the holder after this
+  transferExpiresAt DateTime?
+  /// the ticket was sold on fan resale; the buyer got a new ticket for the same seat
+  resoldAt     DateTime?
   createdAt    DateTime     @default(now())
 
   order      Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)
   event      Event      @relation(fields: [eventId], references: [id])
   ticketType TicketType @relation(fields: [ticketTypeId], references: [id])
   owner      User?      @relation("TicketOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  listings   ResaleListing[]
 
   /// A reserved seat can only be sold once (GA tickets have no seat, so they don't collide).
   @@unique([eventId, section, row, seat])
@@ -473,4 +526,65 @@ model EmailLog {
 
   @@index([kind, createdAt])
   @@index([to])
+}
+
+/// An order bought for someone else. Its tickets are held (TRANSFER_PENDING) until the gift is delivered and the
+/// recipient claims them; `token` is the secret in the gift link.
+model Gift {
+  id             String    @id @default(cuid())
+  orderId        String    @unique
+  recipientName  String
+  recipientEmail String
+  message        String    @default("")
+  /// leave the price off the gift email and page
+  hidePrice      Boolean   @default(true)
+  sendAt         DateTime
+  sentAt         DateTime?
+  claimedAt      DateTime?
+  claimedBy      String?
+  token          String    @unique
+  createdAt      DateTime  @default(now())
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([sentAt, sendAt])
+  @@index([recipientEmail])
+}
+
+/// A fan selling a ticket on Eventro's official resale. The buyer pays through normal checkout; the seller's ticket
+/// is cancelled and the buyer gets a new one for the same seat. The seller is paid once the event has happened.
+model ResaleListing {
+  id         String    @id @default(cuid())
+  ticketId   String
+  eventId    String
+  sellerId   String
+  /// what the buyer pays (all-in), and the ticket's original price
+  priceCents Int
+  faceCents  Int
+  currency   String
+  /// ACTIVE, HELD (someone is checking out), SOLD or CANCELLED
+  status     String    @default("ACTIVE")
+  heldUntil  DateTime?
+  heldBy     String?
+  cancelReason String?
+  createdAt  DateTime  @default(now())
+  soldAt     DateTime?
+
+  /// After a sale: Eventro's fee, the organizer's cut, and what the seller gets
+  sellerFeeCents     Int?
+  royaltyCents       Int?
+  payoutCents        Int?
+  /// NONE, PENDING (until after the event), AVAILABLE, HELD (by an admin) or PAID
+  payoutStatus       String    @default("NONE")
+  payoutAvailableAt  DateTime?
+  paidOutAt          DateTime?
+  payoutNote         String?
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  event  Event  @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  order  Order?
+
+  @@index([eventId, status])
+  @@index([sellerId])
+  @@index([payoutStatus])
 }

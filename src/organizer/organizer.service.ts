@@ -162,12 +162,12 @@ export class OrganizerService {
 
   private async sameVenue(v: { name: string; city: string; lat?: number; lng?: number }, country: string | undefined) {
     const named = await this.prisma.venue.findFirst({
-      where: { name: { equals: v.name.trim(), mode: 'insensitive' }, city: { equals: v.city.trim(), mode: 'insensitive' }, ...(country ? { OR: [{ country }, { country: null }] } : {}) },
+      where: { hiddenAt: null, name: { equals: v.name.trim(), mode: 'insensitive' }, city: { equals: v.city.trim(), mode: 'insensitive' }, ...(country ? { OR: [{ country }, { country: null }] } : {}) },
     });
     if (named || v.lat === undefined || v.lng === undefined) return named;
     // ~150 m box around the point, then a venue there whose name shares a word with this one
     const d = 0.0014;
-    const near = await this.prisma.venue.findMany({ where: { lat: { gte: v.lat - d, lte: v.lat + d }, lng: { gte: v.lng - d, lte: v.lng + d } }, take: 10 });
+    const near = await this.prisma.venue.findMany({ where: { hiddenAt: null, lat: { gte: v.lat - d, lte: v.lat + d }, lng: { gte: v.lng - d, lte: v.lng + d } }, take: 10 });
     const words = (s: string) => new Set(s.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2));
     const mine = words(v.name);
     return near.find((n) => [...words(n.name)].some((w) => mine.has(w))) ?? null;
@@ -297,6 +297,11 @@ export class OrganizerService {
       ...(dto.doorsAt ? { doorsAt: new Date(dto.doorsAt) } : {}),
       ...(dto.endsAt ? { endsAt: new Date(dto.endsAt) } : {}),
       ...(dto.visibility ? { visibility: dto.visibility } : {}),
+      ...(dto.resaleEnabled !== undefined ? { resaleEnabled: dto.resaleEnabled } : {}),
+      ...(dto.resaleCapPercent !== undefined ? { resaleCapPercent: dto.resaleCapPercent } : {}),
+      ...(dto.resaleRoyaltyPermille !== undefined ? { resaleRoyaltyPermille: dto.resaleRoyaltyPermille } : {}),
+      ...(dto.transfersEnabled !== undefined ? { transfersEnabled: dto.transfersEnabled } : {}),
+      ...(dto.transferCutoffMinutes !== undefined ? { transferCutoffMinutes: dto.transferCutoffMinutes } : {}),
     };
     return this.prisma.event.update({ where: { id }, data });
   }

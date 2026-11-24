@@ -117,6 +117,17 @@ export class UpdateEventDto {
   @ApiPropertyOptional() @IsOptional() @IsDateString() doorsAt?: string;
   @ApiPropertyOptional() @IsOptional() @IsDateString() endsAt?: string;
   @ApiPropertyOptional({ enum: ['PUBLIC', 'UNLISTED'] }) @IsOptional() @IsIn(['PUBLIC', 'UNLISTED']) visibility?: 'PUBLIC' | 'UNLISTED';
+  /** Fan resale and transfer rules */
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() resaleEnabled?: boolean;
+  @ApiPropertyOptional({ description: 'Most a ticket may be resold for, % of face value (100–1000); null = no cap', nullable: true })
+  @IsOptional()
+  @IsInt()
+  @Min(100)
+  @Max(1000)
+  resaleCapPercent?: number | null;
+  @ApiPropertyOptional({ description: 'Organizer share of each resale, per mille (0–200 = 0–20%)' }) @IsOptional() @IsInt() @Min(0) @Max(200) resaleRoyaltyPermille?: number;
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() transfersEnabled?: boolean;
+  @ApiPropertyOptional({ description: 'Resale and transfers stop this many minutes before the start (0–10080)' }) @IsOptional() @IsInt() @Min(0) @Max(10_080) transferCutoffMinutes?: number;
 }
 
 export class UpdateTicketTypeDto {

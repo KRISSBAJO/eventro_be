@@ -41,7 +41,7 @@ npm test
 Runs against a separate `eventro_test` database (created by `db:start`; override with `TEST_DATABASE_URL`). It refuses to run against any database whose name doesn't contain `eventro_test`.
 
 - **Unit:** fees, quotes, QR tokens, seat-map validation, seat assignment, fraud scoring.
-- **End to end over HTTP:** holds reserve exact seats that match the availability preview; quotes with promo codes; the organizer creates an event and a seat map, gets reviewed and approved; a fan buys with a promo code and gets seats 104-A1/A2; the next group gets A3/A4; QR check-in (valid, duplicate, invalid, tampered); transfer and accept; resale cap; refund that voids the tickets and returns the seats to sale; stats and audit log.
+- **End to end over HTTP:** holds reserve exact seats that match the availability preview; quotes with promo codes; the organizer creates an event and a seat map, gets reviewed and approved; a fan buys with a promo code and gets seats 104-A1/A2; the next group gets A3/A4; QR check-in (valid, duplicate, invalid, tampered); transfer and accept; resale listing rules, buying a resale ticket and the payout queue; transfer rules and expiry; refund that voids the tickets and returns the seats to sale; stats and audit log.
 - **Concurrency:** 12 simultaneous holds on 5 seats, so exactly 5 succeed.
 - **Worldwide:** a naira event paid through a stand-in Paystack (underpayments refused, webhook signatures checked,
   tickets issued once); venue time zones from the map position; online events keep the organizer's zone and give
@@ -101,6 +101,37 @@ Fulfilment can safely run more than once. If a hold expired during payment and t
   pauses their sales and blocks resuming or submitting), all events (take down, publish, pause sales), orders
   (search, refund), subscribers (CSV export, broadcasts with a test send), price drops, the email log and the audit
   log. Suspended accounts can't sign in and their tokens stop working at once.
+
+## Gifted tickets
+
+`POST /orders` takes an optional `gift: { name, email, message?, sendAt?, hidePrice? }`. A gift's tickets are created
+held (`TRANSFER_PENDING`), so nobody can use them yet. At `sendAt` (or right after payment) the recipient gets an
+email with a private link to `/gift/:token`; `GET /gifts/:token` shows the gift (no details before delivery) and
+`POST /gifts/:token/claim` moves the tickets into the signed-in account. The buyer's receipt says it's a gift; they
+can resend or deliver early with `POST /gifts/:id/resend`, or take tickets back by cancelling the transfer. Scheduled
+gifts go out within a minute of their time.
+
+## Resale and transfers
+
+Organizers set the rules per event with `PATCH /organizer/events/:id`: `resaleEnabled` (default on),
+`resaleCapPercent` (highest resale price as a % of face value; default 150, `null` for no cap),
+`resaleRoyaltyPermille` (the organizer's cut of each resale, 0–200 = 0–20%), `transfersEnabled` (default on) and
+`transferCutoffMinutes` (no transfers or new listings this close to the start; default 60).
+
+- **Listing:** `POST /tickets/:id/listing { priceCents }` checks the rules and returns the breakdown: the cap,
+  Eventro's 5% seller fee, the organizer royalty and what the seller receives. `DELETE` takes it down (not while a
+  buyer is holding it). A listed ticket has no QR code.
+- **Buying:** `GET /events/:slug/resale` lists active listings. `POST /resale/:id/hold` holds one for 10 minutes and
+  returns a `holdKey`; `POST /resale/:id/orders { holdKey, email, name }` creates the order, which is paid like any
+  other. On payment the seller's ticket is voided and the buyer gets a new ticket (new code) for the same seat, and
+  the seller is emailed.
+- **Payouts:** the seller's payout is held (`PENDING`) until 24 hours after the event starts, then `AVAILABLE`.
+  `GET /me/resale` shows a seller's listings, sales and payouts. Admins work the queue with
+  `POST /admin/resale/:id/payout { action: PAY | HOLD | RELEASE, note? }` and can take a listing down with
+  `POST /admin/resale/:id/delist { reason }`. Refunding a resale order puts its payout on hold.
+- **Transfers:** `POST /tickets/:id/transfer { email }` emails the recipient a link to accept. Unaccepted transfers
+  expire after 7 days or at the cutoff, whichever is first, and the ticket goes back to the sender. Every transfer is
+  in the audit log.
 
 ## Venues
 
@@ -190,8 +221,10 @@ All routes are under `/api/v1`. Send `Authorization: Bearer <token>` from `/auth
 | Media | `GET /media/config`, `POST /media/uploads`, `PUT /media/uploads/:id`, `POST /media/uploads/:id/complete`, `GET /media/uploads/:id`, `PUT /organizer/events/:id/media` |
 | Organizer | `POST/GET /organizer/orgs`, `PATCH /organizer/orgs/:orgId`, `GET …/orders/recent`, team `GET/POST /organizer/orgs/:orgId/team`, `PATCH/DELETE …/team/:memberId`, `POST /organizer/invites/accept`, payouts `GET /organizer/orgs/:orgId/payouts`, `PUT …/payout-settings`, `POST …/payouts/onboarding` |
 | Organizer events | `POST/GET /organizer/orgs/:orgId/events`, `GET/PATCH /organizer/events/:id`, ticket types `POST/PATCH/DELETE …/ticket-types/:ttId`, `POST …/submit`, `POST …/pause`, `POST …/resume`, `PUT …/seat-map`, `POST …/seat-map/template`, `GET …/stats?days=30`, `GET …/attendees`, `GET …/attendees.csv`, `POST …/check-in`, `DELETE …/check-in/:ticketId`, promos `GET/POST …/promos`, `PATCH/DELETE …/promos/:code` |
+| Resale | `GET /events/:slug/resale`, `POST /resale/:id/hold`, `POST /resale/:id/orders`, `GET /me/resale` |
+| Gifts | `GET /gifts/:token`, `POST /gifts/:token/claim`, `POST /gifts/:id/resend` |
 | Price drops | `POST /events/:slug/price-watch`, `GET /events/:slug/price-drop`, `DELETE /price-watch/:token`, `GET /organizer/events/:id/price-drops` |
-| Admin console | `GET /admin/overview`, `GET/PATCH /admin/users[/:id]`, `GET/PATCH /admin/orgs[/:id]`, `GET /admin/events`, `POST /admin/events/:id/takedown`, `…/publish`, `…/sales`, `GET /admin/orders`, `POST /admin/orders/:id/refund`, `GET /admin/subscribers`, `GET /admin/subscribers.csv`, `GET /admin/broadcast/audience`, `POST /admin/broadcast`, `GET /admin/price-drops`, `GET /admin/emails` |
+| Admin console | `GET /admin/overview`, `GET/PATCH /admin/users[/:id]`, `GET/PATCH /admin/orgs[/:id]`, `GET /admin/events`, `POST /admin/events/:id/takedown`, `…/publish`, `…/sales`, `GET /admin/orders`, `POST /admin/orders/:id/refund`, `GET /admin/subscribers`, `GET /admin/subscribers.csv`, `GET /admin/broadcast/audience`, `POST /admin/broadcast`, `GET /admin/price-drops`, `GET /admin/emails`, `GET /admin/resale?status&q`, `GET /admin/resale/payouts?status`, `POST /admin/resale/:id/delist`, `POST /admin/resale/:id/payout` |
 | Admin | `GET /admin/reviews`, `POST /admin/events/:id/approve`, `POST /admin/events/:id/reject`, `GET /admin/refunds`, `POST /admin/refunds/:id/decide`, `GET /admin/fraud`, `POST /admin/fraud/:id/decide`, `GET /admin/audit` |
 
 Team roles: **ADMIN** (everything, including payouts and team), **MANAGER** (events, attendees, promos), **DOOR** (check-in only).
@@ -199,7 +232,7 @@ Team roles: **ADMIN** (everything, including payouts and team), **MANAGER** (eve
 ## Not done yet
 
 - **Card payments in the browser:** with Stripe keys set, `POST /orders` returns a PaymentIntent, but the website doesn't load Stripe's card form yet, so it only completes test-mode (mock) payments today.
-- **More email:** transfer invites and password reset aren't sent yet (receipts, newsletter, price drops and broadcasts are).
+- **More email:** password reset isn't sent yet (receipts, gifts, transfers, resale sales, newsletter, price drops and broadcasts are).
 - **Rate limiting** on auth and checkout. Put it behind a gateway, or add `@nestjs/throttler`.
-- **Resale purchases:** listing works, but buying a listed ticket doesn't yet.
+- **Paying out resale sellers:** the payout queue records PAID, but money isn't moved automatically yet (Stripe Connect transfers to fans).
 - **Cancelling a whole event** with bulk refunds.

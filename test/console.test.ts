@@ -391,3 +391,277 @@ test('ticket tiers: perks, badges and the order fans see them in', async () => {
   assert.equal(pub.ticketTypes[1].badge, 'Limited');
   assert.equal(pub.category, 'FAITH');
 });
+
+test('gifted tickets: held until delivered and claimed, scheduled gifts wait', async () => {
+  const admin = await account('admin@test.local', 'Admin');
+  const org = await account(`gift-org-${run}@test.local`, 'Gia Organizer');
+  const buyer = await account(`gift-buyer-${run}@test.local`, 'Bola Buyer');
+  const friend = await account(`gift-friend-${run}@test.local`, 'Fumi Friend');
+  const stranger = await account(`gift-stranger-${run}@test.local`, 'Sam Stranger');
+  const { ev, tt } = await publishedEvent(org.token, admin.token, 'Gift Garden');
+
+  // Gifting to yourself is refused.
+  const h0 = await ok(call('POST', '/holds', { ticketTypeId: tt.id, quantity: 1 }, buyer.token));
+  assert.equal((await call('POST', '/orders', { holdId: h0.id, email: `gift-buyer-${run}@test.local`, name: 'Bola Buyer', gift: { name: 'Me', email: `GIFT-BUYER-${run}@test.local` } }, buyer.token)).status, 400);
+
+  // A gift delivered now.
+  const before = outbox.length;
+  const order = await ok(call('POST', '/orders', { holdId: h0.id, email: `gift-buyer-${run}@test.local`, name: 'Bola Buyer', gift: { name: 'Fumi', email: `gift-friend-${run}@test.local`, message: 'Happy birthday! 🎉' } }, buyer.token));
+  const paid = await ok(call('POST', `/orders/${order.orderId}/pay`));
+  assert.equal(paid.gift.recipientName, 'Fumi');
+  assert.ok(paid.tickets.every((t: Json) => t.status === 'TRANSFER_PENDING' && t.holderName === 'Fumi'), 'held for the gift');
+
+  // The buyer can't scan a gift.
+  const mine = await ok(call('GET', '/me/tickets', undefined, buyer.token));
+  const held = mine.tickets.find((t: Json) => t.orderId === order.orderId);
+  assert.equal(held.order.gift.recipientName, 'Fumi');
+  assert.equal((await call('GET', `/tickets/${held.id}/qr`, undefined, buyer.token)).status, 400);
+
+  // The recipient gets the gift email (price hidden by default), with the link.
+  const mail = await waitFor(() => outbox.slice(before).find((m) => m.to === `gift-friend-${run}@test.local`));
+  assert.match(mail.subject, /Bola sent you tickets/);
+  assert.ok(mail.html.includes('Happy birthday!'));
+  assert.ok(!/\$\d/.test(mail.html), 'no price in the gift email');
+  const tokenFromMail = /\/gift\/([A-Za-z0-9_-]+)/.exec(mail.html)![1];
+  // The buyer's receipt says it's a gift.
+  const receipt = await waitFor(() => outbox.slice(before).find((m) => m.to === `gift-buyer-${run}@test.local`));
+  assert.ok(receipt.html.includes('This is a gift for Fumi'));
+
+  const view = await ok(call('GET', `/gifts/${tokenFromMail}`));
+  assert.equal(view.status, 'ready');
+  assert.equal(view.from, 'Bola Buyer');
+  assert.equal(view.message, 'Happy birthday! 🎉');
+  assert.equal(view.quantity, 1);
+  assert.equal(view.totalCents, undefined, 'price hidden');
+
+  // The buyer can't claim their own gift; the link holder can, once.
+  assert.equal((await call('POST', `/gifts/${tokenFromMail}/claim`, undefined, buyer.token)).status, 400);
+  assert.equal((await call('POST', `/gifts/${tokenFromMail}/claim`)).status, 401);
+  const claimed = await ok(call('POST', `/gifts/${tokenFromMail}/claim`, undefined, friend.token));
+  assert.equal(claimed.tickets, 1);
+  assert.equal((await ok(call('POST', `/gifts/${tokenFromMail}/claim`, undefined, friend.token))).already, true);
+  assert.equal((await call('POST', `/gifts/${tokenFromMail}/claim`, undefined, stranger.token)).status, 400);
+  const friendTickets = await ok(call('GET', '/me/tickets', undefined, friend.token));
+  const got = friendTickets.tickets.find((t: Json) => t.orderId === order.orderId);
+  assert.equal(got.status, 'ACTIVE');
+  await ok(call('GET', `/tickets/${got.id}/qr`, undefined, friend.token));
+  assert.equal((await ok(call('GET', `/gifts/${tokenFromMail}`))).status, 'claimed');
+
+  // A scheduled gift: nothing goes out and the link shows nothing until the date; "send now" delivers it.
+  const h1 = await ok(call('POST', '/holds', { ticketTypeId: tt.id, quantity: 2 }, buyer.token));
+  const later = new Date(Date.now() + 5 * 86_400_000).toISOString();
+  const o2 = await ok(call('POST', '/orders', { holdId: h1.id, email: `gift-buyer-${run}@test.local`, name: 'Bola Buyer', gift: { name: 'Fumi', email: `gift-friend-${run}@test.local`, sendAt: later, hidePrice: false } }, buyer.token));
+  const p2 = await ok(call('POST', `/orders/${o2.orderId}/pay`));
+  assert.equal(p2.gift.sentAt, null);
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(outbox.filter((m) => m.to === `gift-friend-${run}@test.local`).length, 1, 'scheduled gift not sent yet');
+  // Too late a date is refused.
+  const h2 = await ok(call('POST', '/holds', { ticketTypeId: tt.id, quantity: 1 }, buyer.token));
+  const tooLate = new Date(Date.now() + 90 * 86_400_000).toISOString();
+  assert.equal((await call('POST', '/orders', { holdId: h2.id, email: `gift-buyer-${run}@test.local`, name: 'Bola Buyer', gift: { name: 'Fumi', email: `gift-friend-${run}@test.local`, sendAt: tooLate } }, buyer.token)).status, 400);
+
+  assert.equal((await call('POST', `/gifts/${p2.gift.id}/resend`, undefined, stranger.token)).status, 404);
+  await ok(call('POST', `/gifts/${p2.gift.id}/resend`, undefined, buyer.token));
+  const second = await waitFor(() => outbox.filter((m) => m.to === `gift-friend-${run}@test.local`)[1]);
+  assert.match(second.html, /\$\d/, 'price shown when not hidden');
+  const t2 = /\/gift\/([A-Za-z0-9_-]+)/.exec(second.html)![1];
+  const v2 = await ok(call('GET', `/gifts/${t2}`));
+  assert.equal(v2.quantity, 2);
+  assert.ok(v2.totalCents > 0);
+});
+
+test('venue directory: claims, managers, official layouts, admin verify, hide and merge', async () => {
+  const admin = await account('admin@test.local', 'Admin');
+  const org = await account(`vd-org-${run}@test.local`, 'Vic Organizer');
+  const mgr = await account(`vd-mgr-${run}@test.local`, 'Mia Manager');
+  const fan = await account(`vd-fan-${run}@test.local`, 'Fred Fan');
+  const o = await ok(call('POST', '/organizer/orgs', { name: `Venue Co ${run}` }, org.token));
+  const mk = async (title: string, venue: Json) =>
+    ok(call('POST', `/organizer/orgs/${o.id}/events`, { title, category: 'CONCERTS', startsAt: new Date(Date.now() + 30 * 86_400_000).toISOString(), venue, ticketTypes: [{ name: 'GA', basePriceCents: 1000, capacity: 50 }] }, org.token));
+  const e1 = await mk(`Night One ${run}`, { name: `Unity Hall ${run}`, address: '9 Unity Rd', city: 'Ibadan', lat: 7.3775, lng: 3.947 });
+  // A typo'd copy of the same place, far enough away not to be reused automatically
+  const e2 = await mk(`Night Two ${run}`, { name: `The Unity Hall ${run} Ibadan`, address: '9 Unity Road', city: 'Ibadan' });
+  const v1 = (await ok(call('GET', `/organizer/events/${e1.id}`, undefined, org.token))).venue;
+  const v2 = (await ok(call('GET', `/organizer/events/${e2.id}`, undefined, org.token))).venue;
+  assert.notEqual(v1.id, v2.id);
+
+  // Public page
+  const page = await ok(call('GET', `/venues/${v1.slug}`));
+  assert.equal(page.verified, false);
+  assert.equal(page.managed, false);
+
+  // Claim → admin approves → manager edits and saves a layout
+  assert.equal((await call('POST', `/venues/${v1.slug}/claims`, { role: 'manager', message: 'short' }, mgr.token)).status, 400);
+  await ok(call('POST', `/venues/${v1.slug}/claims`, { role: 'manager', message: 'I run bookings at Unity Hall, email me at bookings@unityhall.example' }, mgr.token));
+  assert.equal((await call('POST', `/venues/${v1.slug}/claims`, { role: 'manager', message: 'Again, I run bookings here.' }, mgr.token)).status, 400);
+  assert.equal((await call('PATCH', `/me/venues/${v1.id}`, { about: 'Hi' }, mgr.token)).status, 403, 'not a manager yet');
+  const queue = await ok(call('GET', '/admin/venue-claims?status=PENDING', undefined, admin.token));
+  const claim = queue.items.find((c: Json) => c.venue.id === v1.id);
+  assert.equal((await call('POST', `/admin/venue-claims/${claim.id}/decide`, { decision: 'APPROVE' }, fan.token)).status, 403);
+  const before = outbox.length;
+  await ok(call('POST', `/admin/venue-claims/${claim.id}/decide`, { decision: 'APPROVE' }, admin.token));
+  assert.ok(await waitFor(() => outbox.slice(before).find((m) => m.to === `vd-mgr-${run}@test.local` && /You now manage/.test(m.subject))));
+  const mine = await ok(call('GET', '/me/venues', undefined, mgr.token));
+  assert.equal(mine.managed[0].venue.id, v1.id);
+  const upd = await ok(call('PATCH', `/me/venues/${v1.id}`, { about: 'A 600-seat hall in the heart of Ibadan.', website: 'https://unityhall.example', phone: '+234 803 000 0000' }, mgr.token));
+  assert.equal(upd.about, 'A 600-seat hall in the heart of Ibadan.');
+  assert.equal((await call('PATCH', `/me/venues/${v1.id}`, { website: 'not a url' }, mgr.token)).status, 400);
+  // Official layout, from an arena template the organizer used
+  const ev1 = await ok(call('GET', `/organizer/events/${e1.id}`, undefined, org.token));
+  const tpl = await ok(call('POST', `/organizer/events/${e1.id}/seat-map/template`, { template: 'arena', floor: ev1.ticketTypes[0].id, lower: ev1.ticketTypes[0].id, upper: ev1.ticketTypes[0].id }, org.token));
+  const saved = await ok(call('PUT', `/me/venues/${v1.id}/layout`, { layout: tpl.seatMap }, mgr.token));
+  assert.ok(saved.places > 1000);
+  assert.equal((await call('PUT', `/me/venues/${v1.id}/layout`, { layout: { version: 1, sections: [] } }, mgr.token)).status, 400);
+  const official = await ok(call('GET', `/venues/${v1.slug}/layout`));
+  assert.equal(official.sections, tpl.seatMap.sections.length);
+  assert.equal((await ok(call('GET', `/venues/${v1.slug}`))).managed, true);
+
+  // Admin: duplicates, verify, merge, hide
+  const dups = await ok(call('GET', `/admin/venues/${v1.id}/duplicates`, undefined, admin.token));
+  assert.ok(dups.some((d: Json) => d.id === v2.id), 'the typo is suggested as a duplicate');
+  await ok(call('PATCH', `/admin/venues/${v1.id}`, { verified: true }, admin.token));
+  assert.equal((await ok(call('GET', `/venues/${v1.slug}`))).verified, true);
+  const merged = await ok(call('POST', `/admin/venues/${v2.id}/merge`, { intoId: v1.id }, admin.token));
+  assert.equal(merged.eventsMoved, 1);
+  assert.equal((await ok(call('GET', `/organizer/events/${e2.id}`, undefined, org.token))).venue.id, v1.id);
+  assert.equal((await call('GET', `/venues/${v2.slug}`)).status, 404);
+  await ok(call('PATCH', `/admin/venues/${v1.id}`, { hidden: true }, admin.token));
+  assert.equal((await call('GET', `/venues/${v1.slug}`)).status, 404, 'hidden venues have no page');
+  const search = await ok(call('GET', `/geo/search?q=${encodeURIComponent(`Unity Hall ${run}`)}`));
+  assert.ok(!search.some((s: Json) => s.venueId === v1.id), 'hidden venues are not suggested');
+  await ok(call('PATCH', `/admin/venues/${v1.id}`, { hidden: false }, admin.token));
+  const audit = await ok(call('GET', '/admin/audit?limit=60', undefined, admin.token));
+  for (const a of ['venue.claim', 'venue_claim.approved', 'venue.update', 'venue.layout', 'venue.verify', 'venue.merge', 'venue.hide']) assert.ok(audit.some((x: Json) => x.action === a), `audit has ${a}`);
+});
+
+test('gifts: taking a scheduled gift back means no email and nothing to resend', async () => {
+  const admin = await account('admin@test.local', 'Admin');
+  const org = await account(`gtb-org-${run}@test.local`, 'Tara Organizer');
+  const buyer = await account(`gtb-buyer-${run}@test.local`, 'Ben Buyer');
+  const { tt } = await publishedEvent(org.token, admin.token, 'Takeback Theatre');
+  const hold = await ok(call('POST', '/holds', { ticketTypeId: tt.id, quantity: 2 }, buyer.token));
+  const later = new Date(Date.now() + 3 * 86_400_000).toISOString();
+  const o = await ok(call('POST', '/orders', { holdId: hold.id, email: `gtb-buyer-${run}@test.local`, name: 'Ben Buyer', gift: { name: 'Kemi', email: `gtb-kemi-${run}@test.local`, sendAt: later } }, buyer.token));
+  const paid = await ok(call('POST', `/orders/${o.orderId}/pay`));
+  for (const t of paid.tickets) await ok(call('DELETE', `/tickets/${t.id}/transfer`, undefined, buyer.token));
+  const r = await call('POST', `/gifts/${paid.gift.id}/resend`, undefined, buyer.token);
+  assert.equal(r.status, 400);
+  assert.match(r.body.message, /took these tickets back/);
+  await new Promise((res) => setTimeout(res, 300));
+  assert.equal(outbox.filter((m) => m.to === `gtb-kemi-${run}@test.local`).length, 0, 'no gift email');
+  // The tickets are the buyer's again.
+  const mine = await ok(call('GET', '/me/tickets', undefined, buyer.token));
+  assert.ok(mine.tickets.filter((t: Json) => t.orderId === o.orderId).every((t: Json) => t.status === 'ACTIVE'));
+});
+
+test('fan resale: organizer rules, listing, buying, handover, seller payout and admin controls', async () => {
+  const admin = await account('admin@test.local', 'Admin');
+  const org = await account(`rs-org-${run}@test.local`, 'Rita Organizer');
+  const seller = await account(`rs-seller-${run}@test.local`, 'Sola Seller');
+  const buyer = await account(`rs-buyer-${run}@test.local`, 'Bayo Buyer');
+  const { ev, tt } = await publishedEvent(org.token, admin.token, 'Resale Rally');
+  // Organizer: cap at 120% of face, 5% royalty
+  await ok(call('PATCH', `/organizer/events/${ev.id}`, { resaleCapPercent: 120, resaleRoyaltyPermille: 50 }, org.token));
+
+  // Seller buys a ticket
+  const h = await ok(call('POST', '/holds', { ticketTypeId: tt.id, quantity: 1 }, seller.token));
+  const o = await ok(call('POST', '/orders', { holdId: h.id, email: `rs-seller-${run}@test.local`, name: 'Sola Seller' }, seller.token));
+  const paid = await ok(call('POST', `/orders/${o.orderId}/pay`));
+  const ticketId = paid.tickets[0].id;
+  const face = tt.priceCents as number;
+  // My tickets carries the rules and the fee rate, so the sell sheet can show the breakdown before listing
+  const own = await ok(call('GET', '/me/tickets', undefined, seller.token));
+  const ownEv = own.tickets.find((t: Json) => t.id === ticketId).event;
+  assert.equal(own.resaleFeePermille, 50);
+  assert.deepEqual([ownEv.resaleEnabled, ownEv.resaleCapPercent, ownEv.resaleRoyaltyPermille, ownEv.transfersEnabled], [true, 120, 50, true]);
+
+  // Over the cap is refused; within it works
+  const over = await call('POST', `/tickets/${ticketId}/listing`, { priceCents: Math.floor(face * 1.3) }, seller.token);
+  assert.equal(over.status, 400);
+  assert.match(over.body.message, /120%/);
+  const price = Math.floor(face * 1.1);
+  const listed = await ok(call('POST', `/tickets/${ticketId}/listing`, { priceCents: price }, seller.token));
+  assert.equal(listed.payoutCents, price - Math.round(price * 0.05) - Math.round(price * 0.05));
+  // The seller's QR stops working while listed
+  assert.equal((await call('GET', `/tickets/${ticketId}/qr`, undefined, seller.token)).status, 400);
+
+  // Public listing
+  const pub = await ok(call('GET', `/events/${ev.slug}/resale`));
+  const listing = pub.listings.find((x: Json) => x.id === listed.listingId);
+  assert.equal(listing.priceCents, price);
+  // The seller can't buy their own; a buyer holds it, so nobody else can
+  assert.equal((await call('POST', `/resale/${listing.id}/hold`, undefined, seller.token)).status, 400);
+  const hold = await ok(call('POST', `/resale/${listing.id}/hold`, undefined, buyer.token));
+  assert.equal((await call('POST', `/resale/${listing.id}/hold`)).status, 400);
+  assert.equal((await ok(call('GET', `/events/${ev.slug}/resale`))).listings.some((x: Json) => x.id === listing.id), false, 'held listings are hidden');
+  // and the seller can't pull it mid-checkout
+  assert.equal((await call('DELETE', `/tickets/${ticketId}/listing`, undefined, seller.token)).status, 400);
+  // Wrong key is refused
+  assert.equal((await call('POST', `/resale/${listing.id}/orders`, { holdKey: 'nope', email: `rs-buyer-${run}@test.local`, name: 'Bayo Buyer' }, buyer.token)).status, 409);
+
+  const before = outbox.length;
+  const ro = await ok(call('POST', `/resale/${listing.id}/orders`, { holdKey: hold.holdKey, email: `rs-buyer-${run}@test.local`, name: 'Bayo Buyer' }, buyer.token));
+  assert.equal(ro.totalCents, price);
+  const done = await ok(call('POST', `/orders/${ro.orderId}/pay`));
+  assert.equal(done.status, 'PAID');
+  assert.equal(done.tickets.length, 1);
+  const newId = done.tickets[0].id;
+  assert.notEqual(newId, ticketId, 'the buyer gets a new ticket');
+
+  // Handover: the seller's ticket is gone, the buyer's works
+  const sellerTickets = await ok(call('GET', '/me/tickets', undefined, seller.token));
+  assert.ok(!sellerTickets.tickets.some((t: Json) => t.id === ticketId), 'resold ticket left the seller');
+  await ok(call('GET', `/tickets/${newId}/qr`, undefined, buyer.token));
+  assert.notEqual((await call('GET', `/tickets/${ticketId}/qr`, undefined, seller.token)).status, 200);
+
+  // Seller: emailed, payout pending until after the event
+  assert.ok(await waitFor(() => outbox.slice(before).find((m) => m.to === `rs-seller-${run}@test.local` && /Sold/.test(m.subject))));
+  const mine = await ok(call('GET', '/me/resale', undefined, seller.token));
+  const sale = mine.listings.find((x: Json) => x.id === listing.id);
+  assert.equal(sale.status, 'SOLD');
+  assert.equal(sale.payoutStatus, 'PENDING');
+  assert.equal(sale.payoutCents, listed.payoutCents);
+
+  // Admin: can't pay before the event; can hold and release
+  assert.equal((await call('POST', `/admin/resale/${listing.id}/payout`, { action: 'PAY' }, admin.token)).status, 400);
+  assert.equal((await ok(call('POST', `/admin/resale/${listing.id}/payout`, { action: 'HOLD', note: 'Checking a chargeback' }, admin.token))).payoutStatus, 'HELD');
+  assert.equal((await ok(call('POST', `/admin/resale/${listing.id}/payout`, { action: 'RELEASE' }, admin.token))).payoutStatus, 'PENDING');
+  const payouts = await ok(call('GET', '/admin/resale/payouts?status=PENDING', undefined, admin.token));
+  assert.ok(payouts.items.some((x: Json) => x.id === listing.id));
+
+  // Admin take-down of another listing returns the ticket
+  const h2 = await ok(call('POST', '/holds', { ticketTypeId: tt.id, quantity: 1 }, seller.token));
+  const o2 = await ok(call('POST', '/orders', { holdId: h2.id, email: `rs-seller-${run}@test.local`, name: 'Sola Seller' }, seller.token));
+  const t2 = (await ok(call('POST', `/orders/${o2.orderId}/pay`))).tickets[0].id;
+  const l2 = await ok(call('POST', `/tickets/${t2}/listing`, { priceCents: face }, seller.token));
+  await ok(call('POST', `/admin/resale/${l2.listingId}/delist`, { reason: 'Suspicious pricing pattern' }, admin.token));
+  await ok(call('GET', `/tickets/${t2}/qr`, undefined, seller.token));
+
+  // Organizer switches resale off: new listings refused
+  await ok(call('PATCH', `/organizer/events/${ev.id}`, { resaleEnabled: false }, org.token));
+  assert.match((await call('POST', `/tickets/${t2}/listing`, { priceCents: face }, seller.token)).body.message, /allow resale/);
+  assert.equal((await ok(call('GET', `/events/${ev.slug}/resale`))).enabled, false);
+});
+
+test('transfers: the recipient is emailed, organizers can switch them off', async () => {
+  const admin = await account('admin@test.local', 'Admin');
+  const org = await account(`tr-org-${run}@test.local`, 'Tom Organizer');
+  const from = await account(`tr-from-${run}@test.local`, 'Femi From');
+  const to = await account(`tr-to-${run}@test.local`, 'Tolu To');
+  const { ev, tt } = await publishedEvent(org.token, admin.token, 'Transfer Tavern');
+  const h = await ok(call('POST', '/holds', { ticketTypeId: tt.id, quantity: 2 }, from.token));
+  const o = await ok(call('POST', '/orders', { holdId: h.id, email: `tr-from-${run}@test.local`, name: 'Femi From' }, from.token));
+  const [a, b] = (await ok(call('POST', `/orders/${o.orderId}/pay`))).tickets.map((t: Json) => t.id);
+  const before = outbox.length;
+  const sent = await ok(call('POST', `/tickets/${a}/transfer`, { email: `tr-to-${run}@test.local` }, from.token));
+  assert.ok(sent.transferExpiresAt, 'transfers expire');
+  const mail = await waitFor(() => outbox.slice(before).find((m) => m.to === `tr-to-${run}@test.local`));
+  assert.match(mail.subject, /Femi sent you a ticket/);
+  const incoming = await ok(call('GET', '/me/tickets', undefined, to.token));
+  assert.ok(incoming.incomingTransfers.some((x: Json) => x.id === a));
+  await ok(call('POST', `/tickets/${a}/accept`, undefined, to.token));
+  await ok(call('GET', `/tickets/${a}/qr`, undefined, to.token));
+  // Organizer turns transfers off
+  await ok(call('PATCH', `/organizer/events/${ev.id}`, { transfersEnabled: false }, org.token));
+  assert.match((await call('POST', `/tickets/${b}/transfer`, { email: `tr-to-${run}@test.local` }, from.token)).body.message, /allow transfers/);
+});

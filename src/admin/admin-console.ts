@@ -108,6 +108,7 @@ export class AdminConsoleService {
         this.prisma.emailLog.groupBy({ by: ['status'], where: { createdAt: { gte: new Date(Date.now() - 7 * DAY) } }, _count: { _all: true } }),
         this.prisma.ticket.count({ where: { status: { not: 'VOID' } } }),
       ]);
+    const [venues, openVenueClaims] = await Promise.all([this.prisma.venue.count({ where: { hiddenAt: null } }), this.prisma.venueClaim.count({ where: { status: 'PENDING' } })]);
 
     const currencies = byCurrency.map((c) => ({ currency: c.currency, orders: c._count._all, grossCents: c._sum.totalCents ?? 0, refundedCents: c._sum.refundedCents ?? 0 }));
     const grossUsd = currencies.reduce((s, c) => s + this.usd(c.grossCents, c.currency), 0);
@@ -142,7 +143,7 @@ export class AdminConsoleService {
     const events = Object.fromEntries(EVENT_STATUSES.map((s) => [s, byStatus.find((b) => b.status === s)?._count._all ?? 0]));
     const mailCounts = Object.fromEntries(['SENT', 'FAILED', 'SKIPPED'].map((s) => [s, emailStats.find((e) => e.status === s)?._count._all ?? 0]));
     return {
-      counts: { users, suspendedUsers, organizers, orgs, verifiedOrgs, suspendedOrgs, events, upcomingPublished: upcoming, ordersPaid: currencies.reduce((s, c) => s + c.orders, 0), ticketsSold, subscribers, priceWatchers: watchers, openRefunds, openFraud },
+      counts: { users, suspendedUsers, organizers, orgs, verifiedOrgs, suspendedOrgs, events, upcomingPublished: upcoming, ordersPaid: currencies.reduce((s, c) => s + c.orders, 0), ticketsSold, subscribers, priceWatchers: watchers, openRefunds, openFraud, venues, openVenueClaims },
       money: {
         currencies,
         usd: { grossCents: grossUsd, refundedCents: refundedUsd, netCents: grossUsd - refundedUsd, estFeeCents: Math.round(((grossUsd - refundedUsd) * config.organizerFeePermille) / 1000) },
