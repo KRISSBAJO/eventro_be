@@ -236,7 +236,12 @@ model TicketType {
   capacity    Int
   sold        Int       @default(0)
   maxPerOrder Int       @default(8)
+  /// Display and seating order: 0 is the top tier (e.g. Special VIP), shown first and seated nearest the stage.
   sortOrder   Int       @default(0)
+  /// What this ticket includes, shown to fans as a checklist ("Priority entry", "Lounge access"…).
+  perks       String[]  @default([])
+  /// Optional short label on the ticket, e.g. "Best view" or "Most popular".
+  badge       String?
   salesStart  DateTime?
   salesEnd    DateTime?
 

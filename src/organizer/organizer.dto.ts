@@ -4,6 +4,7 @@ import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   ArrayMinSize,
+  IsArray,
   IsBoolean,
   IsDateString,
   IsEmail,
@@ -68,6 +69,15 @@ export class TicketTypeInputDto {
   basePriceCents: number;
   @ApiProperty() @IsInt() @Min(1) @Max(200_000) capacity: number;
   @ApiPropertyOptional({ default: 8 }) @IsOptional() @IsInt() @Min(1) @Max(20) maxPerOrder?: number;
+  @ApiPropertyOptional({ type: [String], description: 'Up to 8 inclusions, e.g. "Priority entry"' })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(8)
+  @IsString({ each: true })
+  @MinLength(2, { each: true })
+  @MaxLength(60, { each: true })
+  perks?: string[];
+  @ApiPropertyOptional({ description: 'Short label, e.g. "Best view" (empty string clears it)' }) @IsOptional() @IsString() @MaxLength(24) badge?: string;
 }
 
 export class CreateEventDto {
@@ -115,6 +125,23 @@ export class UpdateTicketTypeDto {
   @ApiPropertyOptional() @IsOptional() @IsInt() @Min(0) @Max(10_000_000) basePriceCents?: number;
   @ApiPropertyOptional() @IsOptional() @IsInt() @Min(1) @Max(200_000) capacity?: number;
   @ApiPropertyOptional() @IsOptional() @IsInt() @Min(1) @Max(20) maxPerOrder?: number;
+  @ApiPropertyOptional({ type: [String], description: 'Up to 8 inclusions, e.g. "Priority entry"' })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(8)
+  @IsString({ each: true })
+  @MinLength(2, { each: true })
+  @MaxLength(60, { each: true })
+  perks?: string[];
+  @ApiPropertyOptional({ description: 'Short label, e.g. "Best view" (empty string clears it)' }) @IsOptional() @IsString() @MaxLength(24) badge?: string;
+}
+
+export class TicketOrderDto {
+  @ApiProperty({ type: [String], description: 'Every ticket type id of the event, top tier first' })
+  @IsArray()
+  @ArrayMaxSize(50)
+  @IsString({ each: true })
+  ids: string[];
 }
 
 export class SeatMapDto {

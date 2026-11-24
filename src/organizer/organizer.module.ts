@@ -19,6 +19,7 @@ import {
   UpdateOrgDto,
   UpdatePromoDto,
   UpdateTicketTypeDto,
+  TicketOrderDto,
 } from './organizer.dto';
 
 @ApiTags('organizer')
@@ -82,6 +83,10 @@ export class OrganizerController {
   }
   @Post('events/:id/ticket-types') addTicketType(@Param('id') id: string, @CurrentUser() u: AuthUser, @Body() dto: TicketTypeInputDto) {
     return this.svc.addTicketType(id, u, dto);
+  }
+  /** New order for the event's ticket types, top tier first. */
+  @Put('events/:id/ticket-types/order') orderTicketTypes(@Param('id') id: string, @CurrentUser() u: AuthUser, @Body() dto: TicketOrderDto) {
+    return this.svc.orderTicketTypes(id, u, dto.ids);
   }
   @Patch('events/:id/ticket-types/:ttId') updateTicketType(@Param('id') id: string, @Param('ttId') ttId: string, @CurrentUser() u: AuthUser, @Body() dto: UpdateTicketTypeDto) {
     return this.svc.updateTicketType(id, ttId, u, dto);

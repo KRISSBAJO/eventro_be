@@ -13,6 +13,7 @@ import { BadRequestException, Controller, Get, Global, Injectable, Logger, Modul
 import { ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { Country, State } from 'country-state-city';
+import { PrismaService } from '../prisma.service';
 import tzlookup from '@photostructure/tz-lookup';
 import { config } from '../config';
 import { Public } from '../common/auth';
@@ -29,6 +30,9 @@ type Suggestion = {
   lat: number;
   lng: number;
   timezone: string | null;
+  /** set when this is a venue already on Eventro (shown first, with how many events it has hosted) */
+  venueId?: string;
+  events?: number;
 };
 
 type PhotonFeature = { geometry: { coordinates: [number, number] }; properties: Record<string, string | undefined> };
@@ -81,6 +85,35 @@ const CITY_HEADERS = ['x-vercel-ip-city', 'cf-ipcity', 'x-appengine-city'];
 @Injectable()
 export class GeoService {
   private readonly log = new Logger('Geo');
+  constructor(private readonly prisma: PrismaService) {}
+
+  /** Venues already on Eventro whose name matches, most-used first. */
+  async eventroVenues(q: string, country?: string): Promise<Suggestion[]> {
+    const text = q.trim();
+    if (text.length < 2) return [];
+    const rows = await this.prisma.venue.findMany({
+      where: { name: { contains: text, mode: 'insensitive' }, ...(country ? { OR: [{ country: country.toUpperCase() }, { country: null }] } : {}) },
+      include: { _count: { select: { events: true } } },
+      take: 20,
+    });
+    return rows
+      .sort((a, b) => b._count.events - a._count.events)
+      .slice(0, 4)
+      .map((v) => ({
+        label: [v.name, v.address, v.city, v.region].filter(Boolean).join(', '),
+        name: v.name,
+        street: v.address,
+        city: v.city,
+        region: v.region,
+        postalCode: v.postalCode,
+        country: v.country,
+        lat: v.lat ?? 0,
+        lng: v.lng ?? 0,
+        timezone: v.timezone,
+        venueId: v.id,
+        events: v._count.events,
+      }));
+  }
   private readonly searches = new Cache<Suggestion[]>(24 * 3600_000);
   private readonly ips = new Cache<{ country: string | null; city: string | null; region: string | null }>(6 * 3600_000, 5000);
   private countriesCache: ReturnType<GeoService['buildCountries']> | null = null;
@@ -238,7 +271,16 @@ export class GeoController {
     if (q.length > 120) throw new BadRequestException('Search text is too long.');
     const la = lat === undefined ? undefined : Number(lat);
     const ln = lng === undefined ? undefined : Number(lng);
-    return this.geo.search(q, country && /^[A-Za-z]{2}$/.test(country) ? country : undefined, Number.isFinite(la) ? la : undefined, Number.isFinite(ln) ? ln : undefined);
+    const cc = country && /^[A-Za-z]{2}$/.test(country) ? country : undefined;
+    return this.combined(q, cc, Number.isFinite(la) ? la : undefined, Number.isFinite(ln) ? ln : undefined);
+  }
+
+  /** Venues already on Eventro first (so organizers reuse them), then new places from the map, without repeats. */
+  private async combined(q: string, country?: string, lat?: number, lng?: number) {
+    const [mine, map] = await Promise.all([this.geo.eventroVenues(q, country), this.geo.search(q, country, lat, lng)]);
+    const key = (s: { name: string | null; city: string | null }) => `${(s.name ?? '').toLowerCase()}|${(s.city ?? '').toLowerCase()}`;
+    const seen = new Set(mine.map(key));
+    return [...mine, ...map.filter((m) => !seen.has(key(m)))].slice(0, 8);
   }
 
   @Public()

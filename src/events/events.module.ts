@@ -126,6 +126,8 @@ export class EventsService {
         priceCents: t.priceCents,
         maxPerOrder: t.maxPerOrder,
         sortOrder: t.sortOrder,
+        perks: t.perks,
+        badge: t.badge,
         available: avail.get(t.id) ?? 0,
       })),
       media: ((e.media as MediaItem[] | null) ?? []).map(mediaUrls),

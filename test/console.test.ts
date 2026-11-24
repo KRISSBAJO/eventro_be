@@ -340,3 +340,54 @@ test('seat maps can be resized, but never under a seat that is already sold', as
   // Fewer rows but every sold seat kept: fine.
   await ok(call('PUT', `/organizer/events/${ev.id}/seat-map`, { seatMap: resized(3, 1) }, org.token));
 });
+
+test('ticket tiers: perks, badges and the order fans see them in', async () => {
+  const admin = await account('admin@test.local', 'Admin');
+  const org = await account(`tier-org-${run}@test.local`, 'Tia Organizer');
+  const o = await ok(call('POST', '/organizer/orgs', { name: `Tier Hall ${run}` }, org.token));
+  const ev = await ok(
+    call(
+      'POST',
+      `/organizer/orgs/${o.id}/events`,
+      {
+        title: `Tier Night ${run}`,
+        category: 'FAITH',
+        startsAt: new Date(Date.now() + 30 * 86_400_000).toISOString(),
+        venue: { name: 'Grace Hall', address: '5 Church Rd', city: 'Lagos' },
+        ticketTypes: [
+          { name: 'Special VIP', basePriceCents: 0, capacity: 10, perks: ['Front-row seating', ' Personal usher ', 'front-row seating', 'Parking'], badge: 'Limited' },
+          { name: 'VIP', basePriceCents: 0, capacity: 40, perks: ['Priority entry'] },
+          { name: 'General', basePriceCents: 0, capacity: 300 },
+        ],
+      },
+      org.token,
+    ),
+  );
+  const [svip, vip, gen] = ev.ticketTypes.sort((a: Json, b: Json) => a.sortOrder - b.sortOrder);
+  // Trimmed and de-duplicated, order kept.
+  assert.deepEqual(svip.perks, ['Front-row seating', 'Personal usher', 'Parking']);
+  assert.equal(svip.badge, 'Limited');
+  assert.deepEqual(gen.perks, []);
+
+  // Too many or too short perks are refused.
+  assert.equal((await call('PATCH', `/organizer/events/${ev.id}/ticket-types/${vip.id}`, { perks: Array.from({ length: 9 }, (_, i) => `Perk ${i}`) }, org.token)).status, 400);
+  assert.equal((await call('PATCH', `/organizer/events/${ev.id}/ticket-types/${vip.id}`, { perks: ['x'] }, org.token)).status, 400);
+  const upd = await ok(call('PATCH', `/organizer/events/${ev.id}/ticket-types/${vip.id}`, { perks: ['Priority entry', 'Lounge access'], badge: 'Most popular' }, org.token));
+  assert.deepEqual(upd.perks, ['Priority entry', 'Lounge access']);
+  assert.equal((await ok(call('PATCH', `/organizer/events/${ev.id}/ticket-types/${vip.id}`, { badge: '' }, org.token))).badge, null);
+
+  // Reorder: every id once, or it's refused.
+  assert.equal((await call('PUT', `/organizer/events/${ev.id}/ticket-types/order`, { ids: [gen.id, vip.id] }, org.token)).status, 400);
+  assert.equal((await call('PUT', `/organizer/events/${ev.id}/ticket-types/order`, { ids: [gen.id, gen.id, vip.id] }, org.token)).status, 400);
+  const ordered = await ok(call('PUT', `/organizer/events/${ev.id}/ticket-types/order`, { ids: [vip.id, svip.id, gen.id] }, org.token));
+  assert.deepEqual(ordered.map((t: Json) => t.name), ['VIP', 'Special VIP', 'General']);
+
+  // Fans see the perks, badge and order once it's published.
+  await ok(call('POST', `/organizer/events/${ev.id}/submit`, undefined, org.token));
+  await ok(call('POST', `/admin/events/${ev.id}/approve`, undefined, admin.token));
+  const pub = await ok(call('GET', `/events/${ev.slug}`));
+  assert.deepEqual(pub.ticketTypes.map((t: Json) => t.name), ['VIP', 'Special VIP', 'General']);
+  assert.deepEqual(pub.ticketTypes[1].perks, ['Front-row seating', 'Personal usher', 'Parking']);
+  assert.equal(pub.ticketTypes[1].badge, 'Limited');
+  assert.equal(pub.category, 'FAITH');
+});

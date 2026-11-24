@@ -188,4 +188,17 @@ test('media: a video can be the cover, and a broken media host gives a clear err
   setBroken(false);
   assert.equal(r.status, 503);
   assert.match(r.body.message, /media service/);
+
+  // Limits: file types, sizes and the published numbers.
+  const cfg = await ok(call('GET', '/media/config'));
+  assert.equal(cfg.images, 10);
+  assert.equal(cfg.videos, 2);
+  assert.equal(cfg.videoSeconds, 180);
+  const gif = await call('POST', '/media/uploads', { fileName: 'a.gif', size: 100, mimeType: 'image/gif' }, org);
+  assert.equal(gif.status, 400);
+  assert.match(gif.body.message, /JPG, PNG, WebP or HEIC/);
+  const huge = await call('POST', '/media/uploads', { fileName: 'long.mp4', size: 600 * 1024 * 1024, mimeType: 'video/mp4' }, org);
+  assert.equal(huge.status, 400);
+  assert.match(huge.body.message, /500 MB/);
+  assert.equal((await call('POST', '/media/uploads', { fileName: 'clip.avi', size: 100, mimeType: 'video/x-msvideo' }, org)).status, 400);
 });

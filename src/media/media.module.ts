@@ -37,12 +37,23 @@ import { PrismaService } from '../prisma.service';
 import { config } from '../config';
 import { CurrentUser, Public, type AuthUser } from '../common/auth';
 
+/**
+ * Per event. In line with ticketing sites: enough for a cover, a gallery and a trailer or two, while keeping
+ * pages fast and storage sensible.
+ */
 export const MEDIA_LIMITS = {
-  images: 12,
-  videos: 3,
-  imageBytes: 25 * 1024 * 1024,
-  videoBytes: 2 * 1024 * 1024 * 1024,
+  images: 10,
+  videos: 2,
+  imageBytes: 15 * 1024 * 1024,
+  videoBytes: 500 * 1024 * 1024,
+  /** longest video, in seconds (checked once mediaEX has read the file) */
+  videoSeconds: 180,
+  imageTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'],
+  videoTypes: ['video/mp4', 'video/quicktime', 'video/webm'],
 };
+
+const MB = (n: number) => `${Math.round(n / 1024 / 1024)} MB`;
+const minutes = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.round(sec % 60)).padStart(2, '0')}`;
 
 const ASSET_ID = /^ast_[a-z0-9]{6,20}$/;
 
@@ -63,7 +74,8 @@ export const coverUrl = (id: string, kind: MediaItem['kind'] = 'image') =>
 
 export class StartUploadDto {
   @ApiProperty() @IsString() @MaxLength(255) fileName: string;
-  @ApiProperty() @IsInt() @Min(1) @Max(MEDIA_LIMITS.videoBytes) size: number;
+  // The real per-type limits are checked in startUpload, with a readable message; this only stops absurd values.
+  @ApiProperty() @IsInt() @Min(1) @Max(10 * 1024 * 1024 * 1024) size: number;
   @ApiProperty() @IsString() @Matches(/^(image|video)\/[\w.+-]+$/, { message: 'Only image and video files can be uploaded.' }) mimeType: string;
 }
 
@@ -131,7 +143,11 @@ export class MediaService {
 
   async startUpload(user: AuthUser, dto: StartUploadDto) {
     const kind = dto.mimeType.startsWith('video/') ? 'video' : 'image';
-    if (kind === 'image' && dto.size > MEDIA_LIMITS.imageBytes) throw new BadRequestException('Photos can be up to 25 MB.');
+    const mime = dto.mimeType.toLowerCase();
+    if (kind === 'image' && !MEDIA_LIMITS.imageTypes.includes(mime)) throw new BadRequestException('Photos can be JPG, PNG, WebP or HEIC.');
+    if (kind === 'video' && !MEDIA_LIMITS.videoTypes.includes(mime)) throw new BadRequestException('Videos can be MP4, MOV or WebM.');
+    if (kind === 'image' && dto.size > MEDIA_LIMITS.imageBytes) throw new BadRequestException(`Photos can be up to ${MB(MEDIA_LIMITS.imageBytes)}.`);
+    if (kind === 'video' && dto.size > MEDIA_LIMITS.videoBytes) throw new BadRequestException(`Videos can be up to ${MB(MEDIA_LIMITS.videoBytes)}.`);
     const r = await this.mediaex<{ asset: { id: string }; upload: { kind: string; url?: string; method?: string; headers?: Record<string, string> } }>('/uploads', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -183,8 +199,17 @@ export class MediaService {
     type Asset = { status: string; progress: number; error: string | null; width: number | null; height: number | null; duration: number; playbackUrl?: string | null };
     const r = await this.mediaex<{ asset: Asset } | Asset>(`/assets/${id}`);
     const a = 'asset' in r ? r.asset : r;
-    const playbackUrl = u.kind === 'video' && a.status === 'ready' && a.playbackUrl ? a.playbackUrl : undefined;
-    return { ...mediaUrls({ id, kind: u.kind as MediaItem['kind'], playbackUrl }), status: a.status, progress: a.progress, error: a.error, width: a.width, height: a.height, duration: a.duration };
+    const tooLong = u.kind === 'video' && a.duration > MEDIA_LIMITS.videoSeconds;
+    const playbackUrl = u.kind === 'video' && a.status === 'ready' && a.playbackUrl && !tooLong ? a.playbackUrl : undefined;
+    return {
+      ...mediaUrls({ id, kind: u.kind as MediaItem['kind'], playbackUrl }),
+      status: tooLong ? 'failed' : a.status,
+      progress: a.progress,
+      error: tooLong ? `Videos can be up to ${minutes(MEDIA_LIMITS.videoSeconds)} long; this one is ${minutes(a.duration)}.` : a.error,
+      width: a.width,
+      height: a.height,
+      duration: a.duration,
+    };
   }
 
   /** Sets an event's photos and videos (in order). Only media uploaded by the organization's members can be used. */
@@ -233,15 +258,20 @@ export class MediaService {
     return { media: clean.map(mediaUrls), imageUrl };
   }
 
-  /** A ready video's HLS address, or undefined while it's still processing (or mediaEX can't say). */
+  /** A ready video's HLS address, or undefined while it's still processing (or mediaEX can't say). Too-long videos are refused. */
   private async playbackUrl(id: string) {
+    type A = { status: string; playbackUrl?: string | null; duration?: number };
+    let a: A;
     try {
-      const r = await this.mediaex<{ asset: { status: string; playbackUrl?: string | null } } | { status: string; playbackUrl?: string | null }>(`/assets/${id}`);
-      const a = 'asset' in r ? r.asset : r;
-      return a.status === 'ready' && a.playbackUrl ? a.playbackUrl : undefined;
+      const r = await this.mediaex<{ asset: A } | A>(`/assets/${id}`);
+      a = 'asset' in r ? r.asset : r;
     } catch {
       return undefined;
     }
+    if ((a.duration ?? 0) > MEDIA_LIMITS.videoSeconds) {
+      throw new BadRequestException(`Videos can be up to ${minutes(MEDIA_LIMITS.videoSeconds)} long; one of yours is ${minutes(a.duration ?? 0)}.`);
+    }
+    return a.status === 'ready' && a.playbackUrl ? a.playbackUrl : undefined;
   }
 }
 

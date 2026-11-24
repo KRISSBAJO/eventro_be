@@ -33,6 +33,16 @@ const ADMIN_ONLY: MemberRole[] = ['ADMIN'];
 const DAY = 86_400_000;
 const dayKey = (d: Date) => d.toISOString().slice(0, 10);
 
+/** Trimmed, de-duplicated perks (case-insensitive), at most 8. */
+function cleanPerks(perks: string[] | undefined) {
+  const out: string[] = [];
+  for (const p of perks ?? []) {
+    const v = p.trim().replace(/\s+/g, ' ');
+    if (v && !out.some((o) => o.toLowerCase() === v.toLowerCase())) out.push(v);
+  }
+  return out.slice(0, 8);
+}
+
 @Injectable()
 export class OrganizerService {
   constructor(
@@ -145,6 +155,8 @@ export class OrganizerService {
       capacity: t.capacity,
       maxPerOrder: t.maxPerOrder ?? 8,
       sortOrder: i,
+      perks: cleanPerks(t.perks),
+      badge: t.badge?.trim() || null,
     };
   }
 
@@ -248,7 +260,7 @@ export class OrganizerService {
       online: e.online,
       imageUrl: e.imageUrl,
       hasSeatMap: !!e.seatMap,
-      ticketTypes: e.ticketTypes.map((t) => ({ id: t.id, name: t.name, description: t.description, priceCents: t.priceCents, capacity: t.capacity, sold: t.sold, maxPerOrder: t.maxPerOrder })),
+      ticketTypes: e.ticketTypes.map((t) => ({ id: t.id, name: t.name, description: t.description, priceCents: t.priceCents, capacity: t.capacity, sold: t.sold, maxPerOrder: t.maxPerOrder, sortOrder: t.sortOrder, perks: t.perks, badge: t.badge })),
       sold: e.ticketTypes.reduce((s, t) => s + t.sold, 0),
       capacity: e.ticketTypes.reduce((s, t) => s + t.capacity, 0),
       grossCents: e.ticketTypes.reduce((s, t) => s + t.sold * t.priceCents, 0),
@@ -310,6 +322,8 @@ export class OrganizerService {
         ...(dto.basePriceCents !== undefined ? { priceCents: buyerPrice(dto.basePriceCents, ev.feeMode, config.organizerFeePermille) } : {}),
         ...(dto.capacity !== undefined ? { capacity: dto.capacity } : {}),
         ...(dto.maxPerOrder !== undefined ? { maxPerOrder: dto.maxPerOrder } : {}),
+        ...(dto.perks !== undefined ? { perks: cleanPerks(dto.perks) } : {}),
+        ...(dto.badge !== undefined ? { badge: dto.badge.trim() || null } : {}),
       },
     });
     let priceDrop: Awaited<ReturnType<PriceDropService['record']>> = null;
@@ -319,6 +333,18 @@ export class OrganizerService {
       priceDrop = await this.priceDrops.record({ ...ev, venue }, updated, tt.priceCents, updated.priceCents, user.id);
     }
     return { ...updated, priceDrop };
+  }
+
+  /** Puts the event's ticket types in a new order, top tier first (it's the order fans see them in). */
+  async orderTicketTypes(id: string, user: AuthUser, ids: string[]) {
+    const ev = await this.eventFor(id, user, EDIT);
+    const known = new Set(ev.ticketTypes.map((t) => t.id));
+    if (ids.length !== known.size || new Set(ids).size !== ids.length || ids.some((x) => !known.has(x))) {
+      throw new BadRequestException('Send every ticket type of this event exactly once.');
+    }
+    await this.prisma.$transaction(ids.map((tt, i) => this.prisma.ticketType.update({ where: { id: tt }, data: { sortOrder: i } })));
+    await this.audit.log(user.id, 'ticket_type.order', 'Event', id, { ids });
+    return this.prisma.ticketType.findMany({ where: { eventId: id }, orderBy: { sortOrder: 'asc' } });
   }
 
   /** How many people a price drop on this event would reach right now (for the organizer's price screen). */
