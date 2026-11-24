@@ -252,3 +252,65 @@ test('order history: GET /me/orders lists paid orders newest first; refund reque
   assert.equal(after.refundedCents, second.totalCents);
   assert.equal((await ok(call('GET', `/orders/${second.id}`, undefined, fan.token))).refundRequests[0].status, 'APPROVED');
 });
+
+test('exact seats: a hold can take the seats the fan picked in a reserved section, and they stay theirs', async () => {
+  const { org } = await setup();
+  const fan = await account(`saved-seats-${run}@test.local`, 'Cy Seats');
+  const rival = await account(`saved-rival-${run}@test.local`, 'Ray Rival');
+  const ev = await publishedEvent('Seat Picker', 22);
+  const tt = ev.ticketTypes[0].id as string;
+  // Seat maps can only change before review, so this one is set up on a fresh draft.
+  const { orgId, admin } = await setup();
+  const draft = await ok(
+    call(
+      'POST',
+      `/organizer/orgs/${orgId}/events`,
+      {
+        title: `Arena Pick ${run}`,
+        category: 'CONCERTS',
+        startsAt: new Date(Date.now() + 23 * 86_400_000).toISOString(),
+        venue: { name: `Savehall${run}`, address: '9 Quiet Lane', city: CITY, country: 'US', region: 'Oregon', lat: 44.0521, lng: -123.0868 },
+        ticketTypes: [{ name: 'Seats', basePriceCents: 4000, capacity: 5000 }],
+      },
+      org.token,
+    ),
+  );
+  const ttA = draft.ticketTypes[0].id as string;
+  await ok(call('POST', `/organizer/events/${draft.id}/seat-map/template`, { template: 'arena', floor: ttA, lower: ttA, upper: ttA }, org.token));
+  await ok(call('POST', `/organizer/events/${draft.id}/submit`, undefined, org.token));
+  await ok(call('POST', `/admin/events/${draft.id}/approve`, undefined, admin.token));
+  const detail = await ok(call('GET', `/events/${draft.slug}`));
+  const reserved = (detail.seatMap.sections as Json[]).find((s) => s.seating === 'reserved')!;
+  const standing = (detail.seatMap.sections as Json[]).find((s) => s.seating === 'ga');
+
+  const hold = (body: Json, token = fan.token) => call('POST', '/holds', { ticketTypeId: ttA, ...body }, token);
+  // Not on a seat map, or without a section: refused.
+  assert.equal((await call('POST', '/holds', { ticketTypeId: tt, quantity: 1, seats: [{ row: 'A', seat: 1 }] }, fan.token)).status, 400);
+  assert.equal((await hold({ quantity: 1, seats: [{ row: 'A', seat: 1 }] })).status, 400);
+  if (standing) assert.equal((await hold({ quantity: 1, sectionId: standing.id, seats: [{ row: 'A', seat: 1 }] })).status, 400);
+  assert.equal((await hold({ quantity: 2, sectionId: reserved.id, seats: [{ row: 'A', seat: 1 }] })).status, 400, 'one seat per ticket');
+  assert.equal((await hold({ quantity: 2, sectionId: reserved.id, seats: [{ row: 'A', seat: 1 }, { row: 'A', seat: 1 }] })).status, 400, 'no repeats');
+  assert.equal((await hold({ quantity: 1, sectionId: reserved.id, seats: [{ row: 'A', seat: (reserved.seatsPerRow as number) + 1 }] })).status, 400, 'past the end of the row');
+  assert.equal((await hold({ quantity: 1, sectionId: reserved.id, seats: [{ row: 'ZZ', seat: 1 }] })).status, 400, 'no such row');
+  assert.equal((await hold({ quantity: 1, sectionId: reserved.id, seats: [{ row: 'a', seat: 1 }] })).status, 400, 'row labels are capitals');
+
+  // Two seats apart in row B: exactly those are held.
+  const picked = [{ row: 'B', seat: 3 }, { row: 'B', seat: 6 }];
+  const h = await ok(hold({ quantity: 2, sectionId: reserved.id, seats: picked }));
+  assert.deepEqual(h.seats, picked.map((p) => ({ section: reserved.id, ...p })));
+  const seatsNow = await ok(call('GET', `/events/${draft.slug}/sections/${reserved.id}/seats`));
+  assert.ok(seatsNow.taken.includes('B:3') && seatsNow.taken.includes('B:6'));
+
+  // Someone else can't take one of them while it's held.
+  const clash = await hold({ quantity: 1, sectionId: reserved.id, seats: [{ row: 'B', seat: 6 }] }, rival.token);
+  assert.equal(clash.status, 409);
+  assert.match(clash.body.message, /B6 was just taken/);
+
+  // Paid: the tickets are for those seats.
+  const o = await ok(call('POST', '/orders', { holdId: h.id, email: fan.user.email, name: fan.user.name }, fan.token));
+  const paid = await ok(call('POST', `/orders/${o.orderId}/pay`));
+  assert.deepEqual((paid.tickets as Json[]).map((t) => `${t.row}${t.seat}`).sort(), ['B3', 'B6']);
+  // Best available (no seats sent) still works and never hands out a picked seat.
+  const auto = await ok(hold({ quantity: 2, sectionId: reserved.id }, rival.token));
+  assert.ok(!(auto.seats as Json[]).some((s) => s.row === 'B' && (s.seat === 3 || s.seat === 6)));
+});

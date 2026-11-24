@@ -53,7 +53,7 @@ Runs against a separate `eventro_test` database (created by `db:start`; override
   door packs and offline check-in sync.
 - **Saved events and order history (`test/saved.test.ts`):** saving by id or slug, idempotent puts and deletes,
   newest first in the GET /events card shape, merging a signed-out device's hearts, nothing hidden, unpublished,
-  cancelled or past coming back; `GET /me/orders` and refund requests on the order.
+  cancelled or past coming back; `GET /me/orders` and refund requests on the order; holds on exact seats the fan picked.
 - **Client additions (`test/gaps.test.ts`):** trending sort and `soldRecent`, price filters in the visitor's currency,
   Paystack's return URL for app buyers (orders and resale orders), who scanned a ticket first, `event.currency` in My
   tickets, section names in My resale, and the door scanner's event list.
@@ -126,6 +126,13 @@ Fulfilment can safely run more than once. If a hold expired during payment and t
   `GET /orders/:id` now includes `refundRequests` (status `OPEN`, `APPROVED`, `PARTIAL` or `DENIED`).
   Fans ask for a refund with `POST /orders/:id/refund-requests { reason }` (10–1000 characters, paid orders only,
   one open request at a time).
+
+## Picking exact seats
+
+`POST /holds` takes optional `seats: [{ row, seat }]` with a reserved `sectionId`, one per ticket (`quantity`). The
+hold reserves exactly those seats (they must exist in the section and be free; otherwise 400, or 409 naming the seats
+just taken). Without `seats` the API picks the best seats side by side, as before. `GET /events/:slug/sections/:id/seats`
+lists the seats already sold or held (`"ROW:SEAT"`).
 
 ## Gifted tickets
 

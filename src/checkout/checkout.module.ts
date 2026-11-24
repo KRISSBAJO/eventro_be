@@ -1,7 +1,7 @@
 import { BadRequestException, Body, Controller, Delete, Get, Headers, HttpCode, Module, Param, Post, Query, Req } from '@nestjs/common';
 import { ApiBearerAuth, ApiProperty, ApiPropertyOptional, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
-import { IsBoolean, IsDateString, IsEmail, IsIn, IsInt, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsBoolean, IsDateString, IsEmail, IsIn, IsInt, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
 import type { Request } from 'express';
 import { CheckoutService } from './checkout.service';
 import { Payments } from './payments';
@@ -10,10 +10,22 @@ import { RATE_RULES, RateLimit } from '../common/rate-limit';
 
 const lower = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim().toLowerCase() : value);
 
+export class SeatChoiceDto {
+  @ApiProperty({ example: 'A' }) @IsString() @Matches(/^[A-Z]{1,3}$/) row: string;
+  @ApiProperty({ example: 7 }) @IsInt() @Min(1) @Max(500) seat: number;
+}
+
 export class CreateHoldDto {
   @ApiProperty() @IsString() @MaxLength(40) ticketTypeId: string;
   @ApiProperty({ minimum: 1, maximum: 20 }) @IsInt() @Min(1) @Max(20) quantity: number;
   @ApiPropertyOptional({ description: 'Seat map section id, to sit in a specific section' }) @IsOptional() @IsString() @MaxLength(24) sectionId?: string;
+  @ApiPropertyOptional({ type: [SeatChoiceDto], description: 'Exact seats in a reserved section (needs sectionId; one per ticket). Left out: the best seats side by side.' })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @ValidateNested({ each: true })
+  @Type(() => SeatChoiceDto)
+  seats?: SeatChoiceDto[];
 }
 
 export class GiftDto {

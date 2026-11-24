@@ -7,7 +7,7 @@ import { config } from '../config';
 import { orderCode, ticketCode } from '../domain/codes';
 import { organizerNet, quote } from '../domain/money';
 import { FRAUD_FLAG_THRESHOLD, scoreOrder } from '../domain/fraud';
-import { pickFromSections, type SeatMap, type SeatPick } from '../domain/seatmap';
+import { pickFromSections, rowLabel, type SeatMap, type SeatPick } from '../domain/seatmap';
 import { Payments } from './payments';
 import { FxService } from '../fx/fx.module';
 import { MailService, formatMoney, render } from '../mail/mail.module';
@@ -41,7 +41,7 @@ export class CheckoutService {
 
   /* ---------- holds ---------- */
 
-  async createHold(input: { ticketTypeId: string; quantity: number; sectionId?: string }, user: AuthUser | null) {
+  async createHold(input: { ticketTypeId: string; quantity: number; sectionId?: string; seats?: { row: string; seat: number }[] }, user: AuthUser | null) {
     const now = new Date();
     return this.prisma.$transaction(async (tx) => {
       await lockTicketType(tx, input.ticketTypeId);
@@ -70,7 +70,21 @@ export class CheckoutService {
       const map = ev.seatMap as SeatMap | null;
       const sections = (map?.sections ?? []).filter((s) => s.ticketTypeId === tt.id && (!input.sectionId || s.id === input.sectionId));
       let seats: SeatPick[] | null = null;
-      if (sections.length) {
+      if (input.seats) {
+        // The fan picked exact seats: one per ticket, all in the chosen reserved section, all free right now.
+        const section = input.sectionId ? sections.find((s) => s.id === input.sectionId) : undefined;
+        if (!section) throw new BadRequestException('Pick a section to choose exact seats.');
+        if (section.seating !== 'reserved') throw new BadRequestException(`${section.label} is standing only: there are no seat numbers to pick.`);
+        if (input.seats.length !== input.quantity) throw new BadRequestException(`Pick ${input.quantity} seat${input.quantity === 1 ? '' : 's'}, one for each ticket.`);
+        const rows = new Set(Array.from({ length: section.rows ?? 0 }, (_, i) => rowLabel(i)));
+        const keys = input.seats.map((s) => `${s.row}:${s.seat}`);
+        if (new Set(keys).size !== keys.length) throw new BadRequestException('Each seat can only be picked once.');
+        if (input.seats.some((s) => !rows.has(s.row) || s.seat > (section.seatsPerRow ?? 0))) throw new BadRequestException('Some of those seats aren’t in this section.');
+        const used = (await this.inventory.seatsInUse(tx, ev.id, [section.id], now)).get(section.id);
+        const gone = input.seats.filter((s) => used?.seats.has(`${s.row}:${s.seat}`));
+        if (gone.length) throw new ConflictException(`${gone.map((s) => `${s.row}${s.seat}`).join(', ')} ${gone.length === 1 ? 'was' : 'were'} just taken. Pick other seats.`);
+        seats = input.seats.map((s) => ({ section: section.id, row: s.row, seat: s.seat }));
+      } else if (sections.length) {
         const inUse = await this.inventory.seatsInUse(tx, ev.id, sections.map((s) => s.id), now);
         seats = pickFromSections(sections, inUse, input.quantity);
         if (!seats) throw new ConflictException('Not enough seats together. Try fewer tickets or another section.');
