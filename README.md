@@ -51,6 +51,9 @@ Runs against a separate `eventro_test` database (created by `db:start`; override
   ended by password changes and suspension; push devices, choices and every trigger against a stand-in Expo push
   service (dead phones disabled, dedupe); QR seeds matching the server, a transfer refusing the old holder's codes;
   door packs and offline check-in sync.
+- **Saved events and order history (`test/saved.test.ts`):** saving by id or slug, idempotent puts and deletes,
+  newest first in the GET /events card shape, merging a signed-out device's hearts, nothing hidden, unpublished,
+  cancelled or past coming back; `GET /me/orders` and refund requests on the order.
 - **Client additions (`test/gaps.test.ts`):** trending sort and `soldRecent`, price filters in the visitor's currency,
   Paystack's return URL for app buyers (orders and resale orders), who scanned a ticket first, `event.currency` in My
   tickets, section names in My resale, and the door scanner's event list.
@@ -109,6 +112,20 @@ Fulfilment can safely run more than once. If a hold expired during payment and t
   pauses their sales and blocks resuming or submitting), all events (take down, publish, pause sales), orders
   (search, refund), subscribers (CSV export, broadcasts with a test send), price drops, the email log and the audit
   log. Suspended accounts can't sign in and their tokens stop working at once.
+
+## Saved events and order history
+
+- **Saved events** (the hearts): `GET /me/saved` returns `{ ids, slugs, items }`, the signed-in fan's saved events as
+  event cards (the same shape as `GET /events` items), newest saved first. `PUT /me/saved/:eventId` and
+  `DELETE /me/saved/:eventId` (the event's id or slug) are idempotent. `POST /me/saved/sync { eventIds }` (ids or
+  slugs, at most 200) merges hearts made while signed out and answers like `GET`. Only published, public events can be
+  saved or are listed: drafts, events in review, taken down, cancelled, unlisted and past events never come back
+  (their rows stay, so an event published again shows again). Up to 500 saves per account.
+- **Order history:** `GET /me/orders` lists the fan's orders (bought on their account or with their email), newest
+  first, without abandoned checkouts, each with the event, ticket type, totals and the latest refund request.
+  `GET /orders/:id` now includes `refundRequests` (status `OPEN`, `APPROVED`, `PARTIAL` or `DENIED`).
+  Fans ask for a refund with `POST /orders/:id/refund-requests { reason }` (10–1000 characters, paid orders only,
+  one open request at a time).
 
 ## Gifted tickets
 

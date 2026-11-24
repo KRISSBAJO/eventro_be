@@ -124,6 +124,7 @@ model User {
   passwordResets PasswordReset[]
   sessions       Session[]
   pushDevices    PushDevice[]
+  savedEvents    SavedEvent[]
   /// Push notification choices, e.g. { "priceDrops": false }. Missing keys mean on.
   notifyPrefs    Json?
 }
@@ -342,6 +343,7 @@ model Event {
   promos      Promo[]
   priceDrops  PriceDrop[]
   priceWatches PriceWatch[]
+  savedBy      SavedEvent[]
   resaleListings ResaleListing[]
 
   /// Fan resale: allowed at all, the most a ticket may be listed for (% of face value; null = no cap),
@@ -601,6 +603,20 @@ model PriceWatch {
 
   @@unique([eventId, email])
   @@index([clientIp, createdAt])
+}
+
+/// An event a fan hearted. Kept on the server so saves follow them between the website and the app.
+model SavedEvent {
+  id        String   @id @default(cuid())
+  userId    String
+  eventId   String
+  createdAt DateTime @default(now())
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, eventId])
+  @@index([userId, createdAt])
 }
 
 /// Every email Eventro tried to send, for support and the admin console.

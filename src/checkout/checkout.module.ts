@@ -112,6 +112,13 @@ export class CheckoutController {
     return this.checkout.getOrder(id, user, email);
   }
 
+  /** Order history: the signed-in fan's paid, refunded and cancelled-after-payment orders, newest first. */
+  @ApiBearerAuth()
+  @Get('me/orders')
+  mine(@CurrentUser() user: AuthUser) {
+    return this.checkout.myOrders(user);
+  }
+
   /** Completes a payment with the mock provider (only when Stripe isn't configured). */
   @Public()
   @Post('orders/:id/pay')

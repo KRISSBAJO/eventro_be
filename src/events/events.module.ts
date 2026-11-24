@@ -97,6 +97,27 @@ export class EventsService {
     return new Map(rows.map((r) => [r.eventId, r._sum.quantity ?? 0]));
   }
 
+  /** Event cards (the GET /events item shape) for events loaded with their venue and ticket prices, in the same order. */
+  async cards(rows: (Prisma.EventGetPayload<{ include: { venue: true } }> & { ticketTypes: { priceCents: number }[] })[]): Promise<EventCardDto[]> {
+    const recent = await this.soldRecently(rows.map((e) => e.id));
+    return rows.map((e) => ({
+      slug: e.slug,
+      title: e.title,
+      subtitle: e.subtitle,
+      category: e.category,
+      startsAt: e.startsAt,
+      imageUrl: e.imageUrl,
+      venue: e.venue?.name ?? (e.online ? 'Online' : null),
+      city: e.venue?.city ?? null,
+      country: e.venue?.country ?? null,
+      lat: e.venue?.lat ?? null,
+      lng: e.venue?.lng ?? null,
+      currency: e.currency,
+      fromCents: e.ticketTypes.length ? Math.min(...e.ticketTypes.map((t) => t.priceCents)) : 0,
+      soldRecent: recent.get(e.id) ?? 0,
+    }));
+  }
+
   async search(q: EventQueryDto) {
     const where: Prisma.EventWhereInput = {
       status: 'PUBLISHED',
@@ -123,25 +144,7 @@ export class EventsService {
       orderBy: { startsAt: 'asc' },
       take: 1000,
     });
-    const listed = rows.filter((e) => e.ticketTypes.length);
-    const recent = await this.soldRecently(listed.map((e) => e.id));
-    let cards: EventCardDto[] = listed
-      .map((e) => ({
-        slug: e.slug,
-        title: e.title,
-        subtitle: e.subtitle,
-        category: e.category,
-        startsAt: e.startsAt,
-        imageUrl: e.imageUrl,
-        venue: e.venue?.name ?? (e.online ? 'Online' : null),
-        city: e.venue?.city ?? null,
-        country: e.venue?.country ?? null,
-        lat: e.venue?.lat ?? null,
-        lng: e.venue?.lng ?? null,
-        currency: e.currency,
-        fromCents: Math.min(...e.ticketTypes.map((t) => t.priceCents)),
-        soldRecent: recent.get(e.id) ?? 0,
-      }));
+    let cards = await this.cards(rows.filter((e) => e.ticketTypes.length));
     // In the visitor's currency: an approximate converted price on every card, and maxPrice compared against it.
     const cur = q.currency;
     if (cur) cards = cards.map((c) => ({ ...c, fromCentsIn: { currency: cur, cents: this.fx.convert(c.fromCents, c.currency, cur) } }));
@@ -284,5 +287,6 @@ export class EventsController {
 @Module({
   controllers: [EventsController],
   providers: [EventsService],
+  exports: [EventsService],
 })
 export class EventsModule {}

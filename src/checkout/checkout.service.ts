@@ -535,7 +535,54 @@ export class CheckoutService {
     const o = await this.prisma.order.findUnique({ where: { id: orderId }, select: { buyerId: true, email: true } });
     const allowed = o && ((user && (o.buyerId === user.id || user.roles.includes('ADMIN'))) || (email && email.trim().toLowerCase() === o.email));
     if (!allowed) throw new NotFoundException('Order not found.');
-    return this.orderView(orderId);
+    // The buyer (or an admin) also sees refund requests, newest first, so the app can show where one stands.
+    const refundRequests = await this.prisma.refundRequest.findMany({
+      where: { orderId },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, status: true, reason: true, amountCents: true, createdAt: true, decidedAt: true },
+    });
+    return { ...(await this.orderView(orderId)), refundRequests };
+  }
+
+  /**
+   * The signed-in fan's orders (bought on their account or with their email), newest first, for order history.
+   * Abandoned checkouts (never paid) are left out. Each row has the event, the ticket type and the latest refund request.
+   */
+  async myOrders(user: AuthUser) {
+    const rows = await this.prisma.order.findMany({
+      where: {
+        AND: [
+          { OR: [{ buyerId: user.id }, { email: user.email }] },
+          { OR: [{ status: { in: ['PAID', 'REFUNDED', 'PARTIALLY_REFUNDED'] } }, { status: 'CANCELLED', paidAt: { not: null } }] },
+        ],
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 200,
+      select: {
+        id: true,
+        status: true,
+        quantity: true,
+        unitCents: true,
+        subtotalCents: true,
+        protectionCents: true,
+        discountCents: true,
+        totalCents: true,
+        refundedCents: true,
+        promoCode: true,
+        currency: true,
+        provider: true,
+        createdAt: true,
+        paidAt: true,
+        resaleListingId: true,
+        event: { select: { slug: true, title: true, startsAt: true, timezone: true, imageUrl: true, status: true, venue: { select: { name: true, city: true } } } },
+        ticketType: { select: { name: true } },
+        gift: { select: { recipientName: true, sendAt: true, sentAt: true, claimedAt: true } },
+        refunds: { orderBy: { createdAt: 'desc' }, take: 1, select: { id: true, status: true, createdAt: true, decidedAt: true, amountCents: true } },
+      },
+    });
+    return {
+      orders: rows.map(({ refunds, resaleListingId, ...o }) => ({ ...o, resale: !!resaleListingId, refundRequest: refunds[0] ?? null })),
+    };
   }
 
   async requestRefund(orderId: string, user: AuthUser, reason: string) {
