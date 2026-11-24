@@ -17,7 +17,10 @@ import { FxService } from '../fx/fx.module';
 import { PriceDropService } from '../price-drops/price-drops.module';
 import { EventCancellation } from '../admin/cancel-event';
 import { VenueChange } from './venue-change';
+import { VenueBookingService, assertFits } from '../venues/venue-bookings';
+import { isLive } from '../venues/booking-rules';
 import type {
+  AttachBookingDto,
   ChangeVenueDto,
   CreateEventDto,
   CreateOrgDto,
@@ -58,6 +61,7 @@ export class OrganizerService {
     private readonly priceDrops: PriceDropService,
     private readonly cancellation: EventCancellation,
     private readonly venues: VenueChange,
+    private readonly bookings: VenueBookingService,
   ) {}
 
   /* ---------- access ---------- */
@@ -174,13 +178,20 @@ export class OrganizerService {
 
   async createEvent(orgId: string, user: AuthUser, dto: CreateEventDto) {
     await this.member(orgId, user, EDIT);
-    if (!dto.online && !dto.venueId && !dto.venue) throw new BadRequestException('Add a venue, or mark the event as online.');
+    if (!dto.online && !dto.venueId && !dto.venue && !dto.venueBookingId) throw new BadRequestException('Add a venue, or mark the event as online.');
     // Times are wall-clock times in this zone, so an unknown zone would show the wrong time to everyone.
     if (dto.timezone && !isTimeZone(dto.timezone)) throw new BadRequestException(`Unknown time zone "${dto.timezone}". Use an IANA name such as Africa/Lagos.`);
     const feeMode: FeeMode = dto.feeMode ?? 'BUYER';
     let venueId = dto.venueId ?? null;
     let timezone = dto.timezone ?? 'UTC';
-    if (!venueId && dto.venue) {
+    // A venue booked on Eventro: the event is held there, in the venue's zone, within the booking's times.
+    const booking = dto.venueBookingId ? await this.bookings.attachable(dto.venueBookingId, orgId) : null;
+    if (booking) {
+      if (dto.online) throw new BadRequestException('An online event doesn’t need a venue booking.');
+      assertFits(booking, { startsAt: new Date(dto.startsAt), doorsAt: dto.doorsAt ? new Date(dto.doorsAt) : null, endsAt: dto.endsAt ? new Date(dto.endsAt) : null });
+      venueId = booking.venueId;
+      timezone = booking.timezone;
+    } else if (!venueId && dto.venue) {
       const country = dto.venue.country?.toUpperCase();
       // The venue's time zone: from its map position, else its state or province, else its country's main zone.
       const tz = (dto.venue.lat !== undefined && dto.venue.lng !== undefined ? timezoneAt(dto.venue.lat, dto.venue.lng) : null) ?? placeTimezone(country, dto.venue.region);
@@ -195,30 +206,35 @@ export class OrganizerService {
       if (!v) throw new BadRequestException('That venue doesn’t exist.');
       timezone = v.timezone ?? placeTimezone(v.country, v.region) ?? 'UTC';
     }
-    const ev = await this.prisma.event.create({
-      data: {
-        orgId,
-        venueId,
-        slug: `${slugify(dto.title)}-${randomSuffix()}`,
-        title: dto.title.trim(),
-        subtitle: dto.subtitle?.trim() ?? '',
-        description: dto.description?.trim() ?? '',
-        category: dto.category,
-        imageUrl: dto.imageUrl,
-        startsAt: new Date(dto.startsAt),
-        doorsAt: dto.doorsAt ? new Date(dto.doorsAt) : null,
-        endsAt: dto.endsAt ? new Date(dto.endsAt) : null,
-        timezone,
-        currency: dto.currency ?? 'USD',
-        online: !!dto.online,
-        streamUrl: dto.streamUrl,
-        feeMode,
-        visibility: dto.visibility ?? 'PUBLIC',
-        ticketTypes: { create: dto.ticketTypes.map((t, i) => this.ticketTypeData(t, feeMode, i)) },
-      },
-      include: { ticketTypes: true },
+    const data = {
+      orgId,
+      venueId,
+      slug: `${slugify(dto.title)}-${randomSuffix()}`,
+      title: dto.title.trim(),
+      subtitle: dto.subtitle?.trim() ?? '',
+      description: dto.description?.trim() ?? '',
+      category: dto.category,
+      imageUrl: dto.imageUrl,
+      startsAt: new Date(dto.startsAt),
+      doorsAt: dto.doorsAt ? new Date(dto.doorsAt) : null,
+      endsAt: dto.endsAt ? new Date(dto.endsAt) : null,
+      timezone,
+      currency: dto.currency ?? 'USD',
+      online: !!dto.online,
+      streamUrl: dto.streamUrl,
+      feeMode,
+      visibility: dto.visibility ?? 'PUBLIC',
+      ticketTypes: { create: dto.ticketTypes.map((t, i) => this.ticketTypeData(t, feeMode, i)) },
+    } satisfies Prisma.EventUncheckedCreateInput;
+    if (!booking) return this.prisma.event.create({ data, include: { ticketTypes: true } });
+    const ev = await this.prisma.$transaction(async (tx) => {
+      const e = await tx.event.create({ data, include: { ticketTypes: true } });
+      const { count } = await tx.venueBooking.updateMany({ where: { id: booking.id, orgId, eventId: null }, data: { eventId: e.id } });
+      if (!count) throw new ConflictException({ statusCode: 409, code: 'BOOKING_IN_USE', message: `Booking ${booking.code} is already used by another event.` });
+      return e;
     });
-    return ev;
+    await this.audit.log(user.id, 'event.venue_booking', 'Event', ev.id, { bookingId: booking.id, status: booking.status });
+    return { ...ev, venueBooking: VenueBookingService.eventSummary(booking) };
   }
 
   /** The organizer's events with ticket types and 60 days of daily sales (for the dashboard). */
@@ -226,7 +242,7 @@ export class OrganizerService {
     await this.member(orgId, user, DOOR);
     const events = await this.prisma.event.findMany({
       where: { orgId },
-      include: { ticketTypes: { orderBy: { sortOrder: 'asc' } }, venue: { select: { name: true, city: true, address: true, country: true, region: true } } },
+      include: { ticketTypes: { orderBy: { sortOrder: 'asc' } }, venue: { select: { name: true, city: true, address: true, country: true, region: true } }, venueBooking: true },
       orderBy: { startsAt: 'asc' },
     });
     const days = 60;
@@ -265,6 +281,7 @@ export class OrganizerService {
       online: e.online,
       imageUrl: e.imageUrl,
       hasSeatMap: !!e.seatMap,
+      venueBooking: VenueBookingService.eventSummary(e.venueBooking),
       ticketTypes: e.ticketTypes.map((t) => ({ id: t.id, name: t.name, description: t.description, priceCents: t.priceCents, capacity: t.capacity, sold: t.sold, maxPerOrder: t.maxPerOrder, sortOrder: t.sortOrder, perks: t.perks, badge: t.badge })),
       sold: e.ticketTypes.reduce((s, t) => s + t.sold, 0),
       capacity: e.ticketTypes.reduce((s, t) => s + t.capacity, 0),
@@ -313,11 +330,31 @@ export class OrganizerService {
     const ev = await this.eventFor(id, user, DOOR);
     const promos = await this.prisma.promo.findMany({ where: { eventId: id }, orderBy: { code: 'asc' } });
     const venue = ev.venueId ? await this.prisma.venue.findUnique({ where: { id: ev.venueId } }) : null;
-    return { ...ev, venue, promos, media: ((ev.media as MediaItem[] | null) ?? []).map(mediaUrls), previewToken: previewToken(ev.slug, ev.status) };
+    const booking = await this.prisma.venueBooking.findUnique({ where: { eventId: id } });
+    return {
+      ...ev,
+      venue,
+      promos,
+      media: ((ev.media as MediaItem[] | null) ?? []).map(mediaUrls),
+      previewToken: previewToken(ev.slug, ev.status),
+      /** The venue booked on Eventro for this event (status, code); the event can't be submitted until it's CONFIRMED */
+      venueBooking: VenueBookingService.eventSummary(booking),
+    };
   }
 
   async updateEvent(id: string, user: AuthUser, dto: UpdateEventDto) {
-    await this.eventFor(id, user, EDIT);
+    const ev = await this.eventFor(id, user, EDIT);
+    if (dto.startsAt || dto.doorsAt || dto.endsAt) {
+      // Held at a booked venue: the new times still have to sit within the booking.
+      const booking = await this.prisma.venueBooking.findUnique({ where: { eventId: id } });
+      if (booking && isLive(booking)) {
+        assertFits(booking, {
+          startsAt: dto.startsAt ? new Date(dto.startsAt) : ev.startsAt,
+          doorsAt: dto.doorsAt ? new Date(dto.doorsAt) : ev.doorsAt,
+          endsAt: dto.endsAt ? new Date(dto.endsAt) : ev.endsAt,
+        });
+      }
+    }
     const data: Prisma.EventUpdateInput = {
       ...(dto.title !== undefined ? { title: dto.title.trim() } : {}),
       ...(dto.subtitle !== undefined ? { subtitle: dto.subtitle.trim() } : {}),
@@ -339,7 +376,58 @@ export class OrganizerService {
   /** Moves an in-person event to another venue; see VenueChange. Admins and managers, like editing. */
   async changeVenue(id: string, user: AuthUser, dto: ChangeVenueDto) {
     const ev = await this.eventFor(id, user, EDIT);
-    return this.venues.change(ev, user, dto);
+    // A venue booked on Eventro stays until the booking is cancelled or detached; one that fell through is let go.
+    const booking = await this.prisma.venueBooking.findUnique({ where: { eventId: id } });
+    if (booking && isLive(booking)) {
+      throw new ConflictException({ statusCode: 409, code: 'VENUE_BOOKED', message: `This event is booked at its venue on Eventro (${booking.code}). Cancel the booking, or detach it from the event, before moving it.` });
+    }
+    const out = await this.venues.change(ev, user, dto);
+    if (booking) await this.prisma.venueBooking.updateMany({ where: { id: booking.id, eventId: id }, data: { eventId: null } });
+    return out;
+  }
+
+  /**
+   * Holds the event at a venue booked on Eventro (PUT /organizer/events/:id/venue-booking). The event moves to the
+   * booking's venue (through VenueChange, so ticket holders of a published event hear about it) and has to happen
+   * within the booking's times. Events in review or on sale only take a confirmed booking.
+   */
+  async attachBooking(id: string, user: AuthUser, dto: AttachBookingDto) {
+    const ev = await this.eventFor(id, user, EDIT);
+    if (ev.status === 'CANCELLED') throw new BadRequestException('This event was cancelled.');
+    if (ev.online) throw new BadRequestException('This is an online event, so it doesn’t need a venue booking.');
+    const current = await this.prisma.venueBooking.findUnique({ where: { eventId: id } });
+    if (current && current.id !== dto.bookingId && isLive(current)) {
+      throw new ConflictException({ statusCode: 409, code: 'EVENT_ALREADY_BOOKED', message: `This event already has a venue booking (${current.code}). Cancel or detach it first.` });
+    }
+    const b = await this.bookings.attachable(dto.bookingId, ev.orgId, id);
+    assertFits(b, ev);
+    const onSale = ev.status === 'IN_REVIEW' || ev.status === 'PUBLISHED';
+    if (onSale && b.status !== 'CONFIRMED') {
+      throw new ConflictException({
+        statusCode: 409,
+        code: 'VENUE_BOOKING_PENDING',
+        message: `This event is already ${ev.status === 'PUBLISHED' ? 'on sale' : 'in review'}, so it can only move to a confirmed booking. Wait for the venue to confirm ${b.code}.`,
+      });
+    }
+    let change: Awaited<ReturnType<VenueChange['change']>> | null = null;
+    if (ev.venueId !== b.venueId) change = await this.venues.change(ev, user, { venueId: b.venueId });
+    else if (ev.timezone !== b.timezone) await this.prisma.event.update({ where: { id }, data: { timezone: b.timezone } });
+    await this.prisma.$transaction(async (tx) => {
+      await tx.venueBooking.updateMany({ where: { eventId: id, NOT: { id: b.id } }, data: { eventId: null } });
+      const { count } = await tx.venueBooking.updateMany({ where: { id: b.id, OR: [{ eventId: null }, { eventId: id }] }, data: { eventId: id } });
+      if (!count) throw new ConflictException({ statusCode: 409, code: 'BOOKING_IN_USE', message: `Booking ${b.code} is already used by another event.` });
+    });
+    await this.audit.log(user.id, 'event.venue_booking', 'Event', id, { bookingId: b.id, status: b.status });
+    return { venueBooking: VenueBookingService.eventSummary(b), venueChange: change };
+  }
+
+  /** Lets go of the event's venue booking (the booking itself stays; cancel it separately). The venue stays. */
+  async detachBooking(id: string, user: AuthUser) {
+    await this.eventFor(id, user, EDIT);
+    const { count } = await this.prisma.venueBooking.updateMany({ where: { eventId: id }, data: { eventId: null } });
+    if (!count) throw new NotFoundException('This event has no venue booking.');
+    await this.audit.log(user.id, 'event.venue_booking.detach', 'Event', id);
+    return { detached: true };
   }
 
   async addTicketType(id: string, user: AuthUser, dto: TicketTypeInputDto) {
@@ -420,6 +508,9 @@ export class OrganizerService {
     await this.notSuspended(ev.orgId);
     if (ev.status !== 'DRAFT' && ev.status !== 'REJECTED') throw new BadRequestException('Only drafts and rejected events can be submitted.');
     if (ev.startsAt <= new Date()) throw new BadRequestException('The event date is in the past.');
+    // Held at a venue booked on Eventro: only once the venue has confirmed.
+    const held = await this.bookings.submitBlock(id);
+    if (held) throw new ConflictException(held);
     return this.prisma.event.update({ where: { id }, data: { status: 'IN_REVIEW', reviewNote: null } });
   }
 

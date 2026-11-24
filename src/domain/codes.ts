@@ -12,6 +12,9 @@ function chunk(n: number) {
 /** Human-friendly order code, e.g. EVT-7F3K-2Q9M. */
 export const orderCode = () => `EVT-${chunk(4)}-${chunk(4)}`;
 
+/** Venue booking code, e.g. VB-7KQ2-M9XD. */
+export const bookingCode = () => `VB-${chunk(4)}-${chunk(4)}`;
+
 /** Ticket code: order code + 2-digit index. */
 export const ticketCode = (order: string, index: number) => `${order}-${String(index + 1).padStart(2, '0')}`;
 

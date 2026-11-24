@@ -94,6 +94,11 @@ export class CreateEventDto {
   @ApiPropertyOptional() @IsOptional() @IsUrl({ require_protocol: true }) streamUrl?: string;
   @ApiPropertyOptional({ description: 'An existing venue' }) @IsOptional() @IsString() venueId?: string;
   @ApiPropertyOptional({ type: VenueInputDto, description: 'Or a new venue' }) @IsOptional() @ValidateNested() @Type(() => VenueInputDto) venue?: VenueInputDto;
+  @ApiPropertyOptional({ description: 'Or a venue booked on Eventro: the event is held there, and waits for the venue to confirm before it can be submitted' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  venueBookingId?: string;
   @ApiPropertyOptional({ enum: ['BUYER', 'ORGANIZER'] }) @IsOptional() @IsIn(['BUYER', 'ORGANIZER']) feeMode?: 'BUYER' | 'ORGANIZER';
   @ApiPropertyOptional({ enum: CURRENCY_CODES, default: 'USD', description: 'Prices and payments for this event are in this currency' })
   @IsOptional()
@@ -142,6 +147,11 @@ export class ChangeVenueDto {
   @IsString()
   @MaxLength(60)
   timezone?: string;
+}
+
+/** PUT /organizer/events/:id/venue-booking */
+export class AttachBookingDto {
+  @ApiProperty({ description: 'A pending or confirmed venue booking of the same organization' }) @IsString() @MaxLength(40) bookingId: string;
 }
 
 export class UpdateTicketTypeDto {

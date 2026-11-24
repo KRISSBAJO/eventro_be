@@ -32,6 +32,16 @@ export function wallClockToInstant(wall: Date, tz: string | null | undefined): D
   }
 }
 
+/** The other way: what the clock on the wall in `tz` reads at `instant`, stored as if it were UTC. */
+export function instantToWallClock(instant: Date, tz: string | null | undefined): Date {
+  if (!tz || tz === 'UTC') return instant;
+  try {
+    return new Date(instant.getTime() + offsetMs(tz, instant));
+  } catch {
+    return instant;
+  }
+}
+
 /** "Sat 8:00 PM": a stored wall-clock time as the venue shows it. */
 export const wallClockLabel = (wall: Date, opts: Intl.DateTimeFormatOptions = { weekday: 'short', hour: 'numeric', minute: '2-digit' }) =>
   new Intl.DateTimeFormat('en-US', { ...opts, timeZone: 'UTC' }).format(wall);

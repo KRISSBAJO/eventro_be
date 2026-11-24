@@ -8,7 +8,9 @@ import { AdminModule } from '../admin/admin-console';
 import { CurrentUser, type AuthUser } from '../common/auth';
 import { RATE_RULES, RateLimit } from '../common/rate-limit';
 import { config } from '../config';
+import { VenuesModule } from '../venues/venues.module';
 import {
+  AttachBookingDto,
   CancelEventDto,
   ChangeVenueDto,
   CheckInDto,
@@ -117,6 +119,16 @@ export class OrganizerController {
   @Put('events/:id/venue') changeVenue(@Param('id') id: string, @CurrentUser() u: AuthUser, @Body() dto: ChangeVenueDto) {
     return this.svc.changeVenue(id, u, dto);
   }
+  /**
+   * Holds the event at a venue booked on Eventro (admins and managers). It can't be submitted for review until the
+   * venue confirms; events in review or on sale only take a confirmed booking.
+   */
+  @Put('events/:id/venue-booking') attachBooking(@Param('id') id: string, @CurrentUser() u: AuthUser, @Body() dto: AttachBookingDto) {
+    return this.svc.attachBooking(id, u, dto);
+  }
+  @Delete('events/:id/venue-booking') detachBooking(@Param('id') id: string, @CurrentUser() u: AuthUser) {
+    return this.svc.detachBooking(id, u);
+  }
   @Post('events/:id/ticket-types') addTicketType(@Param('id') id: string, @CurrentUser() u: AuthUser, @Body() dto: TicketTypeInputDto) {
     return this.svc.addTicketType(id, u, dto);
   }
@@ -214,7 +226,7 @@ export class OrganizerController {
 }
 
 @Module({
-  imports: [CheckoutModule, AdminModule],
+  imports: [CheckoutModule, AdminModule, VenuesModule],
   controllers: [OrganizerController],
   providers: [OrganizerService, PayoutAccounts, VenueChange],
 })

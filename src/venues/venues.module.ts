@@ -8,6 +8,7 @@
  *
  * Public:   GET /venues, GET /venues/:slug, GET /venues/:slug/layout
  * Signed in: POST /venues/:slug/claims, GET /me/venues, PATCH /me/venues/:id, PUT /me/venues/:id/layout
+ * Hiring a venue (listing, availability, booking requests): see venue-bookings.ts.
  * Admin:    GET /admin/venues, PATCH /admin/venues/:id, GET /admin/venues/:id/duplicates, POST /admin/venues/:id/merge,
  *           GET /admin/venue-claims, POST /admin/venue-claims/:id/decide
  */
@@ -36,6 +37,7 @@ import { config } from '../config';
 import { CurrentUser, Public, Roles, type AuthUser } from '../common/auth';
 import { MailService, render } from '../mail/mail.module';
 import { sectionCapacity, validateSeatMap, type SeatMap } from '../domain/seatmap';
+import { OrganizerBookingsController, VenueBookingPublicController, VenueBookingService, VenueManagerBookingsController, publicListing } from './venue-bookings';
 
 const PAGE = 25;
 const ROLES = ['owner', 'manager', 'staff'] as const;
@@ -121,12 +123,15 @@ export class VenuesService {
           select: { slug: true, title: true, subtitle: true, startsAt: true, imageUrl: true, category: true, currency: true, ticketTypes: { select: { priceCents: true } } },
         },
         _count: { select: { claims: { where: { status: 'APPROVED' } }, events: true } },
+        listing: true,
       },
     });
     if (!v || v.hiddenAt) throw new NotFoundException('Venue not found.');
-    const { layout, _count, events, ...rest } = v;
+    const { layout, _count, events, listing, ...rest } = v;
     return {
       ...rest,
+      /** Terms for hiring the venue on Eventro; null when it isn't taking bookings */
+      listing: publicListing(listing, v),
       verified: !!v.verifiedAt,
       managed: _count.claims > 0,
       eventsHosted: _count.events,
@@ -162,14 +167,25 @@ export class VenuesService {
     const claims = await this.prisma.venueClaim.findMany({
       where: { userId: user.id },
       orderBy: { createdAt: 'desc' },
-      include: { venue: true },
+      include: { venue: { include: { listing: { select: { active: true, instantBook: true } } } } },
     });
+    const managedIds = claims.filter((c) => c.status === 'APPROVED' && !c.venue.hiddenAt).map((c) => c.venueId);
+    const waiting = managedIds.length
+      ? await this.prisma.venueBooking.groupBy({ by: ['venueId'], where: { venueId: { in: managedIds }, status: 'PENDING', holdUntil: { gt: new Date() } }, _count: { _all: true } })
+      : [];
+    const pendingOf = new Map(waiting.map((w) => [w.venueId, w._count._all]));
     return {
       managed: claims
         .filter((c) => c.status === 'APPROVED' && !c.venue.hiddenAt)
         .map((c) => {
-          const { layout, ...v } = c.venue;
-          return { role: c.role, venue: { ...v, verified: !!v.verifiedAt, layout: this.layoutInfo({ layout }) } };
+          const { layout, listing, ...v } = c.venue;
+          return {
+            role: c.role,
+            venue: { ...v, verified: !!v.verifiedAt, layout: this.layoutInfo({ layout }) },
+            /** Hiring on Eventro: whether it's listed, and requests waiting for an answer */
+            listing: listing ? { active: listing.active, instantBook: listing.instantBook } : null,
+            pendingBookings: pendingOf.get(c.venueId) ?? 0,
+          };
         }),
       requests: claims
         .filter((c) => c.status !== 'APPROVED')
@@ -317,6 +333,12 @@ export class VenuesService {
         if (clash) await tx.venueClaim.delete({ where: { id: c.id } });
         else await tx.venueClaim.update({ where: { id: c.id }, data: { venueId: intoId } });
       }
+      // Bookings and blocked times move too; the kept venue's listing wins when both have one.
+      await tx.venueBooking.updateMany({ where: { venueId: id }, data: { venueId: intoId } });
+      await tx.venueBlackout.updateMany({ where: { venueId: id }, data: { venueId: intoId } });
+      if (!(await tx.venueListing.findUnique({ where: { venueId: intoId }, select: { venueId: true } }))) {
+        await tx.venueListing.updateMany({ where: { venueId: id }, data: { venueId: intoId } });
+      }
       await tx.venue.update({
         where: { id: intoId },
         data: {
@@ -436,5 +458,10 @@ export class AdminVenuesController {
   }
 }
 
-@Module({ controllers: [VenueDirectoryController, AdminVenuesController], providers: [VenuesService] })
+@Module({
+  // The booking routes go first: `venues/:slug/availability` is more specific than the directory's routes.
+  controllers: [VenueBookingPublicController, VenueManagerBookingsController, OrganizerBookingsController, VenueDirectoryController, AdminVenuesController],
+  providers: [VenuesService, VenueBookingService],
+  exports: [VenueBookingService],
+})
 export class VenuesModule {}

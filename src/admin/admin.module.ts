@@ -1,5 +1,6 @@
 import { previewToken } from '../events/preview';
-import { BadRequestException, Body, Controller, Get, HttpCode, Injectable, NotFoundException, Param, Post, Query } from '@nestjs/common';
+import { BadRequestException, Body, ConflictException, Controller, Get, HttpCode, Injectable, NotFoundException, Param, Post, Query } from '@nestjs/common';
+import { effectiveStatus } from '../venues/booking-rules';
 import { ApiBearerAuth, ApiProperty, ApiPropertyOptional, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { IsIn, IsInt, IsOptional, IsString, MaxLength, Min, MinLength } from 'class-validator';
 import { PrismaService } from '../prisma.service';
@@ -54,6 +55,11 @@ export class AdminService {
   }
 
   async approve(id: string, admin: AuthUser) {
+    // Held at a venue booked on Eventro: the booking has to still be confirmed (it can be cancelled during review).
+    const booking = await this.prisma.venueBooking.findUnique({ where: { eventId: id }, select: { code: true, status: true, holdUntil: true } });
+    if (booking && effectiveStatus(booking) !== 'CONFIRMED') {
+      throw new ConflictException({ statusCode: 409, code: 'VENUE_BOOKING_NOT_CONFIRMED', message: `This event’s venue booking (${booking.code}) is ${effectiveStatus(booking).toLowerCase()}, not confirmed. Reject it so the organizer can pick another venue.` });
+    }
     const { count } = await this.prisma.event.updateMany({ where: { id, status: 'IN_REVIEW' }, data: { status: 'PUBLISHED', reviewNote: null } });
     if (!count) throw new NotFoundException('No event waiting for review with that id.');
     await this.audit.log(admin.id, 'event.approve', 'Event', id);
