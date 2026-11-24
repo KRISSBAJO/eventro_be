@@ -1,6 +1,7 @@
 import { Body, Controller, Delete, Get, Header, HttpCode, Module, Param, Patch, Post, Put, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { OrganizerService } from './organizer.service';
+import { BankAccountDto, PayoutAccounts } from './payout-accounts';
 import { CheckoutModule } from '../checkout/checkout.module';
 import { CurrentUser, type AuthUser } from '../common/auth';
 import { config } from '../config';
@@ -26,7 +27,10 @@ import {
 @ApiBearerAuth()
 @Controller('organizer')
 export class OrganizerController {
-  constructor(private readonly svc: OrganizerService) {}
+  constructor(
+    private readonly svc: OrganizerService,
+    private readonly accounts: PayoutAccounts,
+  ) {}
 
   /* organizations & team */
   @Post('orgs') createOrg(@CurrentUser() u: AuthUser, @Body() dto: CreateOrgDto) {
@@ -58,8 +62,23 @@ export class OrganizerController {
   @Get('orgs/:orgId/payouts') payouts(@Param('orgId') orgId: string, @CurrentUser() u: AuthUser) {
     return this.svc.payouts(orgId, u);
   }
-  @Put('orgs/:orgId/payout-settings') payoutSettings(@Param('orgId') orgId: string, @CurrentUser() u: AuthUser, @Body() dto: PayoutSettingsDto) {
-    return this.svc.setPayoutSchedule(orgId, u, dto.schedule);
+  @Put('orgs/:orgId/payout-settings') async payoutSettings(@Param('orgId') orgId: string, @CurrentUser() u: AuthUser, @Body() dto: PayoutSettingsDto) {
+    const r = await this.svc.setPayoutSchedule(orgId, u, dto.schedule);
+    await this.accounts.syncSchedule(orgId);
+    return r;
+  }
+  @Get('payout-countries') payoutCountries() {
+    return this.accounts.countries();
+  }
+  @ApiQuery({ name: 'country', example: 'NG' })
+  @Get('orgs/:orgId/payouts/banks') payoutBanks(@Param('orgId') orgId: string, @CurrentUser() u: AuthUser, @Query('country') country: string) {
+    return this.accounts.banks(orgId, u, (country ?? '').toUpperCase());
+  }
+  @Post('orgs/:orgId/payouts/resolve') @HttpCode(200) resolveBank(@Param('orgId') orgId: string, @CurrentUser() u: AuthUser, @Body() dto: BankAccountDto) {
+    return this.accounts.resolve(orgId, u, dto);
+  }
+  @Put('orgs/:orgId/payouts/bank') saveBank(@Param('orgId') orgId: string, @CurrentUser() u: AuthUser, @Body() dto: BankAccountDto) {
+    return this.accounts.save(orgId, u, dto);
   }
   @Post('orgs/:orgId/payouts/onboarding') @HttpCode(200) onboarding(@Param('orgId') orgId: string, @CurrentUser() u: AuthUser) {
     return this.svc.payoutOnboarding(orgId, u, `${config.corsOrigins[0] ?? 'http://localhost:3500'}/organizer/payouts`);
@@ -158,6 +177,6 @@ export class OrganizerController {
 @Module({
   imports: [CheckoutModule],
   controllers: [OrganizerController],
-  providers: [OrganizerService],
+  providers: [OrganizerService, PayoutAccounts],
 })
 export class OrganizerModule {}

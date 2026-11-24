@@ -5,6 +5,8 @@ import { IsIn, IsInt, IsOptional, IsString, MaxLength, Min, MinLength } from 'cl
 import { PrismaService } from '../prisma.service';
 import { AuditService } from '../common/audit.service';
 import { Payments } from '../checkout/payments';
+import { MailService, render } from '../mail/mail.module';
+import { config } from '../config';
 import { CurrentUser, Roles, type AuthUser } from '../common/auth';
 
 export class RejectDto {
@@ -26,6 +28,7 @@ export class AdminService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly payments: Payments,
+    private readonly mail: MailService,
   ) {}
 
   /** Automatic flags shown next to each event in the review queue. */
@@ -54,6 +57,7 @@ export class AdminService {
     const { count } = await this.prisma.event.updateMany({ where: { id, status: 'IN_REVIEW' }, data: { status: 'PUBLISHED', reviewNote: null } });
     if (!count) throw new NotFoundException('No event waiting for review with that id.');
     await this.audit.log(admin.id, 'event.approve', 'Event', id);
+    await this.notifyDecision(id, admin, 'approved');
     return { status: 'PUBLISHED' };
   }
 
@@ -61,7 +65,67 @@ export class AdminService {
     const { count } = await this.prisma.event.updateMany({ where: { id, status: 'IN_REVIEW' }, data: { status: 'REJECTED', reviewNote: note } });
     if (!count) throw new NotFoundException('No event waiting for review with that id.');
     await this.audit.log(admin.id, 'event.reject', 'Event', id, { note });
+    await this.notifyDecision(id, admin, 'rejected', note);
     return { status: 'REJECTED' };
+  }
+
+  /**
+   * Tells the organizer about a review decision (their admins and managers, plus the support address), and copies the
+   * other Eventro admins on rejections so the team sees why. Email trouble never undoes the decision.
+   */
+  private async notifyDecision(id: string, admin: AuthUser, decision: 'approved' | 'rejected', note?: string) {
+    try {
+      const e = await this.prisma.event.findUnique({
+        where: { id },
+        select: {
+          id: true,
+          slug: true,
+          title: true,
+          org: { select: { name: true, supportEmail: true, members: { where: { status: 'ACTIVE', role: { in: ['ADMIN', 'MANAGER'] } }, select: { email: true } } } },
+        },
+      });
+      if (!e) return;
+      const manage = `${config.webUrl}/organizer/events/${e.id}`;
+      const to = [...new Set([e.org.supportEmail, ...e.org.members.map((m) => m.email)].filter(Boolean).map((x) => x.trim().toLowerCase()))];
+      const org =
+        decision === 'approved'
+          ? render({
+              preheader: `${e.title} passed review and is on sale now.`,
+              heading: `${e.title} is live`,
+              paragraphs: ['Your event passed review and is now public on Eventro, with tickets on sale.', 'Share the link to get your first sales.'],
+              cta: { label: 'See your event', url: `${config.webUrl}/events/${e.slug}` },
+              footer: `You’re getting this because you manage ${e.org.name} on Eventro.`,
+            })
+          : render({
+              preheader: `${e.title} needs a few changes before it can go live.`,
+              heading: `${e.title} needs changes`,
+              paragraphs: [
+                `Eventro’s review team couldn’t approve ${e.title} yet. Their note:`,
+                `“${note ?? ''}”`,
+                'Make the changes in your dashboard and submit the event again. Resubmitted events go back to the front of the queue.',
+              ],
+              cta: { label: 'Edit and resubmit', url: manage },
+              footer: `You’re getting this because you manage ${e.org.name} on Eventro. Questions? Reply to this email.`,
+            });
+      const subject = decision === 'approved' ? `Approved: ${e.title} is live` : `Changes needed: ${e.title}`;
+      await this.mail.sendMany(`event.${decision}`, to.map((addr) => ({ to: addr, subject, ...org })));
+
+      if (decision === 'rejected') {
+        const admins = await this.prisma.user.findMany({ where: { roles: { has: 'ADMIN' }, id: { not: admin.id }, suspendedAt: null }, select: { email: true } });
+        if (admins.length) {
+          const copy = render({
+            preheader: `${admin.name} rejected ${e.title}.`,
+            heading: `${e.title} was rejected`,
+            paragraphs: [`${admin.name} rejected ${e.title} by ${e.org.name}. The note sent to the organizer:`, `“${note ?? ''}”`],
+            cta: { label: 'Open the review queue', url: `${config.webUrl}/admin#review` },
+            footer: 'You’re getting this because you’re an Eventro admin.',
+          });
+          await this.mail.sendMany('event.rejected.admins', admins.map((a) => ({ to: a.email, subject: `Rejected: ${e.title} (${e.org.name})`, ...copy })));
+        }
+      }
+    } catch {
+      /* the decision stands; the email log shows what didn't send */
+    }
   }
 
   /** Refunds through the payment provider; a full refund voids the tickets and returns them to sale. */

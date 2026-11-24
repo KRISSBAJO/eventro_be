@@ -6,7 +6,7 @@
 import { previewToken } from '../events/preview';
 import { BadRequestException, Body, Controller, ForbiddenException, Get, HttpCode, Injectable, Module, NotFoundException, Param, Patch, Post, Query, Res } from '@nestjs/common';
 import { ApiBearerAuth, ApiProperty, ApiPropertyOptional, ApiTags } from '@nestjs/swagger';
-import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsInt, IsOptional, IsString, IsUrl, Matches, MaxLength, Min, MinLength } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsInt, IsOptional, IsString, IsUrl, Matches, MaxLength, Min, MinLength, ValidateIf } from 'class-validator';
 import type { Prisma } from '@prisma/client';
 import type { Response } from 'express';
 import { PrismaService } from '../prisma.service';
@@ -31,17 +31,34 @@ const dayKey = (d: Date) => d.toISOString().slice(0, 10);
 
 /* ---------- DTOs ---------- */
 
+const REASON_DOC = { description: 'Why. Required (5+ characters) when suspending; shown on the account and kept in the audit log.' };
+const NOTE_DOC = { description: 'Internal note for the audit log (never shown to the account holder), e.g. why a suspension was lifted.' };
+/** A reason is required to suspend; when given at any other time it must still say something. */
+const needsReason = (o: { suspended?: boolean; reason?: string }) => o.suspended === true || o.reason !== undefined;
+
 export class UpdateUserDto {
   @ApiPropertyOptional({ enum: ROLES, isArray: true }) @IsOptional() @IsArray() @ArrayMaxSize(3) @IsIn(ROLES, { each: true }) roles?: Role[];
   @ApiPropertyOptional() @IsOptional() @IsBoolean() suspended?: boolean;
-  @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(300) reason?: string;
+  @ApiPropertyOptional(REASON_DOC) @ValidateIf(needsReason) @IsString() @MinLength(5) @MaxLength(300) reason?: string;
+  @ApiPropertyOptional(NOTE_DOC) @IsOptional() @IsString() @MaxLength(1000) note?: string;
 }
 
 export class UpdateOrgDto {
   @ApiPropertyOptional() @IsOptional() @IsBoolean() verified?: boolean;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() suspended?: boolean;
-  @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(300) reason?: string;
+  @ApiPropertyOptional(REASON_DOC) @ValidateIf(needsReason) @IsString() @MinLength(5) @MaxLength(300) reason?: string;
+  @ApiPropertyOptional(NOTE_DOC) @IsOptional() @IsString() @MaxLength(1000) note?: string;
 }
+
+/** Trimmed text, or null when blank. */
+const clean = (s?: string) => s?.trim() || null;
+/** Suspending needs a reason that says something once trimmed. */
+function reasonFor(dto: { suspended?: boolean; reason?: string }) {
+  const reason = clean(dto.reason);
+  if (dto.suspended && (!reason || reason.length < 5)) throw new BadRequestException('Give a reason (at least 5 characters) to suspend.');
+  return reason;
+}
+const PAID_STATUSES = ['PAID', 'PARTIALLY_REFUNDED', 'REFUNDED'] as ('PAID' | 'PARTIALLY_REFUNDED' | 'REFUNDED')[];
 
 export class NoteDto {
   @ApiProperty() @IsString() @MinLength(5) @MaxLength(500) note: string;
@@ -64,6 +81,7 @@ export class BroadcastDto {
   @ApiPropertyOptional() @IsOptional() @IsUrl({ require_protocol: true, protocols: ['https', 'http'] }) ctaUrl?: string;
   @ApiPropertyOptional({ enum: CATEGORIES }) @IsOptional() @IsIn(CATEGORIES) category?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() @Matches(/^[a-z0-9-]{1,60}$/) city?: string;
+  @ApiPropertyOptional({ description: 'Inbox preview line; defaults to the start of the first paragraph' }) @IsOptional() @IsString() @MaxLength(150) preheader?: string;
   @ApiPropertyOptional({ description: 'Send only to yourself' }) @IsOptional() @IsBoolean() test?: boolean;
 }
 
@@ -189,16 +207,65 @@ export class AdminConsoleService {
       const admins = await this.prisma.user.count({ where: { roles: { has: 'ADMIN' }, suspendedAt: null } });
       if (admins <= 1) throw new BadRequestException('Eventro needs at least one admin.');
     }
+    const reason = reasonFor(dto);
+    const note = clean(dto.note);
     const data: Prisma.UserUpdateInput = {};
     if (dto.roles) data.roles = { set: [...new Set<Role>(['FAN', ...dto.roles])] };
     if (dto.suspended !== undefined) {
       data.suspendedAt = dto.suspended ? new Date() : null;
-      data.suspendReason = dto.suspended ? (dto.reason?.trim() || null) : null;
+      data.suspendReason = dto.suspended ? reason : null;
     }
     const out = await this.prisma.user.update({ where: { id }, data, select: { id: true, email: true, name: true, roles: true, createdAt: true, suspendedAt: true, suspendReason: true } });
-    if (dto.roles) await this.audit.log(me.id, 'user.roles', 'User', id, { from: u.roles, to: out.roles });
-    if (dto.suspended !== undefined) await this.audit.log(me.id, dto.suspended ? 'user.suspend' : 'user.unsuspend', 'User', id, { reason: dto.reason ?? null });
+    if (dto.roles) await this.audit.log(me.id, 'user.roles', 'User', id, { from: u.roles, to: out.roles, note });
+    if (dto.suspended !== undefined) {
+      await this.audit.log(me.id, dto.suspended ? 'user.suspend' : 'user.unsuspend', 'User', id, dto.suspended ? { reason, note } : { note, reason, previousReason: u.suspendReason });
+    }
     return out;
+  }
+
+  /** Audit entries about these records, newest first, with who made them. */
+  private async history(where: Prisma.AuditLogWhereInput, take = 100) {
+    const rows = await this.prisma.auditLog.findMany({ where, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take, include: { actor: { select: { id: true, name: true, email: true } } } });
+    return rows.map(({ actorId: _a, ...r }) => r);
+  }
+
+  /** One account for its admin page: activity, team memberships and the history of admin changes to it. */
+  async user(id: string) {
+    const u = await this.prisma.user.findUnique({
+      where: { id },
+      select: { id: true, email: true, name: true, roles: true, createdAt: true, suspendedAt: true, suspendReason: true, _count: { select: { orders: true, tickets: true, memberships: true } } },
+    });
+    if (!u) throw new NotFoundException('User not found.');
+    const [orders, tickets, memberships, spend, history, activeAdmins] = await Promise.all([
+      this.prisma.order.findMany({
+        where: { buyerId: id },
+        orderBy: { createdAt: 'desc' },
+        take: 10,
+        select: { id: true, quantity: true, totalCents: true, refundedCents: true, currency: true, status: true, createdAt: true, event: { select: { title: true, slug: true } } },
+      }),
+      this.prisma.ticket.groupBy({ by: ['status'], where: { ownerId: id }, _count: { _all: true } }),
+      this.prisma.organizationMember.findMany({
+        where: { userId: id },
+        orderBy: { createdAt: 'asc' },
+        select: { role: true, status: true, createdAt: true, org: { select: { id: true, name: true, verifiedAt: true, suspendedAt: true } } },
+      }),
+      this.prisma.order.groupBy({ by: ['currency'], where: { buyerId: id, status: { in: PAID_STATUSES } }, _sum: { totalCents: true, refundedCents: true }, _count: { _all: true } }),
+      this.history({ entity: 'User', entityId: id }),
+      this.prisma.user.count({ where: { roles: { has: 'ADMIN' }, suspendedAt: null } }),
+    ]);
+    const { _count, ...rest } = u;
+    const spent = spend.map((s) => ({ currency: s.currency, orders: s._count._all, netCents: (s._sum.totalCents ?? 0) - (s._sum.refundedCents ?? 0) }));
+    return {
+      ...rest,
+      counts: { orders: _count.orders, tickets: _count.tickets, orgs: _count.memberships },
+      tickets: Object.fromEntries(tickets.map((t) => [t.status, t._count._all])),
+      spent,
+      spentUsdCents: spent.reduce((s, c) => s + this.usd(c.netCents, c.currency), 0),
+      orders,
+      memberships: memberships.map((m) => ({ role: m.role, status: m.status, since: m.createdAt, org: { id: m.org.id, name: m.org.name, verified: !!m.org.verifiedAt, suspended: !!m.org.suspendedAt } })),
+      activeAdmins,
+      history,
+    };
   }
 
   /* ----- organizers ----- */
@@ -250,19 +317,114 @@ export class AdminConsoleService {
   async updateOrg(id: string, me: AuthUser, dto: UpdateOrgDto) {
     const o = await this.prisma.organization.findUnique({ where: { id } });
     if (!o) throw new NotFoundException('Organizer not found.');
+    const reason = reasonFor(dto);
+    const note = clean(dto.note);
     const data: Prisma.OrganizationUpdateInput = {};
     if (dto.verified !== undefined) data.verifiedAt = dto.verified ? (o.verifiedAt ?? new Date()) : null;
     if (dto.suspended !== undefined) {
       data.suspendedAt = dto.suspended ? new Date() : null;
-      data.suspendReason = dto.suspended ? (dto.reason?.trim() || null) : null;
+      data.suspendReason = dto.suspended ? reason : null;
     }
     const out = await this.prisma.organization.update({ where: { id }, data });
     // Suspending stops sales at once; lifting it leaves resuming to the organizer, event by event.
     let paused = 0;
     if (dto.suspended) paused = (await this.prisma.event.updateMany({ where: { orgId: id, salesPaused: false }, data: { salesPaused: true } })).count;
-    if (dto.verified !== undefined) await this.audit.log(me.id, dto.verified ? 'org.verify' : 'org.unverify', 'Organization', id);
-    if (dto.suspended !== undefined) await this.audit.log(me.id, dto.suspended ? 'org.suspend' : 'org.unsuspend', 'Organization', id, { reason: dto.reason ?? null, pausedEvents: paused });
+    if (dto.verified !== undefined) await this.audit.log(me.id, dto.verified ? 'org.verify' : 'org.unverify', 'Organization', id, { note });
+    if (dto.suspended !== undefined) {
+      await this.audit.log(
+        me.id,
+        dto.suspended ? 'org.suspend' : 'org.unsuspend',
+        'Organization',
+        id,
+        dto.suspended ? { reason, note, pausedEvents: paused } : { note, reason, previousReason: o.suspendReason },
+      );
+    }
     return { ...out, pausedEvents: paused };
+  }
+
+  /** One organizer for its admin page: team, events (with preview links), sales and payouts, and its history. */
+  async org(id: string) {
+    const o = await this.prisma.organization.findUnique({
+      where: { id },
+      include: {
+        members: { orderBy: { createdAt: 'asc' }, select: { id: true, email: true, role: true, status: true, createdAt: true, user: { select: { id: true, name: true, email: true, suspendedAt: true } } } },
+        events: {
+          orderBy: { startsAt: 'desc' },
+          select: {
+            id: true,
+            slug: true,
+            title: true,
+            status: true,
+            startsAt: true,
+            currency: true,
+            salesPaused: true,
+            online: true,
+            venue: { select: { name: true, city: true } },
+            ticketTypes: { select: { sold: true, capacity: true, priceCents: true } },
+          },
+        },
+      },
+    });
+    if (!o) throw new NotFoundException('Organizer not found.');
+    const eventIds = o.events.map((e) => e.id);
+    const [sales, history] = await Promise.all([
+      this.prisma.order.groupBy({ by: ['currency'], where: { event: { orgId: id }, status: { in: PAID_STATUSES } }, _sum: { totalCents: true, refundedCents: true, quantity: true }, _count: { _all: true } }),
+      this.history({ OR: [{ entity: 'Organization', entityId: id }, ...(eventIds.length ? [{ entity: 'Event', entityId: { in: eventIds } }] : [])] }),
+    ]);
+    const events = o.events.map((e) => ({
+      id: e.id,
+      slug: e.slug,
+      title: e.title,
+      status: e.status,
+      previewToken: previewToken(e.slug, e.status),
+      startsAt: e.startsAt,
+      currency: e.currency,
+      salesPaused: e.salesPaused,
+      online: e.online,
+      venue: e.venue,
+      sold: e.ticketTypes.reduce((s, t) => s + t.sold, 0),
+      capacity: e.ticketTypes.reduce((s, t) => s + t.capacity, 0),
+      grossCents: e.ticketTypes.reduce((s, t) => s + t.sold * t.priceCents, 0),
+    }));
+    const byCurrency = sales.map((s) => ({
+      currency: s.currency,
+      orders: s._count._all,
+      tickets: s._sum.quantity ?? 0,
+      grossCents: s._sum.totalCents ?? 0,
+      refundedCents: s._sum.refundedCents ?? 0,
+    }));
+    const grossUsd = byCurrency.reduce((s, c) => s + this.usd(c.grossCents, c.currency), 0);
+    const refundedUsd = byCurrency.reduce((s, c) => s + this.usd(c.refundedCents, c.currency), 0);
+    return {
+      id: o.id,
+      name: o.name,
+      supportEmail: o.supportEmail,
+      website: o.website,
+      about: o.about,
+      createdAt: o.createdAt,
+      verifiedAt: o.verifiedAt,
+      suspendedAt: o.suspendedAt,
+      suspendReason: o.suspendReason,
+      members: o.members,
+      events,
+      counts: {
+        events: events.length,
+        published: events.filter((e) => e.status === 'PUBLISHED').length,
+        paused: events.filter((e) => e.salesPaused).length,
+        ticketsSold: events.reduce((s, e) => s + e.sold, 0),
+      },
+      payouts: {
+        ready: !!o.stripeAccountId || !!o.bankLast4,
+        schedule: o.payoutSchedule,
+        provider: o.stripeAccountId ? 'stripe' : o.bankLast4 ? 'bank' : null,
+        bankName: o.bankName,
+        bankLast4: o.bankLast4,
+        bankCountry: o.bankCountry,
+        byCurrency,
+        usd: { grossCents: grossUsd, refundedCents: refundedUsd, netCents: grossUsd - refundedUsd, estFeeCents: Math.round(((grossUsd - refundedUsd) * config.organizerFeePermille) / 1000) },
+      },
+      history,
+    };
   }
 
   /* ----- events ----- */
@@ -402,10 +564,15 @@ export class AdminConsoleService {
   async subscribers(q?: string, status?: string, pageRaw?: string) {
     const page = pageOf(pageRaw);
     const where = this.subscriberWhere(q, status);
-    const [total, active, unsubscribed, items] = await Promise.all([
+    const d30 = new Date(Date.now() - 30 * DAY);
+    const d60 = new Date(Date.now() - 60 * DAY);
+    const [total, active, unsubscribed, joined30d, joinedPrev30d, left30d, items] = await Promise.all([
       this.prisma.subscriber.count({ where }),
       this.prisma.subscriber.count({ where: { unsubscribedAt: null } }),
       this.prisma.subscriber.count({ where: { unsubscribedAt: { not: null } } }),
+      this.prisma.subscriber.count({ where: { createdAt: { gte: d30 } } }),
+      this.prisma.subscriber.count({ where: { createdAt: { gte: d60, lt: d30 } } }),
+      this.prisma.subscriber.count({ where: { unsubscribedAt: { gte: d30 } } }),
       this.prisma.subscriber.findMany({
         where,
         orderBy: { createdAt: 'desc' },
@@ -414,7 +581,7 @@ export class AdminConsoleService {
         select: { id: true, email: true, source: true, interests: true, city: true, createdAt: true, unsubscribedAt: true },
       }),
     ]);
-    return { total, page, pageSize: PAGE, counts: { active, unsubscribed }, items };
+    return { total, page, pageSize: PAGE, counts: { active, unsubscribed, joined30d, joinedPrev30d, left30d }, items };
   }
 
   async subscribersCsv(status?: string) {
@@ -446,7 +613,7 @@ export class AdminConsoleService {
     const mails: Mail[] = recipients.map((r) => {
       const manage = r.token ? `${config.webUrl}/newsletter/manage?t=${r.token}` : `${config.webUrl}/newsletter`;
       const { html, text } = render({
-        preheader: paragraphs[0]?.slice(0, 120) ?? dto.subject,
+        preheader: clean(dto.preheader) ?? paragraphs[0]?.slice(0, 120) ?? dto.subject,
         heading: dto.heading,
         paragraphs,
         cta: dto.ctaLabel && dto.ctaUrl ? { label: dto.ctaLabel, url: dto.ctaUrl } : undefined,
@@ -464,6 +631,37 @@ export class AdminConsoleService {
     }
     void sending;
     return { test: false, recipients: mails.length, queued: true, emailEnabled: this.mail.enabled };
+  }
+
+  /** The last broadcasts (from the audit log), with how their emails went (from the email log). */
+  async broadcasts(limitRaw?: string) {
+    const take = Math.max(1, Math.min(50, Number(limitRaw) || 10));
+    const rows = await this.history({ action: 'newsletter.broadcast' }, take);
+    return Promise.all(
+      rows.map(async (r, i) => {
+        const d = (r.data ?? {}) as { subject?: string; category?: string | null; city?: string | null; recipients?: number };
+        // This broadcast's emails: same subject, logged after it started and before the next (newer) one.
+        const until = rows[i - 1]?.createdAt;
+        const stats = d.subject
+          ? await this.prisma.emailLog.groupBy({
+              by: ['status'],
+              where: { kind: 'broadcast', subject: d.subject.slice(0, 300), createdAt: { gte: new Date(r.createdAt.getTime() - 5000), ...(until ? { lt: until } : {}) } },
+              _count: { _all: true },
+            })
+          : [];
+        const count = (s: string) => stats.find((x) => x.status === s)?._count._all ?? 0;
+        return {
+          id: r.id,
+          createdAt: r.createdAt,
+          actor: r.actor,
+          subject: d.subject ?? '',
+          category: d.category ?? null,
+          city: d.city ?? null,
+          recipients: d.recipients ?? 0,
+          delivery: { sent: count('SENT'), failed: count('FAILED'), skipped: count('SKIPPED') },
+        };
+      }),
+    );
   }
 
   /* ----- price drops & email log ----- */
@@ -510,12 +708,18 @@ export class AdminConsoleController {
   @Get('users') users(@Query('q') q?: string, @Query('role') role?: string, @Query('status') status?: string, @Query('page') page?: string) {
     return this.svc.users(q, role, status, page);
   }
+  @Get('users/:id') user(@Param('id') id: string) {
+    return this.svc.user(id);
+  }
   @Patch('users/:id') updateUser(@Param('id') id: string, @CurrentUser() u: AuthUser, @Body() dto: UpdateUserDto) {
     return this.svc.updateUser(id, u, dto);
   }
 
   @Get('orgs') orgs(@Query('q') q?: string, @Query('status') status?: string, @Query('page') page?: string) {
     return this.svc.orgs(q, status, page);
+  }
+  @Get('orgs/:id') org(@Param('id') id: string) {
+    return this.svc.org(id);
   }
   @Patch('orgs/:id') updateOrg(@Param('id') id: string, @CurrentUser() u: AuthUser, @Body() dto: UpdateOrgDto) {
     return this.svc.updateOrg(id, u, dto);
@@ -551,6 +755,9 @@ export class AdminConsoleController {
   }
   @Get('broadcast/audience') audience(@Query('category') category?: string, @Query('city') city?: string) {
     return this.svc.broadcastAudience(category, city);
+  }
+  @Get('broadcasts') broadcasts(@Query('limit') limit?: string) {
+    return this.svc.broadcasts(limit);
   }
   @Post('broadcast') @HttpCode(200) broadcast(@CurrentUser() u: AuthUser, @Body() dto: BroadcastDto) {
     return this.svc.broadcast(u, dto);

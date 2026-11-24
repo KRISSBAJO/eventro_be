@@ -133,6 +133,15 @@ model Organization {
   bankLast4      String?
   bankName       String?
   bankCountry    String?
+  /// "stripe" (Stripe Connect, hosted onboarding) or "paystack" (subaccount; NG, GH, KE, ZA).
+  payoutProvider String?
+  /// Paystack subaccount (ACCT_…). Paystack holds the account number; we keep the bank, last 4 and the holder's name.
+  paystackSubaccount String?
+  bankCode        String?
+  bankAccountName String?
+  /// After the bank account changes, payouts wait until this time (and every org admin is emailed).
+  payoutHoldUntil DateTime?
+  payoutUpdatedAt DateTime?
   /// Checked by Eventro (shown as a badge; skips the "new organizer" review flag).
   verifiedAt     DateTime?
   /// Suspended organizers can't submit events, and sales on their events are paused.

@@ -242,7 +242,7 @@ test('admin console: overview, people, organizers, events, orders and subscriber
   await ok(call('PATCH', `/admin/users/${fanId}`, { suspended: false }, admin.token));
   await ok(call('GET', '/me/tickets', undefined, fan.token));
   // Admins can't lock themselves out
-  assert.equal((await call('PATCH', `/admin/users/${admin.user.id}`, { suspended: true }, admin.token)).status, 403);
+  assert.equal((await call('PATCH', `/admin/users/${admin.user.id}`, { suspended: true, reason: 'Testing the guard' }, admin.token)).status, 403);
 
   // Organizers: verify, suspend (pauses sales and blocks resuming), lift
   const orgs = await ok(call('GET', `/admin/orgs?q=${encodeURIComponent(o.name)}`, undefined, admin.token));
@@ -294,6 +294,127 @@ test('admin console: overview, people, organizers, events, orders and subscriber
   const audit = await ok(call('GET', '/admin/audit?limit=50', undefined, admin.token));
   const actions = new Set(audit.map((a: Json) => a.action));
   for (const a of ['user.roles', 'user.suspend', 'org.verify', 'org.suspend', 'event.takedown', 'event.publish', 'order.refund']) assert.ok(actions.has(a), `audit has ${a}`);
+});
+
+test('admin detail pages: suspending needs a reason, notes land in each record’s history', async () => {
+  const admin = await account('admin@test.local', 'Admin');
+  const org = await account(`dp-org-${run}@test.local`, 'Eli Organizer');
+  const fan = await account(`dp-fan-${run}@test.local`, 'Fay Fan');
+  const { org: o, ev, tt } = await publishedEvent(org.token, admin.token, 'Detail Hall');
+  const fanId = fan.user.id as string;
+
+  // A purchase so the user page has activity
+  const hold = await ok(call('POST', '/holds', { ticketTypeId: tt.id, quantity: 2 }));
+  const order = await ok(call('POST', '/orders', { holdId: hold.id, email: `dp-fan-${run}@test.local`, name: 'Fay Fan' }, fan.token));
+  await ok(call('POST', `/orders/${order.orderId}/pay`));
+
+  // Only admins; unknown ids are 404
+  assert.equal((await call('GET', `/admin/users/${fanId}`, undefined, fan.token)).status, 403);
+  assert.equal((await call('GET', '/admin/users/nope', undefined, admin.token)).status, 404);
+  assert.equal((await call('GET', '/admin/orgs/nope', undefined, admin.token)).status, 404);
+
+  // Suspending without a real reason is refused, for users and organizers
+  for (const body of [{ suspended: true }, { suspended: true, reason: 'no' }, { suspended: true, reason: '      ' }]) {
+    assert.equal((await call('PATCH', `/admin/users/${fanId}`, body, admin.token)).status, 400, JSON.stringify(body));
+    assert.equal((await call('PATCH', `/admin/orgs/${o.id}`, body, admin.token)).status, 400, JSON.stringify(body));
+  }
+  assert.equal((await call('GET', '/me/tickets', undefined, fan.token)).status, 200, 'still active');
+
+  // Roles with a note, suspend with a reason and an internal note, reactivate with a note
+  await ok(call('PATCH', `/admin/users/${fanId}`, { roles: ['ORGANIZER'], note: 'Runs a comedy night' }, admin.token));
+  const s = await ok(call('PATCH', `/admin/users/${fanId}`, { suspended: true, reason: 'Chargeback abuse', note: 'Three disputes in a week' }, admin.token));
+  assert.equal(s.suspendReason, 'Chargeback abuse');
+  await ok(call('PATCH', `/admin/users/${fanId}`, { suspended: false, note: 'Bank confirmed the disputes were a mistake' }, admin.token));
+
+  const u = await ok(call('GET', `/admin/users/${fanId}`, undefined, admin.token));
+  assert.equal(u.email, `dp-fan-${run}@test.local`);
+  assert.equal(u.suspendedAt, null);
+  assert.deepEqual([...u.roles].sort(), ['FAN', 'ORGANIZER']);
+  assert.equal(u.counts.orders, 1);
+  assert.equal(u.orders[0].id, order.orderId);
+  assert.equal(u.tickets.ACTIVE, 2);
+  assert.ok(u.spentUsdCents > 0);
+  assert.ok(u.activeAdmins >= 1);
+  assert.deepEqual(
+    u.history.map((h: Json) => h.action),
+    ['user.unsuspend', 'user.suspend', 'user.roles'],
+  );
+  const [lift, sus, roles] = u.history;
+  assert.equal(sus.data.reason, 'Chargeback abuse');
+  assert.equal(sus.data.note, 'Three disputes in a week');
+  assert.equal(sus.actor.email, 'admin@test.local');
+  assert.equal(lift.data.note, 'Bank confirmed the disputes were a mistake');
+  assert.equal(lift.data.previousReason, 'Chargeback abuse');
+  assert.equal(roles.data.note, 'Runs a comedy night');
+
+  // The organizer who made the event shows their membership
+  const ou = await ok(call('GET', `/admin/users/${org.user.id}`, undefined, admin.token));
+  assert.equal(ou.memberships[0].org.id, o.id);
+
+  // Organizer page: verify with a note, suspend (pauses sales), lift with a note
+  await ok(call('PATCH', `/admin/orgs/${o.id}`, { verified: true, note: 'Checked their venue contract' }, admin.token));
+  const os = await ok(call('PATCH', `/admin/orgs/${o.id}`, { suspended: true, reason: 'Misleading lineup', note: 'Fans complained' }, admin.token));
+  assert.equal(os.pausedEvents, 1);
+  await ok(call('PATCH', `/admin/orgs/${o.id}`, { suspended: false, note: 'Lineup fixed' }, admin.token));
+  await ok(call('POST', `/admin/events/${ev.id}/takedown`, { note: 'Checking the takedown shows up' }, admin.token));
+
+  const d = await ok(call('GET', `/admin/orgs/${o.id}`, undefined, admin.token));
+  assert.equal(d.name, o.name);
+  assert.ok(d.verifiedAt);
+  assert.equal(d.suspendedAt, null);
+  assert.equal(d.members.length, 1);
+  assert.equal(d.members[0].user.id, org.user.id);
+  assert.equal(d.events.length, 1);
+  assert.equal(d.events[0].status, 'REJECTED');
+  assert.ok(d.events[0].previewToken, 'unpublished events carry a preview token');
+  assert.equal(d.counts.ticketsSold, 2);
+  assert.equal(d.payouts.byCurrency[0].orders, 1);
+  assert.equal(d.payouts.ready, false);
+  assert.deepEqual(
+    d.history.map((h: Json) => h.action),
+    ['event.takedown', 'org.unsuspend', 'org.suspend', 'org.verify', 'event.approve'],
+  );
+  assert.equal(d.history[2].data.reason, 'Misleading lineup');
+  assert.equal(d.history[2].data.note, 'Fans complained');
+  assert.equal(d.history[1].data.note, 'Lineup fixed');
+  assert.equal(d.history[3].data.note, 'Checked their venue contract');
+});
+
+test('subscribers: growth counts, custom preheader and recent broadcasts', async () => {
+  const admin = await account('admin@test.local', 'Admin');
+  const email = `gr-${run}@example.com`;
+  await ok(call('POST', '/newsletter', { email, interests: ['Theater'], city: `grow-${run}` }));
+  const subs = await ok(call('GET', '/admin/subscribers', undefined, admin.token));
+  assert.ok(subs.counts.joined30d >= 1);
+  assert.equal(typeof subs.counts.joinedPrev30d, 'number');
+  assert.equal(typeof subs.counts.left30d, 'number');
+
+  // A real send to a one-person audience (a city nobody else picked, so others with no city are included too)
+  const aud = await ok(call('GET', `/admin/broadcast/audience?category=Theater&city=grow-${run}`, undefined, admin.token));
+  assert.ok(aud.count >= 1);
+  const subject = `Curtain up ${run}`;
+  const before = outbox.length;
+  const r = await ok(
+    call('POST', '/admin/broadcast', { subject, heading: 'Shows this week', preheader: 'Seats from $20', body: 'Lots of good theater coming up.', category: 'Theater', city: `grow-${run}` }, admin.token),
+  );
+  assert.equal(r.recipients, aud.count);
+  const m = await waitFor(() => outbox.slice(before).find((x) => x.to === email));
+  assert.ok(m.html.includes('Seats from $20'), 'custom preheader');
+
+  // Listed with who sent it and, once the background send is logged, how delivery went
+  assert.equal((await call('GET', '/admin/broadcasts', undefined, (await account(`gr-fan-${run}@test.local`, 'Gil Fan')).token)).status, 403);
+  let b: Json | undefined;
+  for (const end = Date.now() + 8000; Date.now() < end; await new Promise((res) => setTimeout(res, 100))) {
+    const list = await ok(call('GET', '/admin/broadcasts?limit=5', undefined, admin.token));
+    b = (list as unknown as Json[]).find((x) => x.subject === subject);
+    if (b && b.delivery.sent >= aud.count) break;
+  }
+  assert.ok(b, 'listed');
+  assert.equal(b.recipients, aud.count);
+  assert.equal(b.category, 'Theater');
+  assert.equal(b.actor.email, 'admin@test.local');
+  assert.equal(b.delivery.sent, aud.count);
+  assert.equal(b.delivery.failed, 0);
 });
 
 test('seat maps can be resized, but never under a seat that is already sold', async () => {
@@ -705,4 +826,111 @@ test('event previews: signed links show unpublished events to their team, never 
   assert.equal(pub.preview, undefined);
   const after = (await ok(call('GET', `/organizer/orgs/${o.id}/events`, undefined, org.token))).find((x: Json) => x.id === ev.id);
   assert.equal(after.previewToken, undefined);
+});
+
+test('review decisions: rejections email the organizer and the other admins; approvals email the organizer', async () => {
+  const admin = await account('admin@test.local', 'Admin');
+  const other = await account(`rv-admin2-${run}@test.local`, 'Second Admin');
+  await ok(call('PATCH', `/admin/users/${other.user.id}`, { roles: ['FAN', 'ADMIN'] }, admin.token));
+  const org = await account(`rv-org-${run}@test.local`, 'Remi Organizer');
+  const o = await ok(call('POST', '/organizer/orgs', { name: `Review Org ${run}` }, org.token));
+  const make = async (title: string) => {
+    const ev = await ok(
+      call('POST', `/organizer/orgs/${o.id}/events`, {
+        title: `${title} ${run}`,
+        category: 'COMEDY',
+        startsAt: new Date(Date.now() + 30 * 86_400_000).toISOString(),
+        venue: { name: 'Cap City Room', address: '1 Congress Ave', city: 'Austin', country: 'US', region: 'Texas', lat: 30.2672, lng: -97.7431 },
+        ticketTypes: [{ name: 'General', basePriceCents: 4830, capacity: 100 }],
+      }, org.token),
+    );
+    await ok(call('POST', `/organizer/events/${ev.id}/submit`, undefined, org.token));
+    return ev;
+  };
+
+  const bad = await make('Rejected Show');
+  const reason = 'The venue address is incomplete. Please add the street address.';
+  await ok(call('POST', `/admin/events/${bad.id}/reject`, { note: reason }, admin.token));
+  const toOrg = await waitFor(() => outbox.find((m) => m.to === `rv-org-${run}@test.local` && m.subject.includes('Changes needed')));
+  assert.ok(toOrg.html.includes('street address'), 'the organizer sees the reason');
+  const toAdmin = await waitFor(() => outbox.find((m) => m.to === `rv-admin2-${run}@test.local` && m.subject.startsWith('Rejected:')));
+  assert.ok(toAdmin.html.includes('street address'), 'other admins see the reason');
+  assert.ok(!outbox.some((m) => m.to === 'admin@test.local' && m.subject === `Rejected: ${bad.title} (Review Org ${run})`), 'the acting admin is not copied');
+  // and the organizer sees it on the event too
+  assert.equal((await ok(call('GET', `/organizer/events/${bad.id}`, undefined, org.token))).reviewNote, reason);
+
+  const good = await make('Approved Show');
+  await ok(call('POST', `/admin/events/${good.id}/approve`, undefined, admin.token));
+  await waitFor(() => outbox.find((m) => m.to === `rv-org-${run}@test.local` && m.subject.startsWith('Approved:')));
+});
+
+test('payouts: Nigerian organizers pick a bank, confirm the account name, and get a Paystack subaccount', async () => {
+  const org = await account(`po-org-${run}@test.local`, 'Ada Payouts');
+  const stranger = await account(`po-x-${run}@test.local`, 'Not A Member');
+  const o = await ok(call('POST', '/organizer/orgs', { name: `Payout Org ${run}` }, org.token));
+
+  const countries = await ok(call('GET', '/organizer/payout-countries', undefined, org.token));
+  assert.equal(countries.countries.find((c: Json) => c.code === 'NG').provider, 'paystack');
+  assert.equal(countries.countries.find((c: Json) => c.code === 'US').provider, 'stripe');
+
+  const banks = await ok(call('GET', `/organizer/orgs/${o.id}/payouts/banks?country=NG`, undefined, org.token));
+  assert.ok(banks.banks.some((b: Json) => b.code === '044'));
+  assert.equal((await call('GET', `/organizer/orgs/${o.id}/payouts/banks?country=NG`, undefined, stranger.token)).status, 403, 'only org admins');
+  assert.equal((await call('GET', `/organizer/orgs/${o.id}/payouts/banks?country=US`, undefined, org.token)).status, 400, 'US is Stripe, not a bank list');
+
+  // Name check
+  const named = await ok(call('POST', `/organizer/orgs/${o.id}/payouts/resolve`, { country: 'NG', bankCode: '044', accountNumber: '0123456789' }, org.token));
+  assert.equal(named.accountName, 'TEST ACCOUNT HOLDER');
+  assert.equal(named.last4, '6789');
+  assert.equal((await call('POST', `/organizer/orgs/${o.id}/payouts/resolve`, { country: 'NG', bankCode: '044', accountNumber: '0000000000' }, org.token)).status, 400);
+  assert.equal((await call('POST', `/organizer/orgs/${o.id}/payouts/resolve`, { country: 'NG', bankCode: '999', accountNumber: '0123456789' }, org.token)).status, 400, 'unknown bank');
+  assert.equal((await call('POST', `/organizer/orgs/${o.id}/payouts/resolve`, { country: 'NG', bankCode: '044', accountNumber: '01234-56789' }, org.token)).status, 400, 'digits only');
+
+  // First account: no hold, admins emailed
+  const saved = await ok(call('PUT', `/organizer/orgs/${o.id}/payouts/bank`, { country: 'NG', bankCode: '044', accountNumber: '0123456789' }, org.token));
+  assert.equal(saved.bankName, 'Access Bank');
+  assert.equal(saved.holdUntil, null);
+  let p = await ok(call('GET', `/organizer/orgs/${o.id}/payouts`, undefined, org.token));
+  assert.equal(p.payoutMethod.provider, 'paystack');
+  assert.equal(p.payoutMethod.bankLast4, '6789');
+  assert.equal(p.payoutMethod.accountName, 'TEST ACCOUNT HOLDER');
+  assert.ok(!JSON.stringify(p).includes('0123456789'), 'the full account number is never returned');
+  await waitFor(() => outbox.find((m) => m.to === `po-org-${run}@test.local` && m.subject.startsWith('Payout account added')));
+
+  // Changing it: 24-hour hold and a warning email
+  await ok(call('PUT', `/organizer/orgs/${o.id}/payouts/bank`, { country: 'NG', bankCode: '058', accountNumber: '0987654321' }, org.token));
+  p = await ok(call('GET', `/organizer/orgs/${o.id}/payouts`, undefined, org.token));
+  assert.equal(p.payoutMethod.bankName, 'Guaranty Trust Bank');
+  assert.ok(new Date(p.holdUntil).getTime() > Date.now() + 23 * 3600_000, 'payouts pause for a day after a change');
+  const warn = await waitFor(() => outbox.find((m) => m.to === `po-org-${run}@test.local` && m.subject.startsWith('Payout account changed')));
+  assert.ok(warn.html.includes('4321'));
+});
+
+test('payouts: a Paystack split sends the organizer share to their subaccount', async () => {
+  const { PaystackProvider } = await import('../src/checkout/payments');
+  const seen: Json[] = [];
+  const stub = createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => {
+      seen.push({ url: req.url, body: body ? JSON.parse(body) : null });
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ status: true, data: { authorization_url: 'https://checkout.paystack.test/x', reference: 'ord_1' } }));
+    });
+  });
+  await new Promise<void>((r) => stub.listen(0, '127.0.0.1', r));
+  const { config } = await import('../src/config');
+  const was = config.paystackUrl;
+  (config as { paystackUrl: string }).paystackUrl = `http://127.0.0.1:${(stub.address() as AddressInfo).port}`;
+  try {
+    const p = new PaystackProvider('sk_test_stub');
+    await p.createPayment({ orderId: 'ord_1', amountCents: 1_000_000, currency: 'NGN', email: 'fan@test.local', description: 'x', split: { subaccount: 'ACCT_abc', platformCents: 35_000 } });
+    const init = seen.find((s) => s.url === '/transaction/initialize')!;
+    assert.equal(init.body.subaccount, 'ACCT_abc');
+    assert.equal(init.body.transaction_charge, 35_000);
+    assert.equal(init.body.bearer, 'account');
+  } finally {
+    (config as { paystackUrl: string }).paystackUrl = was;
+    stub.close();
+  }
 });

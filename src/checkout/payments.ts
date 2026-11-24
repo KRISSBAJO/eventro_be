@@ -14,7 +14,74 @@ export type ProviderName = 'stripe' | 'paystack' | 'mock';
  */
 export type CreatedPayment = { paymentRef: string; clientSecret?: string; redirectUrl?: string };
 
-export type PaymentInput = { orderId: string; amountCents: number; currency: Currency; email: string; description: string };
+export type PaymentInput = {
+  orderId: string;
+  amountCents: number;
+  currency: Currency;
+  email: string;
+  description: string;
+  /** Paystack only: send the organizer's share straight to their subaccount; Eventro keeps `platformCents`. */
+  split?: { subaccount: string; platformCents: number };
+};
+
+/* ---------- payout banks (Paystack subaccounts) ---------- */
+
+export type PayoutBank = { code: string; name: string; type: string };
+export type SubaccountInput = { businessName: string; bankCode: string; accountNumber: string; email: string; percentageCharge: number; schedule: 'auto' | 'weekly' };
+
+/** Bank lists, account-name checks and subaccounts. Paystack in real life; a stand-in for local development. */
+export interface PayoutBanks {
+  readonly live: boolean;
+  banks(country: string, currency: string): Promise<PayoutBank[]>;
+  resolve(accountNumber: string, bankCode: string): Promise<{ accountName: string }>;
+  createSubaccount(input: SubaccountInput): Promise<{ code: string }>;
+  updateSubaccount(code: string, input: Partial<SubaccountInput>): Promise<void>;
+}
+
+/** Development only (no PAYSTACK_SECRET_KEY): a few real bank codes, and any account number resolves to a test name. */
+class MockPayoutBanks implements PayoutBanks {
+  readonly live = false;
+  private static readonly BANKS: Record<string, PayoutBank[]> = {
+    NGN: [
+      { code: '044', name: 'Access Bank', type: 'nuban' },
+      { code: '058', name: 'Guaranty Trust Bank', type: 'nuban' },
+      { code: '057', name: 'Zenith Bank', type: 'nuban' },
+      { code: '011', name: 'First Bank of Nigeria', type: 'nuban' },
+      { code: '033', name: 'United Bank For Africa', type: 'nuban' },
+      { code: '50211', name: 'Kuda Bank', type: 'nuban' },
+      { code: '999992', name: 'OPay Digital Services Limited (OPay)', type: 'nuban' },
+      { code: '50515', name: 'Moniepoint MFB', type: 'nuban' },
+    ],
+    GHS: [
+      { code: '280100', name: 'Access Bank Ghana', type: 'ghipss' },
+      { code: '230100', name: 'GCB Bank', type: 'ghipss' },
+      { code: 'MTN', name: 'MTN Mobile Money', type: 'mobile_money' },
+    ],
+    KES: [
+      { code: '01', name: 'Kenya Commercial Bank', type: 'kepss' },
+      { code: '68', name: 'Equity Bank', type: 'kepss' },
+      { code: 'MPESA', name: 'M-PESA', type: 'mobile_money' },
+    ],
+    ZAR: [
+      { code: '632005', name: 'Absa Bank', type: 'basa' },
+      { code: '250655', name: 'First National Bank', type: 'basa' },
+    ],
+  };
+  async banks(_country: string, currency: string) {
+    return MockPayoutBanks.BANKS[currency] ?? [];
+  }
+  async resolve(accountNumber: string) {
+    // "0000000000" stands in for an account that doesn't exist.
+    if (/^0+$/.test(accountNumber)) throw new BadRequestException('Could not resolve account name. Check parameters or try again.');
+    return { accountName: 'TEST ACCOUNT HOLDER' };
+  }
+  async createSubaccount() {
+    return { code: `ACCT_test${Math.random().toString(36).slice(2, 12)}` };
+  }
+  async updateSubaccount() {
+    /* nothing to do */
+  }
+}
 
 export interface PaymentProvider {
   readonly name: ProviderName;
@@ -65,7 +132,7 @@ export type PaystackVerify = { status: string; amount: number; currency: string;
  * which asks us to verify; the charge.success webhook does the same, so whichever arrives first fulfils the order.
  * Amounts are in minor units (kobo for NGN), like everything else here. The order id is the transaction reference.
  */
-export class PaystackProvider implements PaymentProvider {
+export class PaystackProvider implements PaymentProvider, PayoutBanks {
   readonly name = 'paystack' as const;
   private readonly log = new Logger('Paystack');
 
@@ -97,9 +164,55 @@ export class PaystackProvider implements PaymentProvider {
         reference: input.orderId,
         callback_url: `${config.webUrl}/checkout/return?order=${encodeURIComponent(input.orderId)}`,
         metadata: { orderId: input.orderId, description: input.description },
+        // Split: the organizer's share settles to their subaccount; Eventro keeps a flat charge and pays Paystack's fee.
+        ...(input.split ? { subaccount: input.split.subaccount, transaction_charge: input.split.platformCents, bearer: 'account' } : {}),
       }),
     });
     return { paymentRef: data.reference, redirectUrl: data.authorization_url };
+  }
+
+  /* payout banks */
+
+  readonly live = true;
+
+  async banks(country: string, currency: string): Promise<PayoutBank[]> {
+    const rows = await this.call<{ code: string; name: string; type: string; active: boolean; is_deleted?: boolean }[]>(
+      `/bank?country=${encodeURIComponent(country)}&currency=${encodeURIComponent(currency)}&perPage=500`,
+    );
+    return rows.filter((b) => b.active && !b.is_deleted).map((b) => ({ code: b.code, name: b.name, type: b.type }));
+  }
+
+  async resolve(accountNumber: string, bankCode: string) {
+    const d = await this.call<{ account_name: string }>(`/bank/resolve?account_number=${encodeURIComponent(accountNumber)}&bank_code=${encodeURIComponent(bankCode)}`);
+    return { accountName: d.account_name };
+  }
+
+  async createSubaccount(i: SubaccountInput) {
+    const d = await this.call<{ subaccount_code: string }>('/subaccount', {
+      method: 'POST',
+      body: JSON.stringify({
+        business_name: i.businessName,
+        settlement_bank: i.bankCode,
+        account_number: i.accountNumber,
+        percentage_charge: i.percentageCharge,
+        primary_contact_email: i.email,
+        settlement_schedule: i.schedule,
+      }),
+    });
+    return { code: d.subaccount_code };
+  }
+
+  async updateSubaccount(code: string, i: Partial<SubaccountInput>) {
+    await this.call(`/subaccount/${encodeURIComponent(code)}`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        ...(i.businessName ? { business_name: i.businessName } : {}),
+        ...(i.bankCode ? { settlement_bank: i.bankCode } : {}),
+        ...(i.accountNumber ? { account_number: i.accountNumber } : {}),
+        ...(i.email ? { primary_contact_email: i.email } : {}),
+        ...(i.schedule ? { settlement_schedule: i.schedule } : {}),
+      }),
+    });
   }
 
   /** The transaction as Paystack sees it. */
@@ -135,6 +248,13 @@ export class Payments {
     if (!this.stripe) this.log.warn('STRIPE_SECRET_KEY is not set: card payments outside Paystack use the mock provider (development only).');
     if (!this.paystack) this.log.warn('PAYSTACK_SECRET_KEY is not set: NGN, GHS, KES and ZAR payments use the mock provider (development only).');
   }
+
+  /** Bank lists, name checks and subaccounts for Paystack payouts (a stand-in outside production without a key). */
+  payoutBanks(): PayoutBanks | null {
+    if (this.paystack) return this.paystack;
+    return config.isProduction ? null : this.mockBanks;
+  }
+  private readonly mockBanks = new MockPayoutBanks();
 
   /** Which provider charges this currency. */
   forCurrency(currency: Currency): PaymentProvider {

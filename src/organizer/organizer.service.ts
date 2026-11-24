@@ -603,7 +603,14 @@ export class OrganizerService {
       schedule: org.payoutSchedule,
       pendingCents: byDay.get(today) ?? 0,
       nextPayoutCents: org.payoutSchedule === 'DAILY' ? (byDay.get(dayKey(new Date(Date.now() - DAY))) ?? 0) : history.slice(0, 7).reduce((s, h) => s + h.amountCents, 0),
-      payoutMethod: org.stripeAccountId ? { provider: 'stripe', bankLast4: org.bankLast4, bankName: org.bankName } : null,
+      payoutMethod:
+        org.payoutProvider === 'paystack' && org.paystackSubaccount
+          ? { provider: 'paystack', bankLast4: org.bankLast4, bankName: org.bankName, accountName: org.bankAccountName, country: org.bankCountry, updatedAt: org.payoutUpdatedAt }
+          : org.stripeAccountId
+            ? { provider: 'stripe', bankLast4: org.bankLast4, bankName: org.bankName, accountName: null, country: org.bankCountry, updatedAt: org.payoutUpdatedAt }
+            : null,
+      // After a bank change, payouts wait 24 hours.
+      holdUntil: org.payoutHoldUntil && org.payoutHoldUntil > new Date() ? org.payoutHoldUntil : null,
       history,
     };
   }

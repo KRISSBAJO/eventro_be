@@ -5,7 +5,7 @@ import { InventoryService } from '../common/inventory.service';
 import { AuditService } from '../common/audit.service';
 import { config } from '../config';
 import { orderCode, ticketCode } from '../domain/codes';
-import { quote } from '../domain/money';
+import { organizerNet, quote } from '../domain/money';
 import { FRAUD_FLAG_THRESHOLD, scoreOrder } from '../domain/fraud';
 import { pickFromSections, type SeatMap, type SeatPick } from '../domain/seatmap';
 import { Payments } from './payments';
@@ -15,6 +15,7 @@ import { GiftService, type GiftInput } from '../gifts/gifts.module';
 import { ResaleService } from '../resale/resale.module';
 import { isCurrency, type Currency } from '../domain/currency';
 import type { AuthUser } from '../common/auth';
+import { paystackCountryFor } from '../organizer/payout-accounts';
 
 type Tx = Prisma.TransactionClient;
 
@@ -135,6 +136,20 @@ export class CheckoutService {
 
   /* ---------- orders ---------- */
 
+  /**
+   * Paystack split for organizers paid through a Paystack subaccount: their share of the tickets (after Eventro's fee
+   * and any discount) settles straight to their bank; Eventro keeps the rest (fee and ticket protection).
+   * No split while payouts are on hold after a bank change, or if the sale is in a different currency than their bank.
+   */
+  private async paystackSplit(orgId: string, currency: string, q: { unitCents: number; quantity: number; discountCents: number; totalCents: number }, feeMode: 'BUYER' | 'ORGANIZER') {
+    const org = await this.prisma.organization.findUnique({ where: { id: orgId }, select: { payoutProvider: true, paystackSubaccount: true, bankCountry: true, payoutHoldUntil: true } });
+    if (org?.payoutProvider !== 'paystack' || !org.paystackSubaccount) return {};
+    if (org.payoutHoldUntil && org.payoutHoldUntil > new Date()) return {};
+    if (paystackCountryFor(currency)?.code !== org.bankCountry) return {};
+    const share = Math.max(0, organizerNet(q.unitCents, feeMode, config.organizerFeePermille) * q.quantity - q.discountCents);
+    return { split: { subaccount: org.paystackSubaccount, platformCents: Math.max(0, q.totalCents - share) } };
+  }
+
   async createOrder(
     input: { holdId: string; email: string; name: string; protection?: boolean; promoCode?: string; gift?: GiftInput },
     user: AuthUser | null,
@@ -204,6 +219,7 @@ export class CheckoutService {
       currency,
       email: input.email,
       description: `${hold.quantity} × ${hold.ticketType.name} — ${hold.event.title}`,
+      ...(provider.name === 'paystack' ? await this.paystackSplit(hold.event.orgId, currency, q, hold.event.feeMode) : {}),
     });
     await this.prisma.order.update({ where: { id }, data: { paymentRef: pay.paymentRef } });
 
