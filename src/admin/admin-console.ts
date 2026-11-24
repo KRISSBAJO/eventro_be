@@ -3,6 +3,7 @@
  * newsletter subscribers and broadcasts, price drops and the email log. Every change is written to the audit log.
  * All routes need the ADMIN role.
  */
+import { previewToken } from '../events/preview';
 import { BadRequestException, Body, Controller, ForbiddenException, Get, HttpCode, Injectable, Module, NotFoundException, Param, Patch, Post, Query, Res } from '@nestjs/common';
 import { ApiBearerAuth, ApiProperty, ApiPropertyOptional, ApiTags } from '@nestjs/swagger';
 import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsInt, IsOptional, IsString, IsUrl, Matches, MaxLength, Min, MinLength } from 'class-validator';
@@ -297,6 +298,7 @@ export class AdminConsoleService {
         slug: e.slug,
         title: e.title,
         status: e.status,
+        previewToken: previewToken(e.slug, e.status),
         category: e.category,
         startsAt: e.startsAt,
         currency: e.currency,

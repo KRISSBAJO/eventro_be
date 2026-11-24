@@ -665,3 +665,44 @@ test('transfers: the recipient is emailed, organizers can switch them off', asyn
   await ok(call('PATCH', `/organizer/events/${ev.id}`, { transfersEnabled: false }, org.token));
   assert.match((await call('POST', `/tickets/${b}/transfer`, { email: `tr-to-${run}@test.local` }, from.token)).body.message, /allow transfers/);
 });
+
+test('event previews: signed links show unpublished events to their team, never to the public', async () => {
+  const admin = await account('admin@test.local', 'Admin');
+  const org = await account(`pv-org-${run}@test.local`, 'Pat Organizer');
+  const o = await ok(call('POST', '/organizer/orgs', { name: `Preview Org ${run}` }, org.token));
+  const ev = await ok(
+    call('POST', `/organizer/orgs/${o.id}/events`, {
+      title: `Preview Night ${run}`,
+      category: 'COMEDY',
+      startsAt: new Date(Date.now() + 30 * 86_400_000).toISOString(),
+      venue: { name: 'Cap City Room', address: '1 Congress Ave', city: 'Austin', country: 'US', region: 'Texas', lat: 30.2672, lng: -97.7431 },
+      ticketTypes: [{ name: 'General', basePriceCents: 4830, capacity: 100 }],
+    }, org.token),
+  );
+  await ok(call('POST', `/organizer/events/${ev.id}/submit`, undefined, org.token));
+
+  // Not public while in review
+  assert.equal((await call('GET', `/events/${ev.slug}`)).status, 404);
+  // The organizer's list and the admin queue both carry a preview token
+  const mine = (await ok(call('GET', `/organizer/orgs/${o.id}/events`, undefined, org.token))).find((x: Json) => x.id === ev.id);
+  assert.ok(mine.previewToken, 'organizer gets a preview token');
+  const queued = (await ok(call('GET', '/admin/reviews', undefined, admin.token))).find((x: Json) => x.id === ev.id);
+  assert.ok(queued.previewToken, 'admin review queue gets a preview token');
+
+  const shown = await ok(call('GET', `/events/${ev.slug}?preview=${encodeURIComponent(mine.previewToken)}`));
+  assert.equal(shown.preview, true);
+  assert.equal(shown.status, 'IN_REVIEW');
+  // A token for another slug, a tampered token or an expired one doesn't open it
+  assert.equal((await call('GET', `/events/${ev.slug}?preview=${encodeURIComponent(mine.previewToken.slice(0, -2) + 'xx')}`)).status, 404);
+  const [, mac] = mine.previewToken.split('.');
+  assert.equal((await call('GET', `/events/${ev.slug}?preview=${(Date.now() - 1000).toString(36)}.${mac}`)).status, 404);
+  // Buying still needs the event to be published
+  assert.equal((await call('POST', '/holds', { ticketTypeId: ev.ticketTypes[0].id, quantity: 1 }, org.token)).status, 400);
+
+  // Once approved: public, and no preview token any more
+  await ok(call('POST', `/admin/events/${ev.id}/approve`, undefined, admin.token));
+  const pub = await ok(call('GET', `/events/${ev.slug}`));
+  assert.equal(pub.preview, undefined);
+  const after = (await ok(call('GET', `/organizer/orgs/${o.id}/events`, undefined, org.token))).find((x: Json) => x.id === ev.id);
+  assert.equal(after.previewToken, undefined);
+});

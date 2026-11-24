@@ -1,3 +1,4 @@
+import { previewToken } from '../events/preview';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { MemberRole, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma.service';
@@ -250,6 +251,7 @@ export class OrganizerService {
       description: e.description,
       category: e.category,
       status: e.status,
+      previewToken: previewToken(e.slug, e.status),
       reviewNote: e.reviewNote,
       salesPaused: e.salesPaused,
       feeMode: e.feeMode,
@@ -283,7 +285,7 @@ export class OrganizerService {
     const ev = await this.eventFor(id, user, DOOR);
     const promos = await this.prisma.promo.findMany({ where: { eventId: id }, orderBy: { code: 'asc' } });
     const venue = ev.venueId ? await this.prisma.venue.findUnique({ where: { id: ev.venueId } }) : null;
-    return { ...ev, venue, promos, media: ((ev.media as MediaItem[] | null) ?? []).map(mediaUrls) };
+    return { ...ev, venue, promos, media: ((ev.media as MediaItem[] | null) ?? []).map(mediaUrls), previewToken: previewToken(ev.slug, ev.status) };
   }
 
   async updateEvent(id: string, user: AuthUser, dto: UpdateEventDto) {

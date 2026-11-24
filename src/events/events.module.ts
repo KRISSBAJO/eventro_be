@@ -8,6 +8,7 @@ import { InventoryService } from '../common/inventory.service';
 import { OptionalAuth, Public } from '../common/auth';
 import { assignSeats, sectionCapacity, type SeatMap } from '../domain/seatmap';
 import { mediaUrls, type MediaItem } from '../media/media.module';
+import { previewOk } from './preview';
 
 const CATEGORIES = Object.values(Category);
 
@@ -91,12 +92,13 @@ export class EventsService {
     return { total: cards.length, page, pageSize: size, items: cards.slice((page - 1) * size, page * size) };
   }
 
-  async detail(slug: string) {
+  /** A published event; or, with a valid preview token, one that isn't published yet (flagged `preview`). */
+  async detail(slug: string, preview?: string) {
     const e = await this.prisma.event.findUnique({
       where: { slug },
       include: { venue: true, org: { select: { name: true } }, ticketTypes: { orderBy: { sortOrder: 'asc' } } },
     });
-    if (!e || e.status !== 'PUBLISHED') throw new NotFoundException('Event not found.');
+    if (!e || (e.status !== 'PUBLISHED' && !previewOk(e.slug, preview))) throw new NotFoundException('Event not found.');
     const avail = await this.inventory.availabilityForEvent(e.id);
     const map = e.seatMap as SeatMap | null;
     const sectionAvail = map ? await this.inventory.availabilityForSections(this.prisma, e.id, map) : null;
@@ -117,6 +119,7 @@ export class EventsService {
       online: e.online,
       currency: e.currency,
       salesPaused: e.salesPaused,
+      ...(e.status !== 'PUBLISHED' ? { preview: true, status: e.status } : {}),
       presentedBy: e.org.name,
       venue: e.venue && { slug: e.venue.slug, name: e.venue.name, address: e.venue.address, city: e.venue.city, region: e.venue.region, country: e.venue.country, postalCode: e.venue.postalCode, timezone: e.venue.timezone, lat: e.venue.lat, lng: e.venue.lng },
       ticketTypes: e.ticketTypes.map((t) => ({
@@ -197,8 +200,8 @@ export class EventsController {
 
   @OptionalAuth()
   @Get(':slug')
-  detail(@Param('slug') slug: string) {
-    return this.events.detail(slug);
+  detail(@Param('slug') slug: string, @Query('preview') preview?: string) {
+    return this.events.detail(slug, preview);
   }
 }
 

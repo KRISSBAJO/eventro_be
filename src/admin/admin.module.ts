@@ -1,3 +1,4 @@
+import { previewToken } from '../events/preview';
 import { BadRequestException, Body, Controller, Get, HttpCode, Injectable, NotFoundException, Param, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiProperty, ApiPropertyOptional, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { IsIn, IsInt, IsOptional, IsString, MaxLength, Min, MinLength } from 'class-validator';
@@ -46,7 +47,7 @@ export class AdminService {
     });
     const published = await this.prisma.event.groupBy({ by: ['orgId'], where: { status: 'PUBLISHED' }, _count: { _all: true } });
     const pub = new Map(published.map((p) => [p.orgId, p._count._all]));
-    return events.map((e) => ({ ...e, flags: this.flags(e, pub.get(e.orgId) ?? 0) }));
+    return events.map((e) => ({ ...e, previewToken: previewToken(e.slug, e.status), flags: this.flags(e, pub.get(e.orgId) ?? 0) }));
   }
 
   async approve(id: string, admin: AuthUser) {
