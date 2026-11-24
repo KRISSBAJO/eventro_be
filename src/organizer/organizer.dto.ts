@@ -1,4 +1,5 @@
 import { CURRENCY_CODES } from '../domain/currency';
+import { TIER_STYLE_INPUTS } from '../domain/tier-look';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import {
@@ -78,6 +79,10 @@ export class TicketTypeInputDto {
   @MaxLength(60, { each: true })
   perks?: string[];
   @ApiPropertyOptional({ description: 'Short label, e.g. "Best view" (empty string clears it)' }) @IsOptional() @IsString() @MaxLength(24) badge?: string;
+  @ApiPropertyOptional({ enum: TIER_STYLE_INPUTS, nullable: true, description: 'The ticket’s look; "auto" or null follows the name' })
+  @IsOptional()
+  @IsIn(TIER_STYLE_INPUTS)
+  style?: string | null;
 }
 
 export class CreateEventDto {
@@ -169,6 +174,10 @@ export class UpdateTicketTypeDto {
   @MaxLength(60, { each: true })
   perks?: string[];
   @ApiPropertyOptional({ description: 'Short label, e.g. "Best view" (empty string clears it)' }) @IsOptional() @IsString() @MaxLength(24) badge?: string;
+  @ApiPropertyOptional({ enum: TIER_STYLE_INPUTS, nullable: true, description: 'The ticket’s look; "auto" or null follows the name' })
+  @IsOptional()
+  @IsIn(TIER_STYLE_INPUTS)
+  style?: string | null;
 }
 
 export class TicketOrderDto {

@@ -3,6 +3,7 @@ import { ApiBearerAuth, ApiProperty, ApiTags } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import { IsEmail, IsInt, Min } from 'class-validator';
 import { PrismaService } from '../prisma.service';
+import { TIER_FIELDS, withLook } from '../domain/tier-look';
 import { config } from '../config';
 import { QR_SIG_LENGTH, QR_WINDOW_MS, qrSeed, qrToken } from '../domain/qr';
 import { permilleOf } from '../domain/money';
@@ -67,7 +68,7 @@ export class TicketsService {
         ],
       },
       include: {
-        ticketType: { select: { name: true, priceCents: true } },
+        ticketType: { select: { priceCents: true, ...TIER_FIELDS } },
         order: {
           select: {
             id: true,
@@ -91,7 +92,7 @@ export class TicketsService {
       const watch = event.online && (t.status === 'ACTIVE' || t.status === 'CHECKED_IN') ? streamUrl : null;
       // Usable tickets carry their QR seed, so the app can show the door code offline (see GET /tickets/:id/qr-seed).
       const seed = t.status === 'ACTIVE' ? { qrSeed: seedFor(t) } : {};
-      return { ...t, ...seed, event: { ...event, streamUrl: watch }, sectionName: s ? sectionName(s) : null };
+      return { ...t, ticketType: withLook(t.ticketType), ...seed, event: { ...event, streamUrl: watch }, sectionName: s ? sectionName(s) : null };
     });
     const incoming = await this.prisma.ticket.findMany({
       where: { transferTo: user.email, status: 'TRANSFER_PENDING' },
@@ -100,13 +101,14 @@ export class TicketsService {
         holderName: true,
         transferExpiresAt: true,
         event: { select: { title: true, startsAt: true } },
-        ticketType: { select: { name: true } },
+        ticketType: { select: TIER_FIELDS },
         order: { select: { buyerName: true, gift: { select: { id: true, message: true, claimedAt: true } } } },
       },
     });
     // Gifts are labelled ("A gift from Ada", with the note), so apps don't show them as a plain transfer.
     const incomingTransfers = incoming.map(({ order, ...t }) => ({
       ...t,
+      ticketType: withLook(t.ticketType),
       gift: order.gift && !order.gift.claimedAt ? { id: order.gift.id, from: order.buyerName, message: order.gift.message || null } : null,
     }));
     // The event rules above and the fee rate let the website show the resale breakdown before listing.

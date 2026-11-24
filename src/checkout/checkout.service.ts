@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma.service';
+import { TIER_FIELDS, withLook } from '../domain/tier-look';
 import { InventoryService } from '../common/inventory.service';
 import { AuditService } from '../common/audit.service';
 import { config } from '../config';
@@ -110,7 +111,7 @@ export class CheckoutService {
     const h = await this.prisma.hold.findUnique({
       where: { id },
       include: {
-        ticketType: { select: { id: true, name: true, description: true, priceCents: true } },
+        ticketType: { select: { id: true, description: true, priceCents: true, ...TIER_FIELDS } },
         event: { select: { slug: true, title: true, subtitle: true, category: true, currency: true, timezone: true, imageUrl: true, startsAt: true, doorsAt: true, description: true, seatMap: true, venue: { select: { name: true, city: true, address: true } } } },
         order: { select: { id: true, status: true } },
       },
@@ -125,7 +126,7 @@ export class CheckoutService {
       expiresAt: h.expiresAt,
       section: section ? { id: section.id, label: section.label, level: section.level ?? null, seating: section.seating } : null,
       seats: (h.seats as SeatPick[] | null) ?? [],
-      ticketType: h.ticketType,
+      ticketType: withLook(h.ticketType),
       event,
       order: h.order,
     };
@@ -536,14 +537,14 @@ export class CheckoutService {
       where: { id: orderId },
       include: {
         event: { select: { slug: true, title: true, startsAt: true, venue: { select: { name: true, city: true } } } },
-        ticketType: { select: { name: true } },
+        ticketType: { select: TIER_FIELDS },
         tickets: { select: { id: true, section: true, row: true, seat: true, status: true, holderName: true }, orderBy: { id: 'asc' } },
         gift: { select: { id: true, recipientName: true, recipientEmail: true, message: true, sendAt: true, sentAt: true, claimedAt: true } },
       },
     });
     if (!o) throw new NotFoundException('Order not found.');
     const { clientIp: _ip, paymentRef: _ref, ...safe } = o;
-    return safe;
+    return { ...safe, ticketType: withLook(safe.ticketType) };
   }
 
   async getOrder(orderId: string, user: AuthUser | null, email?: string) {
@@ -590,13 +591,13 @@ export class CheckoutService {
         paidAt: true,
         resaleListingId: true,
         event: { select: { slug: true, title: true, startsAt: true, timezone: true, imageUrl: true, status: true, venue: { select: { name: true, city: true } } } },
-        ticketType: { select: { name: true } },
+        ticketType: { select: TIER_FIELDS },
         gift: { select: { recipientName: true, sendAt: true, sentAt: true, claimedAt: true } },
         refunds: { orderBy: { createdAt: 'desc' }, take: 1, select: { id: true, status: true, createdAt: true, decidedAt: true, amountCents: true } },
       },
     });
     return {
-      orders: rows.map(({ refunds, resaleListingId, ...o }) => ({ ...o, resale: !!resaleListingId, refundRequest: refunds[0] ?? null })),
+      orders: rows.map(({ refunds, resaleListingId, ...o }) => ({ ...o, ticketType: withLook(o.ticketType), resale: !!resaleListingId, refundRequest: refunds[0] ?? null })),
     };
   }
 

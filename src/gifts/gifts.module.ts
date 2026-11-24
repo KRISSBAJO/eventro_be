@@ -29,6 +29,7 @@ import {
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { PrismaService } from '../prisma.service';
+import { TIER_FIELDS, withLook } from '../domain/tier-look';
 import { AuditService } from '../common/audit.service';
 import { config } from '../config';
 import { CurrentUser, Public, type AuthUser } from '../common/auth';
@@ -137,7 +138,7 @@ export class GiftService implements OnModuleInit, OnModuleDestroy {
         order: {
           include: {
             event: { select: { slug: true, title: true, subtitle: true, startsAt: true, imageUrl: true, online: true, timezone: true, seatMap: true, venue: { select: { name: true, city: true } } } },
-            ticketType: { select: { name: true, perks: true } },
+            ticketType: { select: TIER_FIELDS },
             tickets: { select: { id: true, section: true, row: true, seat: true, status: true } },
           },
         },
@@ -155,7 +156,7 @@ export class GiftService implements OnModuleInit, OnModuleDestroy {
         ? {
             message: g.message,
             event: (({ seatMap: _map, ...ev }) => ev)(g.order.event),
-            ticketType: g.order.ticketType,
+            ticketType: withLook(g.order.ticketType),
             quantity: g.order.quantity,
             seats: g.order.tickets
               .filter((x) => x.seat !== null)

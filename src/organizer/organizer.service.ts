@@ -7,6 +7,7 @@ import { config } from '../config';
 import { Payments } from '../checkout/payments';
 import { randomSuffix, slugify } from '../domain/codes';
 import { buyerPrice, organizerNet, type FeeMode } from '../domain/money';
+import { styleInput, withLook } from '../domain/tier-look';
 import { QR_WINDOW_MS, parseQr, qrSeed, verifyQr } from '../domain/qr';
 import { QR_SEED_SPEC } from '../tickets/tickets.module';
 import { arenaTemplate, capacityByTicketType, rowLabel, sectionName, validateSeatMap, type SeatMap } from '../domain/seatmap';
@@ -168,6 +169,7 @@ export class OrganizerService {
       sortOrder: i,
       perks: cleanPerks(t.perks),
       badge: t.badge?.trim() || null,
+      style: styleInput(t.style),
     };
   }
 
@@ -226,7 +228,10 @@ export class OrganizerService {
       visibility: dto.visibility ?? 'PUBLIC',
       ticketTypes: { create: dto.ticketTypes.map((t, i) => this.ticketTypeData(t, feeMode, i)) },
     } satisfies Prisma.EventUncheckedCreateInput;
-    if (!booking) return this.prisma.event.create({ data, include: { ticketTypes: true } });
+    if (!booking) {
+      const created = await this.prisma.event.create({ data, include: { ticketTypes: true } });
+      return { ...created, ticketTypes: created.ticketTypes.map(withLook) };
+    }
     const ev = await this.prisma.$transaction(async (tx) => {
       const e = await tx.event.create({ data, include: { ticketTypes: true } });
       const { count } = await tx.venueBooking.updateMany({ where: { id: booking.id, orgId, eventId: null }, data: { eventId: e.id } });
@@ -234,7 +239,7 @@ export class OrganizerService {
       return e;
     });
     await this.audit.log(user.id, 'event.venue_booking', 'Event', ev.id, { bookingId: booking.id, status: booking.status });
-    return { ...ev, venueBooking: VenueBookingService.eventSummary(booking) };
+    return { ...ev, ticketTypes: ev.ticketTypes.map(withLook), venueBooking: VenueBookingService.eventSummary(booking) };
   }
 
   /** The organizer's events with ticket types and 60 days of daily sales (for the dashboard). */
@@ -282,7 +287,7 @@ export class OrganizerService {
       imageUrl: e.imageUrl,
       hasSeatMap: !!e.seatMap,
       venueBooking: VenueBookingService.eventSummary(e.venueBooking),
-      ticketTypes: e.ticketTypes.map((t) => ({ id: t.id, name: t.name, description: t.description, priceCents: t.priceCents, capacity: t.capacity, sold: t.sold, maxPerOrder: t.maxPerOrder, sortOrder: t.sortOrder, perks: t.perks, badge: t.badge })),
+      ticketTypes: e.ticketTypes.map((t) => withLook({ id: t.id, name: t.name, description: t.description, priceCents: t.priceCents, capacity: t.capacity, sold: t.sold, maxPerOrder: t.maxPerOrder, sortOrder: t.sortOrder, perks: t.perks, badge: t.badge, style: t.style })),
       sold: e.ticketTypes.reduce((s, t) => s + t.sold, 0),
       capacity: e.ticketTypes.reduce((s, t) => s + t.capacity, 0),
       grossCents: e.ticketTypes.reduce((s, t) => s + t.sold * t.priceCents, 0),
@@ -333,6 +338,7 @@ export class OrganizerService {
     const booking = await this.prisma.venueBooking.findUnique({ where: { eventId: id } });
     return {
       ...ev,
+      ticketTypes: ev.ticketTypes.map(withLook),
       venue,
       promos,
       media: ((ev.media as MediaItem[] | null) ?? []).map(mediaUrls),
@@ -432,7 +438,7 @@ export class OrganizerService {
 
   async addTicketType(id: string, user: AuthUser, dto: TicketTypeInputDto) {
     const ev = await this.eventFor(id, user, EDIT);
-    return this.prisma.ticketType.create({ data: { eventId: id, ...this.ticketTypeData(dto, ev.feeMode, ev.ticketTypes.length) } });
+    return withLook(await this.prisma.ticketType.create({ data: { eventId: id, ...this.ticketTypeData(dto, ev.feeMode, ev.ticketTypes.length) } }));
   }
 
   async updateTicketType(id: string, ttId: string, user: AuthUser, dto: UpdateTicketTypeDto) {
@@ -453,6 +459,8 @@ export class OrganizerService {
         ...(dto.maxPerOrder !== undefined ? { maxPerOrder: dto.maxPerOrder } : {}),
         ...(dto.perks !== undefined ? { perks: cleanPerks(dto.perks) } : {}),
         ...(dto.badge !== undefined ? { badge: dto.badge.trim() || null } : {}),
+        // null or "auto" goes back to the look from the name.
+        ...(dto.style !== undefined ? { style: styleInput(dto.style) } : {}),
       },
     });
     let priceDrop: Awaited<ReturnType<PriceDropService['record']>> = null;
@@ -461,7 +469,7 @@ export class OrganizerService {
       const venue = ev.venueId ? await this.prisma.venue.findUnique({ where: { id: ev.venueId }, select: { name: true, city: true } }) : null;
       priceDrop = await this.priceDrops.record({ ...ev, venue }, updated, tt.priceCents, updated.priceCents, user.id);
     }
-    return { ...updated, priceDrop };
+    return { ...withLook(updated), priceDrop };
   }
 
   /** Puts the event's ticket types in a new order, top tier first (it's the order fans see them in). */
@@ -473,7 +481,7 @@ export class OrganizerService {
     }
     await this.prisma.$transaction(ids.map((tt, i) => this.prisma.ticketType.update({ where: { id: tt }, data: { sortOrder: i } })));
     await this.audit.log(user.id, 'ticket_type.order', 'Event', id, { ids });
-    return this.prisma.ticketType.findMany({ where: { eventId: id }, orderBy: { sortOrder: 'asc' } });
+    return (await this.prisma.ticketType.findMany({ where: { eventId: id }, orderBy: { sortOrder: 'asc' } })).map(withLook);
   }
 
   /** How many people a price drop on this event would reach right now (for the organizer's price screen). */

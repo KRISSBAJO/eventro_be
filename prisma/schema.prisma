@@ -385,6 +385,8 @@ model TicketType {
   perks       String[]  @default([])
   /// Optional short label on the ticket, e.g. "Best view" or "Most popular".
   badge       String?
+  /// The ticket's look on the website and in the app: early, standard, vip, vvip, platinum or table. Null = picked from the name.
+  style       String?
   salesStart  DateTime?
   salesEnd    DateTime?
 

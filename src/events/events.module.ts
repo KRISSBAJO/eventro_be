@@ -11,6 +11,7 @@ import { mediaUrls, type MediaItem } from '../media/media.module';
 import { previewOk } from './preview';
 import { FxService } from '../fx/fx.module';
 import { CURRENCY_CODES } from '../domain/currency';
+import { resolveLook } from '../domain/tier-look';
 
 /** "Trending" counts paid tickets from this many days back. */
 const TRENDING_DAYS = 14;
@@ -209,6 +210,8 @@ export class EventsService {
         sortOrder: t.sortOrder,
         perks: t.perks,
         badge: t.badge,
+        style: t.style,
+        look: resolveLook(t.name, t.style),
         available: cancelled ? 0 : (avail.get(t.id) ?? 0),
       })),
       media: ((e.media as MediaItem[] | null) ?? []).map(mediaUrls),

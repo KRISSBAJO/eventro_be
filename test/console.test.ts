@@ -513,6 +513,86 @@ test('ticket tiers: perks, badges and the order fans see them in', async () => {
   assert.equal(pub.category, 'FAITH');
 });
 
+test('ticket tier looks: picked by the organizer or from the name, wherever fans see the ticket', async () => {
+  const admin = await account('admin@test.local', 'Admin');
+  const org = await account(`look-org-${run}@test.local`, 'Lola Organizer');
+  const fan = await account(`look-fan-${run}@test.local`, 'Femi Fan');
+  const o = await ok(call('POST', '/organizer/orgs', { name: `Look Hall ${run}` }, org.token));
+  const body = (ticketTypes: Json[]) => ({
+    title: `Look Night ${run}`,
+    category: 'CONCERTS',
+    startsAt: new Date(Date.now() + 30 * 86_400_000).toISOString(),
+    venue: { name: 'Look Arena', address: '9 Marina', city: 'Lagos' },
+    ticketTypes,
+  });
+  // A look that doesn't exist is refused.
+  const refused = await call('POST', `/organizer/orgs/${o.id}/events`, body([{ name: 'VIP', basePriceCents: 0, capacity: 5, style: 'gold' }]), org.token);
+  assert.equal(refused.status, 400);
+  assert.match(JSON.stringify(refused.body.message), /style/);
+
+  const ev = await ok(
+    call(
+      'POST',
+      `/organizer/orgs/${o.id}/events`,
+      body([
+        { name: 'Night pass', basePriceCents: 0, capacity: 10, style: 'platinum' },
+        { name: 'VIP', basePriceCents: 0, capacity: 20 },
+        { name: 'General admission', basePriceCents: 0, capacity: 100 },
+        { name: 'Early bird', basePriceCents: 0, capacity: 50, style: 'auto' },
+      ]),
+      org.token,
+    ),
+  );
+  const [pass, vip, ga, early] = ev.ticketTypes.sort((a: Json, b: Json) => a.sortOrder - b.sortOrder);
+  // An explicit pick wins; otherwise the look follows the name, and style stays null (auto).
+  assert.deepEqual([pass.style, pass.look], ['platinum', 'platinum']);
+  assert.deepEqual([vip.style, vip.look], [null, 'vip']);
+  assert.deepEqual([ga.style, ga.look], [null, 'standard']);
+  assert.deepEqual([early.style, early.look], [null, 'early']);
+
+  // Edit: pick a look, refuse a bad one, then back to auto.
+  const tt = (ttId: string) => `/organizer/events/${ev.id}/ticket-types/${ttId}`;
+  assert.equal((await call('PATCH', tt(vip.id), { style: 'shiny' }, org.token)).status, 400);
+  const picked = await ok(call('PATCH', tt(vip.id), { style: 'table' }, org.token));
+  assert.deepEqual([picked.style, picked.look], ['table', 'table']);
+  const auto = await ok(call('PATCH', tt(vip.id), { style: null }, org.token));
+  assert.deepEqual([auto.style, auto.look], [null, 'vip']);
+  const vvip = await ok(call('PATCH', tt(ga.id), { style: 'vvip' }, org.token));
+  assert.deepEqual([vvip.style, vvip.look], ['vvip', 'vvip']);
+  assert.equal((await ok(call('PATCH', tt(ga.id), { style: 'auto' }, org.token))).style, null);
+  const added = await ok(call('POST', `/organizer/events/${ev.id}/ticket-types`, { name: 'Table for 10', basePriceCents: 0, capacity: 4 }, org.token));
+  assert.deepEqual([added.style, added.look], [null, 'table']);
+  assert.equal((await call('POST', `/organizer/events/${ev.id}/ticket-types`, { name: 'Odd', basePriceCents: 0, capacity: 4, style: 'neon' }, org.token)).status, 400);
+  const listed = (await ok(call('GET', `/organizer/orgs/${o.id}/events`, undefined, org.token))).find((e: Json) => e.id === ev.id);
+  assert.deepEqual(listed.ticketTypes.map((t: Json) => t.look), ['platinum', 'vip', 'standard', 'early', 'table']);
+  assert.equal(listed.ticketTypes[0].style, 'platinum');
+
+  // Fans get the look with the perks and badge: event page, checkout, order, order history and wallet.
+  await ok(call('POST', `/organizer/events/${ev.id}/submit`, undefined, org.token));
+  await ok(call('POST', `/admin/events/${ev.id}/approve`, undefined, admin.token));
+  const pub = await ok(call('GET', `/events/${ev.slug}`));
+  assert.deepEqual(pub.ticketTypes.map((t: Json) => [t.name, t.style, t.look]), [
+    ['Night pass', 'platinum', 'platinum'],
+    ['VIP', null, 'vip'],
+    ['General admission', null, 'standard'],
+    ['Early bird', null, 'early'],
+    ['Table for 10', null, 'table'],
+  ]);
+  const hold = await ok(call('POST', '/holds', { ticketTypeId: pass.id, quantity: 1 }, fan.token));
+  const h = await ok(call('GET', `/holds/${hold.id}`));
+  assert.deepEqual([h.ticketType.name, h.ticketType.look, h.ticketType.style], ['Night pass', 'platinum', 'platinum']);
+  assert.deepEqual(h.ticketType.perks, []);
+  const order = await ok(call('POST', '/orders', { holdId: hold.id, email: `look-fan-${run}@test.local`, name: 'Femi Fan' }, fan.token));
+  const paid = await ok(call('POST', `/orders/${order.orderId}/pay`));
+  assert.equal(paid.ticketType.look, 'platinum');
+  assert.equal((await ok(call('GET', `/orders/${order.orderId}`, undefined, fan.token))).ticketType.look, 'platinum');
+  const history = await ok(call('GET', '/me/orders', undefined, fan.token));
+  assert.equal(history.orders.find((x: Json) => x.id === order.orderId).ticketType.look, 'platinum');
+  const wallet = await ok(call('GET', '/me/tickets', undefined, fan.token));
+  const mine = wallet.tickets.find((x: Json) => x.orderId === order.orderId);
+  assert.deepEqual([mine.ticketType.name, mine.ticketType.look, mine.ticketType.badge], ['Night pass', 'platinum', null]);
+});
+
 test('gifted tickets: held until delivered and claimed, scheduled gifts wait', async () => {
   const admin = await account('admin@test.local', 'Admin');
   const org = await account(`gift-org-${run}@test.local`, 'Gia Organizer');
