@@ -12,7 +12,7 @@ import { QR_SEED_SPEC } from '../tickets/tickets.module';
 import { arenaTemplate, capacityByTicketType, rowLabel, sectionName, validateSeatMap, type SeatMap } from '../domain/seatmap';
 import type { AuthUser } from '../common/auth';
 import { mediaUrls, type MediaItem } from '../media/media.module';
-import { countryTimezone, isTimeZone, timezoneAt } from '../geo/geo.module';
+import { isTimeZone, placeTimezone, timezoneAt } from '../geo/geo.module';
 import { FxService } from '../fx/fx.module';
 import { PriceDropService } from '../price-drops/price-drops.module';
 import { EventCancellation } from '../admin/cancel-event';
@@ -187,13 +187,18 @@ export class OrganizerService {
     let timezone = dto.timezone ?? 'UTC';
     if (!venueId && dto.venue) {
       const country = dto.venue.country?.toUpperCase();
-      // The venue's time zone, from its map position or else its country's main zone.
-      const tz = dto.venue.lat !== undefined && dto.venue.lng !== undefined ? timezoneAt(dto.venue.lat, dto.venue.lng) : countryTimezone(country);
+      // The venue's time zone: from its map position, else its state or province, else its country's main zone.
+      const tz = (dto.venue.lat !== undefined && dto.venue.lng !== undefined ? timezoneAt(dto.venue.lat, dto.venue.lng) : null) ?? placeTimezone(country, dto.venue.region);
       // The same place picked again (same name in the same city, or within ~150 m on the map) reuses its venue,
       // so a venue keeps one page and one history of events instead of a copy per event.
       const v = (await this.sameVenue(dto.venue, country)) ?? (await this.prisma.venue.create({ data: { ...dto.venue, country, timezone: tz, slug: `${slugify(dto.venue.name)}-${randomSuffix()}` } }));
       venueId = v.id;
       timezone = dto.timezone ?? tz ?? 'UTC';
+    } else if (venueId && !dto.timezone) {
+      // An existing venue: its own zone (else its state's or country's), never UTC by accident.
+      const v = await this.prisma.venue.findUnique({ where: { id: venueId }, select: { timezone: true, country: true, region: true } });
+      if (!v) throw new BadRequestException('That venue doesn’t exist.');
+      timezone = v.timezone ?? placeTimezone(v.country, v.region) ?? 'UTC';
     }
     const ev = await this.prisma.event.create({
       data: {

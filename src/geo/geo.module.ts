@@ -5,6 +5,7 @@
  *   GET /geo/countries/:code/regions      states, provinces or regions of one country
  *   GET /geo/search?q=&country=           address suggestions (OpenStreetMap data via Photon), with time zone
  *   GET /geo/timezone?lat=&lng=           IANA time zone for a point
+ *   GET /geo/timezone?country=&region=    best-guess zone for a place without a map position
  *   GET /geo/me                           where the visitor probably is (country, currency), from the request
  *
  * Address lookups go through this API, so visitors' IPs aren't sent to the map service, and results are cached.
@@ -73,10 +74,74 @@ export function timezoneAt(lat: number, lng: number): string | null {
   }
 }
 
-/** The main time zone of a country (used when a venue has no coordinates). */
+/**
+ * Where most people live in countries that span several zones. The country list's first zone is alphabetical, not
+ * the main one (the US would get America/Adak, in the Aleutians), so it can't be used as the default.
+ */
+const MAIN_ZONE: Record<string, string> = {
+  US: 'America/New_York',
+  CA: 'America/Toronto',
+  AU: 'Australia/Sydney',
+  BR: 'America/Sao_Paulo',
+  MX: 'America/Mexico_City',
+  RU: 'Europe/Moscow',
+  ID: 'Asia/Jakarta',
+  AR: 'America/Argentina/Buenos_Aires',
+  CL: 'America/Santiago',
+  ES: 'Europe/Madrid',
+  PT: 'Europe/Lisbon',
+  CD: 'Africa/Kinshasa',
+  KZ: 'Asia/Almaty',
+  MY: 'Asia/Kuala_Lumpur',
+  UA: 'Europe/Kyiv',
+  NZ: 'Pacific/Auckland',
+  EC: 'America/Guayaquil',
+  DE: 'Europe/Berlin',
+  CN: 'Asia/Shanghai',
+  MN: 'Asia/Ulaanbaatar',
+  GL: 'America/Nuuk',
+  PG: 'Pacific/Port_Moresby',
+  KI: 'Pacific/Tarawa',
+  FM: 'Pacific/Pohnpei',
+  PF: 'Pacific/Tahiti',
+  CY: 'Asia/Nicosia',
+  DK: 'Europe/Copenhagen',
+  NL: 'Europe/Amsterdam',
+  FR: 'Europe/Paris',
+  GB: 'Europe/London',
+};
+
+/** A zone the runtime knows, trying an older alias too (Europe/Kyiv was Europe/Kiev in older ICU data). */
+const known = (tz: string | null | undefined) => (!tz ? null : isTimeZone(tz) ? tz : tz === 'Europe/Kyiv' && isTimeZone('Europe/Kiev') ? 'Europe/Kiev' : null);
+
+/** The main time zone of a country: its main zone, its only zone, or the zone at its centre. */
 export function countryTimezone(code: string | null | undefined): string | null {
   if (!code) return null;
-  return Country.getCountryByCode(code.toUpperCase())?.timezones?.[0]?.zoneName ?? null;
+  const c = Country.getCountryByCode(code.toUpperCase());
+  if (!c) return null;
+  const zones = (c.timezones ?? []).map((z) => z.zoneName);
+  const main = known(MAIN_ZONE[c.isoCode]);
+  if (main) return main;
+  if (zones.length === 1) return zones[0];
+  const centre = Number.isFinite(Number(c.latitude)) && Number.isFinite(Number(c.longitude)) ? timezoneAt(Number(c.latitude), Number(c.longitude)) : null;
+  return centre && zones.includes(centre) ? centre : (zones[0] ?? null);
+}
+
+/**
+ * The best zone for a place without a map position: the zone in the middle of its state or province when we know
+ * which one (Texas → America/Chicago), else the country's main zone. The region can be a name or a code.
+ */
+export function placeTimezone(country: string | null | undefined, region?: string | null): string | null {
+  if (!country) return null;
+  const code = country.toUpperCase();
+  const r = region?.trim().toLowerCase();
+  if (r) {
+    const s = State.getStatesOfCountry(code).find((x) => x.name.toLowerCase() === r || x.isoCode.toLowerCase() === r);
+    const tz = s && s.latitude && s.longitude ? timezoneAt(Number(s.latitude), Number(s.longitude)) : null;
+    // Ocean points come back as Etc/GMT±n; those aren't a place's zone.
+    if (tz && !tz.startsWith('Etc/')) return tz;
+  }
+  return countryTimezone(code);
 }
 
 const COUNTRY_HEADERS = ['cf-ipcountry', 'x-vercel-ip-country', 'cloudfront-viewer-country', 'x-country-code', 'x-appengine-country', 'fastly-geo-country'];
@@ -243,7 +308,7 @@ export class GeoService {
       city,
       region,
       currency: c ? currencyForCountry(c.isoCode, c.currency) : null,
-      timezone: c?.timezones?.[0]?.zoneName ?? null,
+      timezone: c ? placeTimezone(c.isoCode, region) : null,
       source,
     };
   }
@@ -286,10 +351,14 @@ export class GeoController {
 
   @Public()
   @Get('timezone')
-  timezone(@Query('lat') lat: string, @Query('lng') lng: string) {
+  timezone(@Query('lat') lat?: string, @Query('lng') lng?: string, @Query('country') country?: string, @Query('region') region?: string) {
+    if (lat === undefined && lng === undefined && country) {
+      if (!Country.getCountryByCode(country.toUpperCase())) throw new BadRequestException('Unknown country.');
+      return { timezone: placeTimezone(country, region) };
+    }
     const la = Number(lat);
     const ln = Number(lng);
-    if (!Number.isFinite(la) || !Number.isFinite(ln) || Math.abs(la) > 90 || Math.abs(ln) > 180) throw new BadRequestException('Give lat and lng.');
+    if (!Number.isFinite(la) || !Number.isFinite(ln) || Math.abs(la) > 90 || Math.abs(ln) > 180) throw new BadRequestException('Give lat and lng, or a country (and region).');
     return { timezone: timezoneAt(la, ln) };
   }
 

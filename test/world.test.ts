@@ -198,8 +198,39 @@ test('geo and exchange rates', async () => {
   assert.ok(ng.some((r: Json) => r.name === 'Lagos'));
   const tz = await ok(call('GET', '/geo/timezone?lat=51.5&lng=-0.12'));
   assert.equal(tz.timezone, 'Europe/London');
+  // Without a map position: the state's zone, else the country's main zone (never the alphabetical first, America/Adak).
+  const zone = async (q: string) => (await ok(call('GET', `/geo/timezone?${q}`))).timezone;
+  assert.equal(await zone('country=US&region=Texas'), 'America/Chicago');
+  assert.equal(await zone('country=US&region=CA'), 'America/Los_Angeles');
+  assert.equal(await zone('country=US'), 'America/New_York');
+  assert.equal(await zone('country=CA&region=British Columbia'), 'America/Vancouver');
+  assert.equal(await zone('country=AU'), 'Australia/Sydney');
+  assert.equal(await zone('country=NG&region=Lagos'), 'Africa/Lagos');
+  assert.equal(await zone('country=GH'), 'Africa/Accra');
+  assert.equal((await call('GET', '/geo/timezone?country=XX')).status, 400);
   // Behind a CDN that reports the visitor's country.
   const me = await ok(call('GET', '/geo/me', undefined, undefined, { 'cf-ipcountry': 'NG' }));
   assert.equal(me.country, 'NG');
   assert.equal(me.currency, 'NGN');
+});
+
+test('venues without a map position get their state’s time zone; existing venues keep theirs', async () => {
+  const org = await account(`tz-org-${run}@test.local`, 'Tess Zone');
+  const o = await ok(call('POST', '/organizer/orgs', { name: `Zone Works ${run}` }, org));
+  const body = {
+    title: 'Austin Zone Test',
+    category: 'CONCERTS',
+    startsAt: new Date(Date.now() + 30 * 86_400_000).toISOString(),
+    currency: 'USD',
+    venue: { name: `Zone Hall ${run}`, address: '1 Congress Ave', city: 'Austin', country: 'US', region: 'Texas' },
+    ticketTypes: [{ name: 'GA', basePriceCents: 2_000, capacity: 10 }],
+  };
+  const ev = await ok(call('POST', `/organizer/orgs/${o.id}/events`, body, org));
+  assert.equal(ev.timezone, 'America/Chicago');
+  const full = await ok(call('GET', `/organizer/events/${ev.id}`, undefined, org));
+  const venueId = full.venue?.id ?? full.venueId;
+  assert.ok(venueId, 'the event has a venue id');
+  // A second event at that venue, picked by id and with no zone given, takes the venue's zone (it used to be UTC).
+  const again = await ok(call('POST', `/organizer/orgs/${o.id}/events`, { ...body, title: 'Austin Zone Test 2', venue: undefined, venueId }, org));
+  assert.equal(again.timezone, 'America/Chicago');
 });
