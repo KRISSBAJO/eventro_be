@@ -8,6 +8,8 @@ import { config } from '../config';
 import { Payments } from '../checkout/payments';
 import { randomSuffix, slugify } from '../domain/codes';
 import { buyerPrice, organizerNet, type FeeMode } from '../domain/money';
+import { DONATION_NOTE, cleanDonationSettings, cleanPwywInput, donationLeft, ticketRefunded } from '../domain/pwyw';
+import { GuestListService } from './guest-list';
 import { styleInput, withLook } from '../domain/tier-look';
 import { QR_WINDOW_MS, parseQr, qrSeed, verifyQr } from '../domain/qr';
 import { QR_SEED_SPEC } from '../tickets/tickets.module';
@@ -53,6 +55,9 @@ const SYNC_SCAN_RESULT: Record<string, ScanResult> = {
 };
 const dayKey = (d: Date) => d.toISOString().slice(0, 10);
 
+/** What the door needs about a ticket, comps included ("Comp · Press"). */
+const DOOR_TICKET = { ticketType: { select: { name: true } }, order: { select: { kind: true, compGroup: true } } } as const;
+
 /** Trimmed, de-duplicated perks (case-insensitive), at most 8. */
 function cleanPerks(perks: string[] | undefined) {
   const out: string[] = [];
@@ -62,6 +67,28 @@ function cleanPerks(perks: string[] | undefined) {
   }
   return out.slice(0, 8);
 }
+
+/** A rule's plain Error as a 400. */
+function rule<T>(fn: () => T): T {
+  try {
+    return fn();
+  } catch (e) {
+    throw new BadRequestException((e as Error).message);
+  }
+}
+
+/** The pricing fields of a new ticket type: a fixed price, or pay what you want (priceCents = the minimum, all-in). */
+function pricingData(t: TicketTypeInputDto, feeMode: FeeMode) {
+  if (t.pricing !== 'PWYW') {
+    if (t.basePriceCents === undefined) throw new BadRequestException(`Set a price for ${t.name.trim()}.`);
+    return { pricing: 'FIXED' as const, priceCents: buyerPrice(t.basePriceCents, feeMode, config.organizerFeePermille), pwywMinCents: null, pwywSuggestedCents: null, pwywMaxCents: null, pwywQuickPicks: [] };
+  }
+  const p = rule(() => cleanPwywInput(t, t.basePriceCents ?? 0));
+  return { pricing: 'PWYW' as const, priceCents: buyerPrice(p.pwywMinCents, feeMode, config.organizerFeePermille), ...p };
+}
+
+/** The pricing fields a ticket type's owner sees. */
+const PRICING_FIELDS = { pricing: true, pwywMinCents: true, pwywSuggestedCents: true, pwywMaxCents: true, pwywQuickPicks: true } as const;
 
 @Injectable()
 export class OrganizerService {
@@ -75,6 +102,7 @@ export class OrganizerService {
     private readonly venues: VenueChange,
     private readonly bookings: VenueBookingService,
     private readonly scans: ScanLog,
+    private readonly guests: GuestListService,
   ) {}
 
   /* ---------- access ---------- */
@@ -175,7 +203,7 @@ export class OrganizerService {
     return {
       name: t.name.trim(),
       description: t.description?.trim() ?? '',
-      priceCents: buyerPrice(t.basePriceCents, feeMode, config.organizerFeePermille),
+      ...pricingData(t, feeMode),
       capacity: t.capacity,
       maxPerOrder: t.maxPerOrder ?? 8,
       sortOrder: i,
@@ -196,6 +224,7 @@ export class OrganizerService {
     // Times are wall-clock times in this zone, so an unknown zone would show the wrong time to everyone.
     if (dto.timezone && !isTimeZone(dto.timezone)) throw new BadRequestException(`Unknown time zone "${dto.timezone}". Use an IANA name such as Africa/Lagos.`);
     const feeMode: FeeMode = dto.feeMode ?? 'BUYER';
+    const donations = rule(() => cleanDonationSettings({ donationsEnabled: false, donationCause: null, donationDescription: null, donationSuggestedCents: [], donationMinCents: null }, dto));
     let venueId = dto.venueId ?? null;
     let timezone = dto.timezone ?? 'UTC';
     // A venue booked on Eventro: the event is held there, in the venue's zone, within the booking's times.
@@ -238,6 +267,8 @@ export class OrganizerService {
       streamUrl: dto.streamUrl,
       feeMode,
       visibility: dto.visibility ?? 'PUBLIC',
+      ...donations,
+      compLimit: dto.compLimit ?? null,
       ticketTypes: { create: dto.ticketTypes.map((t, i) => this.ticketTypeData(t, feeMode, i)) },
     } satisfies Prisma.EventUncheckedCreateInput;
     if (!booking) {
@@ -265,9 +296,10 @@ export class OrganizerService {
     const days = 60;
     const since = new Date(Date.now() - days * DAY);
     const orders = await this.prisma.order.findMany({
-      where: { event: { orgId }, status: { in: ['PAID', 'PARTIALLY_REFUNDED'] }, paidAt: { gte: since } },
+      where: { event: { orgId }, kind: 'SALE', status: { in: ['PAID', 'PARTIALLY_REFUNDED'] }, paidAt: { gte: since } },
       select: { eventId: true, paidAt: true, quantity: true, subtotalCents: true, discountCents: true },
     });
+    const money = await this.salesMoney(events.map((e) => e.id));
     const keys = Array.from({ length: days }, (_, i) => dayKey(new Date(Date.now() - (days - 1 - i) * DAY)));
     const index = new Map(keys.map((k, i) => [k, i]));
     const daily = new Map<string, { tickets: number[]; cents: number[] }>();
@@ -299,12 +331,72 @@ export class OrganizerService {
       imageUrl: e.imageUrl,
       hasSeatMap: !!e.seatMap,
       venueBooking: VenueBookingService.eventSummary(e.venueBooking),
-      ticketTypes: e.ticketTypes.map((t) => withLook({ id: t.id, name: t.name, description: t.description, priceCents: t.priceCents, capacity: t.capacity, sold: t.sold, maxPerOrder: t.maxPerOrder, sortOrder: t.sortOrder, perks: t.perks, badge: t.badge, style: t.style })),
-      sold: e.ticketTypes.reduce((s, t) => s + t.sold, 0),
+      ticketTypes: e.ticketTypes.map((t) =>
+        withLook({
+          id: t.id,
+          name: t.name,
+          description: t.description,
+          priceCents: t.priceCents,
+          capacity: t.capacity,
+          // sales only: comps are counted apart (both count against capacity)
+          sold: t.sold - (money.compsByType.get(t.id) ?? 0),
+          comps: money.compsByType.get(t.id) ?? 0,
+          maxPerOrder: t.maxPerOrder,
+          sortOrder: t.sortOrder,
+          perks: t.perks,
+          badge: t.badge,
+          style: t.style,
+          pricing: t.pricing,
+          pwywMinCents: t.pwywMinCents,
+          pwywSuggestedCents: t.pwywSuggestedCents,
+          pwywMaxCents: t.pwywMaxCents,
+          pwywQuickPicks: t.pwywQuickPicks,
+        }),
+      ),
+      sold: e.ticketTypes.reduce((s, t) => s + t.sold, 0) - (money.comps.get(e.id) ?? 0),
+      comps: money.comps.get(e.id) ?? 0,
       capacity: e.ticketTypes.reduce((s, t) => s + t.capacity, 0),
-      grossCents: e.ticketTypes.reduce((s, t) => s + t.sold * t.priceCents, 0),
+      // face value of the live sold tickets (what each was bought for; comps excluded), and donations apart
+      grossCents: money.gross.get(e.id) ?? 0,
+      donationsCents: money.donations.get(e.id) ?? 0,
       daily: daily.get(e.id) ?? { tickets: Array(days).fill(0), cents: Array(days).fill(0) },
     }));
+  }
+
+  /**
+   * Ticket money per event from the tickets that still count (not void) on sales (comps excluded): `gross` is their
+   * face value (each order's all-in unitCents, so pay-what-you-want amounts count as paid), `net` the organizer's
+   * share of it. Also live comps per event and ticket type, and net donations per event.
+   */
+  private async salesMoney(eventIds: string[]) {
+    const gross = new Map<string, number>();
+    const net = new Map<string, number>();
+    const comps = new Map<string, number>();
+    const compsByType = new Map<string, number>();
+    const donations = new Map<string, number>();
+    if (!eventIds.length) return { gross, net, comps, compsByType, donations };
+    const rows = await this.prisma.$queryRaw<{ eventId: string; ticketTypeId: string; kind: string; unitCents: number; feeMode: FeeMode; n: bigint }[]>`
+      SELECT t."eventId", t."ticketTypeId", o."kind"::text AS kind, o."unitCents", e."feeMode"::text AS "feeMode", COUNT(*) AS n
+      FROM "Ticket" t JOIN "Order" o ON o.id = t."orderId" JOIN "Event" e ON e.id = t."eventId"
+      WHERE t."eventId" IN (${Prisma.join(eventIds)}) AND t.status <> 'VOID' AND o."resaleListingId" IS NULL
+      GROUP BY t."eventId", t."ticketTypeId", o."kind", o."unitCents", e."feeMode"`;
+    for (const r of rows) {
+      const n = Number(r.n);
+      if (r.kind === 'COMP') {
+        comps.set(r.eventId, (comps.get(r.eventId) ?? 0) + n);
+        compsByType.set(r.ticketTypeId, (compsByType.get(r.ticketTypeId) ?? 0) + n);
+        continue;
+      }
+      gross.set(r.eventId, (gross.get(r.eventId) ?? 0) + r.unitCents * n);
+      net.set(r.eventId, (net.get(r.eventId) ?? 0) + organizerNet(r.unitCents, r.feeMode, config.organizerFeePermille) * n);
+    }
+    const d = await this.prisma.order.groupBy({
+      by: ['eventId'],
+      where: { eventId: { in: eventIds }, kind: 'SALE', status: { in: ['PAID', 'PARTIALLY_REFUNDED', 'REFUNDED'] }, donationCents: { gt: 0 } },
+      _sum: { donationCents: true, donationRefundedCents: true },
+    });
+    for (const x of d) donations.set(x.eventId, (x._sum.donationCents ?? 0) - (x._sum.donationRefundedCents ?? 0));
+    return { gross, net, comps, compsByType, donations };
   }
 
   /**
@@ -336,7 +428,7 @@ export class OrganizerService {
   async recentOrders(orgId: string, user: AuthUser) {
     await this.member(orgId, user, EDIT);
     return this.prisma.order.findMany({
-      where: { event: { orgId }, status: { in: ['PAID', 'PARTIALLY_REFUNDED'] } },
+      where: { event: { orgId }, kind: 'SALE', status: { in: ['PAID', 'PARTIALLY_REFUNDED'] } },
       orderBy: { paidAt: 'desc' },
       take: 8,
       select: { id: true, buyerName: true, quantity: true, totalCents: true, currency: true, paidAt: true, ticketType: { select: { name: true } }, event: { select: { title: true } } },
@@ -387,7 +479,13 @@ export class OrganizerService {
       ...(dto.resaleRoyaltyPermille !== undefined ? { resaleRoyaltyPermille: dto.resaleRoyaltyPermille } : {}),
       ...(dto.transfersEnabled !== undefined ? { transfersEnabled: dto.transfersEnabled } : {}),
       ...(dto.transferCutoffMinutes !== undefined ? { transferCutoffMinutes: dto.transferCutoffMinutes } : {}),
+      ...(dto.compLimit !== undefined ? { compLimit: dto.compLimit } : {}),
     };
+    const donationKeys = ['donationsEnabled', 'donationCause', 'donationDescription', 'donationSuggestedCents', 'donationMinCents'] as const;
+    if (donationKeys.some((k) => dto[k] !== undefined)) {
+      Object.assign(data, rule(() => cleanDonationSettings(ev, dto)));
+      await this.audit.log(user.id, 'event.donations', 'Event', id, Object.fromEntries(donationKeys.map((k) => [k, (data as Record<string, unknown>)[k]])) as Prisma.InputJsonValue);
+    }
     return this.prisma.event.update({ where: { id }, data });
   }
 
@@ -461,12 +559,32 @@ export class OrganizerService {
     if (dto.capacity !== undefined && ev.seatMap && (ev.seatMap as SeatMap).sections.some((s) => s.ticketTypeId === ttId)) {
       throw new BadRequestException('This ticket type’s capacity comes from the seat map. Change the sections instead.');
     }
+    // Pricing: switching to (or changing) pay what you want, or back to a fixed price.
+    const pricing = dto.pricing ?? tt.pricing;
+    const pwywTouched = dto.pricing !== undefined || dto.pwywMinCents !== undefined || dto.pwywSuggestedCents !== undefined || dto.pwywMaxCents !== undefined || dto.pwywQuickPicks !== undefined;
+    let pricingData: Prisma.TicketTypeUpdateInput = {};
+    if (pricing === 'PWYW' && pwywTouched) {
+      const merged = {
+        pwywMinCents: dto.pwywMinCents !== undefined ? dto.pwywMinCents : (tt.pwywMinCents ?? dto.basePriceCents ?? 0),
+        pwywSuggestedCents: dto.pwywSuggestedCents !== undefined ? dto.pwywSuggestedCents : tt.pwywSuggestedCents,
+        pwywMaxCents: dto.pwywMaxCents !== undefined ? dto.pwywMaxCents : tt.pwywMaxCents,
+        pwywQuickPicks: dto.pwywQuickPicks !== undefined ? dto.pwywQuickPicks : tt.pwywQuickPicks,
+      };
+      const p = rule(() => cleanPwywInput(merged));
+      pricingData = { pricing: 'PWYW', ...p, priceCents: buyerPrice(p.pwywMinCents, ev.feeMode, config.organizerFeePermille) };
+    } else if (pricing === 'FIXED' && tt.pricing === 'PWYW') {
+      if (dto.basePriceCents === undefined) throw new BadRequestException('Set a price to switch this ticket type back to a fixed price.');
+      pricingData = { pricing: 'FIXED', pwywMinCents: null, pwywSuggestedCents: null, pwywMaxCents: null, pwywQuickPicks: [] };
+    } else if (pricing === 'PWYW' && dto.basePriceCents !== undefined) {
+      throw new BadRequestException('This ticket type is pay what you want: change its minimum (pwywMinCents) instead of the price.');
+    }
     const updated = await this.prisma.ticketType.update({
       where: { id: ttId },
       data: {
         ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
         ...(dto.description !== undefined ? { description: dto.description.trim() } : {}),
-        ...(dto.basePriceCents !== undefined ? { priceCents: buyerPrice(dto.basePriceCents, ev.feeMode, config.organizerFeePermille) } : {}),
+        ...(dto.basePriceCents !== undefined && pricing === 'FIXED' ? { priceCents: buyerPrice(dto.basePriceCents, ev.feeMode, config.organizerFeePermille) } : {}),
+        ...pricingData,
         ...(dto.capacity !== undefined ? { capacity: dto.capacity } : {}),
         ...(dto.maxPerOrder !== undefined ? { maxPerOrder: dto.maxPerOrder } : {}),
         ...(dto.perks !== undefined ? { perks: cleanPerks(dto.perks) } : {}),
@@ -476,10 +594,13 @@ export class OrganizerService {
       },
     });
     let priceDrop: Awaited<ReturnType<PriceDropService['record']>> = null;
-    if (updated.priceCents !== tt.priceCents) {
-      await this.audit.log(user.id, 'ticket_type.price', 'TicketType', ttId, { eventId: id, fromCents: tt.priceCents, toCents: updated.priceCents, currency: ev.currency });
-      const venue = ev.venueId ? await this.prisma.venue.findUnique({ where: { id: ev.venueId }, select: { name: true, city: true } }) : null;
-      priceDrop = await this.priceDrops.record({ ...ev, venue }, updated, tt.priceCents, updated.priceCents, user.id);
+    if (updated.priceCents !== tt.priceCents || pwywTouched) {
+      await this.audit.log(user.id, 'ticket_type.price', 'TicketType', ttId, { eventId: id, fromCents: tt.priceCents, toCents: updated.priceCents, currency: ev.currency, pricing: updated.pricing, pwywMinCents: updated.pwywMinCents, pwywMaxCents: updated.pwywMaxCents });
+      // A pay-what-you-want minimum isn't a price fans pay, so a lower one isn't announced as a price drop.
+      if (updated.priceCents !== tt.priceCents && updated.pricing === 'FIXED' && tt.pricing === 'FIXED') {
+        const venue = ev.venueId ? await this.prisma.venue.findUnique({ where: { id: ev.venueId }, select: { name: true, city: true } }) : null;
+        priceDrop = await this.priceDrops.record({ ...ev, venue }, updated, tt.priceCents, updated.priceCents, user.id);
+      }
     }
     return { ...withLook(updated), priceDrop };
   }
@@ -604,7 +725,7 @@ export class OrganizerService {
     const ev = await this.eventFor(id, user, DOOR);
     const since = new Date(Date.now() - days * DAY);
     const orders = await this.prisma.order.findMany({
-      where: { eventId: id, status: { in: ['PAID', 'PARTIALLY_REFUNDED'] }, paidAt: { gte: since } },
+      where: { eventId: id, kind: 'SALE', status: { in: ['PAID', 'PARTIALLY_REFUNDED'] }, paidAt: { gte: since } },
       select: { paidAt: true, quantity: true, subtotalCents: true, discountCents: true },
     });
     const byDay = new Map<string, { tickets: number; cents: number }>();
@@ -618,41 +739,93 @@ export class OrganizerService {
       }
     }
     const checkedIn = await this.prisma.ticket.count({ where: { eventId: id, status: 'CHECKED_IN' } });
-    const sold = ev.ticketTypes.reduce((s, t) => s + t.sold, 0);
-    const gross = ev.ticketTypes.reduce((s, t) => s + t.sold * t.priceCents, 0);
+    const money = await this.salesMoney([id]);
+    const comps = money.comps.get(id) ?? 0;
+    const [compRows, donation, guestList] = await Promise.all([
+      this.prisma.order.findMany({ where: { eventId: id, kind: 'COMP' }, select: { status: true, gift: { select: { claimedAt: true } }, tickets: { select: { status: true } } } }),
+      this.prisma.order.aggregate({
+        where: { eventId: id, kind: 'SALE', status: { in: ['PAID', 'PARTIALLY_REFUNDED', 'REFUNDED'] }, donationCents: { gt: 0 } },
+        _sum: { donationCents: true, donationRefundedCents: true },
+        _count: { _all: true },
+      }),
+      this.guests.summary(id),
+    ]);
+    const live = compRows.filter((c) => c.status === 'PAID');
     return {
-      sold,
+      // tickets sold (comps are counted apart; both count against capacity)
+      sold: ev.ticketTypes.reduce((s, t) => s + t.sold, 0) - comps,
       capacity: ev.ticketTypes.reduce((s, t) => s + t.capacity, 0),
-      grossCents: gross,
-      netCents: ev.ticketTypes.reduce((s, t) => s + t.sold * organizerNet(t.priceCents, ev.feeMode, config.organizerFeePermille), 0),
+      // ticket revenue only: face value of live sold tickets (pay what you want at what was paid), no comps, no donations
+      grossCents: money.gross.get(id) ?? 0,
+      netCents: money.net.get(id) ?? 0,
       checkedIn,
-      byTicketType: ev.ticketTypes.map((t) => ({ id: t.id, name: t.name, sold: t.sold, capacity: t.capacity, priceCents: t.priceCents })),
+      byTicketType: ev.ticketTypes.map((t) => ({
+        id: t.id,
+        name: t.name,
+        sold: t.sold - (money.compsByType.get(t.id) ?? 0),
+        comps: money.compsByType.get(t.id) ?? 0,
+        capacity: t.capacity,
+        priceCents: t.priceCents,
+        pricing: t.pricing,
+      })),
       daily: [...byDay.entries()].map(([date, v]) => ({ date, ...v })),
+      comps: {
+        issued: live.length,
+        claimed: live.filter((c) => c.gift?.claimedAt).length,
+        checkedIn: live.filter((c) => c.tickets.some((t) => t.status === 'CHECKED_IN')).length,
+        revoked: compRows.length - live.length,
+        limit: ev.compLimit,
+      },
+      guestList,
+      donations: {
+        orders: donation._count._all,
+        cents: (donation._sum.donationCents ?? 0) - (donation._sum.donationRefundedCents ?? 0),
+        refundedCents: donation._sum.donationRefundedCents ?? 0,
+        cause: ev.donationCause,
+      },
     };
   }
 
-  async attendees(id: string, user: AuthUser, q?: string, status?: string) {
+  async attendees(id: string, user: AuthUser, q?: string, status?: string, type?: string) {
     await this.eventFor(id, user, DOOR);
     const s = q?.trim();
-    return this.prisma.ticket.findMany({
+    const rows = await this.prisma.ticket.findMany({
       where: {
         eventId: id,
         status: status === 'checked-in' ? 'CHECKED_IN' : status === 'not-checked-in' ? { in: ['ACTIVE', 'TRANSFER_PENDING', 'LISTED'] } : { not: 'VOID' },
+        ...(type === 'comp' ? { order: { kind: 'COMP' } } : type === 'paid' ? { order: { kind: 'SALE' } } : {}),
         ...(s
           ? { OR: [{ holderName: { contains: s, mode: 'insensitive' } }, { holderEmail: { contains: s, mode: 'insensitive' } }, { id: { contains: s.toUpperCase() } }] }
           : {}),
       },
-      select: { id: true, holderName: true, holderEmail: true, section: true, row: true, seat: true, status: true, checkedInAt: true, ticketType: { select: { name: true } } },
+      select: { id: true, holderName: true, holderEmail: true, section: true, row: true, seat: true, status: true, checkedInAt: true, ticketType: { select: { name: true } }, order: { select: { kind: true, compGroup: true } } },
       orderBy: { id: 'asc' },
       take: 5000,
     });
+    // Paid = sold at checkout (free registrations included); Comp = complimentary, issued by the organizer.
+    return rows.map(({ order, ...r }) => ({ ...r, type: order.kind === 'COMP' ? ('COMP' as const) : ('PAID' as const), compGroup: order.compGroup }));
   }
 
   async attendeesCsv(id: string, user: AuthUser) {
     const rows = await this.attendees(id, user);
+    const guests = await this.prisma.guestListEntry.findMany({ where: { eventId: id }, orderBy: { name: 'asc' }, take: 5000 });
     const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-    const head = ['Ticket', 'Name', 'Email', 'Ticket type', 'Section', 'Row', 'Seat', 'Status', 'Checked in at'];
-    return [head, ...rows.map((r) => [r.id, r.holderName, r.holderEmail, r.ticketType.name, r.section, r.row, r.seat, r.status, r.checkedInAt?.toISOString()])]
+    const head = ['Ticket', 'Name', 'Email', 'Ticket type', 'Section', 'Row', 'Seat', 'Status', 'Checked in at', 'Type', 'Group'];
+    const tickets = rows.map((r) => [r.id, r.holderName, r.holderEmail, r.ticketType.name, r.section, r.row, r.seat, r.status, r.checkedInAt?.toISOString(), r.type === 'COMP' ? 'Comp' : 'Paid', r.compGroup]);
+    const list = guests.map((g) => [
+      '',
+      g.plusOnes ? `${g.name} +${g.plusOnes}` : g.name,
+      g.email,
+      'Guest list',
+      '',
+      '',
+      '',
+      g.arrived ? `${g.arrived} of ${1 + g.plusOnes} here` : 'Not arrived',
+      g.firstArrivedAt?.toISOString(),
+      'Guest list',
+      g.group,
+    ]);
+    return [head, ...tickets, ...list]
       .map((r) => r.map(esc).join(','))
       .join('\r\n');
   }
@@ -671,12 +844,12 @@ export class OrganizerService {
     };
     let ticketId = code.trim().toUpperCase();
     const invalidCode = { result: 'invalid', message: 'Not a valid Eventro code.' };
-    let t: Prisma.TicketGetPayload<{ include: { ticketType: { select: { name: true } } } }> | null = null;
+    let t: Prisma.TicketGetPayload<{ include: typeof DOOR_TICKET }> | null = null;
     if (code.includes('.')) {
       // Codes are signed with the ticket's own seed (its qrVersion), so find the ticket first, then check.
       const p = parseQr(code);
       if (!p.ok) return logged('INVALID', null, invalidCode);
-      t = await this.prisma.ticket.findUnique({ where: { id: p.ticketId }, include: { ticketType: { select: { name: true } } } });
+      t = await this.prisma.ticket.findUnique({ where: { id: p.ticketId }, include: DOOR_TICKET });
       if (!t) return logged('NOT_FOUND', null, invalidCode);
       const v = verifyQr(config.qrSecret, code.trim(), Date.now(), t.qrVersion);
       if (!v.ok) {
@@ -688,13 +861,15 @@ export class OrganizerService {
       }
       ticketId = v.ticketId;
     } else {
-      t = await this.prisma.ticket.findUnique({ where: { id: ticketId }, include: { ticketType: { select: { name: true } } } });
+      t = await this.prisma.ticket.findUnique({ where: { id: ticketId }, include: DOOR_TICKET });
     }
     if (!t) return logged('NOT_FOUND', null, { result: 'invalid', message: 'Ticket not found.' });
     if (t.eventId !== id) return logged('WRONG_EVENT', t.id, { result: 'wrong-event', message: 'This ticket is for a different event.' });
     if (t.status === 'CHECKED_IN') return logged('ALREADY_USED', t.id, await this.duplicate(t));
     if (t.status === 'VOID') return logged('VOID', t.id, { result: 'invalid', message: 'This ticket was refunded or cancelled.' });
-    if (t.status === 'TRANSFER_PENDING') return logged('TRANSFER_PENDING', t.id, { result: 'invalid', message: 'This ticket is being transferred.' });
+    if (t.status === 'TRANSFER_PENDING') {
+      return logged('TRANSFER_PENDING', t.id, { result: 'invalid', message: t.order.kind === 'COMP' && t.transferTo === t.holderEmail ? 'This complimentary ticket hasn’t been claimed yet.' : 'This ticket is being transferred.' });
+    }
     // Conditional update so two scanners can't admit the same ticket twice.
     const { count } = await this.prisma.ticket.updateMany({
       where: { id: t.id, status: { in: ['ACTIVE', 'LISTED'] } },
@@ -731,9 +906,10 @@ export class OrganizerService {
     const ev = await this.eventFor(id, user, DOOR);
     const rows = await this.prisma.ticket.findMany({
       where: { eventId: id, status: { not: 'VOID' } },
-      select: { id: true, qrVersion: true, status: true, checkedInAt: true, checkedInDevice: true, holderName: true, section: true, row: true, seat: true, ticketType: { select: { name: true } } },
+      select: { id: true, qrVersion: true, status: true, checkedInAt: true, checkedInDevice: true, holderName: true, section: true, row: true, seat: true, ticketType: { select: { name: true } }, order: { select: { kind: true, compGroup: true } } },
       orderBy: { id: 'asc' },
     });
+    const guestList = await this.guests.packEntries(id);
     const map = ev.seatMap as SeatMap | null;
     const names = new Map((map?.sections ?? []).map((s) => [s.id, sectionName(s)]));
     await this.audit.log(user.id, 'door_pack.download', 'Event', id, { tickets: rows.length });
@@ -758,7 +934,11 @@ export class OrganizerService {
         sectionName: t.section ? (names.get(t.section) ?? t.section) : null,
         row: t.row,
         seat: t.seat,
+        comp: t.order.kind === 'COMP',
+        compGroup: t.order.kind === 'COMP' ? t.order.compGroup : null,
       })),
+      // The guest list (no tickets), so guests can be found and checked in offline (see GuestListService.sync).
+      guestList,
     };
   }
 
@@ -778,7 +958,7 @@ export class OrganizerService {
       .sort((a, b) => a.at.getTime() - b.at.getTime() || a.index - b.index);
     const tickets = await this.prisma.ticket.findMany({
       where: { id: { in: [...new Set(ordered.map((s) => s.ticketId))] } },
-      select: { id: true, eventId: true, status: true, qrVersion: true, checkedInAt: true, checkedInBy: true, checkedInDevice: true, holderName: true, section: true, row: true, seat: true, ticketType: { select: { name: true } } },
+      select: { id: true, eventId: true, status: true, qrVersion: true, checkedInAt: true, checkedInBy: true, checkedInDevice: true, holderName: true, section: true, row: true, seat: true, ticketType: { select: { name: true } }, order: { select: { kind: true, compGroup: true } } },
     });
     const byId = new Map(tickets.map((t) => [t.id, t]));
     const SKEW_WINDOWS = 8;
@@ -883,8 +1063,9 @@ export class OrganizerService {
     return { eventId: id, deviceId, summary, results };
   }
 
-  private doorView(t: { id: string; holderName: string; section: string | null; row: string | null; seat: number | null; ticketType: { name: string } }) {
-    return { id: t.id, holderName: t.holderName, ticketType: t.ticketType.name, section: t.section, row: t.row, seat: t.seat };
+  private doorView(t: { id: string; holderName: string; section: string | null; row: string | null; seat: number | null; ticketType: { name: string }; order?: { kind: string; compGroup: string | null } }) {
+    const comp = t.order?.kind === 'COMP';
+    return { id: t.id, holderName: t.holderName, ticketType: t.ticketType.name, section: t.section, row: t.row, seat: t.seat, comp, compGroup: comp ? (t.order?.compGroup ?? null) : null };
   }
 
   async undoCheckIn(id: string, ticketId: string, user: AuthUser) {
@@ -943,11 +1124,16 @@ export class OrganizerService {
         unitCents: true,
         discountCents: true,
         refundedCents: true,
+        donationCents: true,
+        donationRefundedCents: true,
         currency: true,
         event: { select: { feeMode: true } },
         guaranteeClaims: { where: { payer: 'ORGANIZER', refundStatus: 'REFUNDED' }, select: { amountCents: true, organizerCents: true } },
+        resaleListing: { select: { royaltyCents: true } },
       },
     });
+    // Donation refunds made after the organizer had been paid for those orders (any time): owed to Eventro.
+    const owed = await this.prisma.order.groupBy({ by: ['currency'], where: { event: { orgId }, donationOwedCents: { gt: 0 } }, _sum: { donationOwedCents: true } });
     // Payouts are shown in the organization's main currency (the one most of its sales are in);
     // sales in other currencies are converted at today's rate and marked as approximate.
     const counts = new Map<string, number>();
@@ -955,26 +1141,45 @@ export class OrganizerService {
     const latest = await this.prisma.event.findFirst({ where: { orgId }, orderBy: { createdAt: 'desc' }, select: { currency: true } });
     const currency = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? latest?.currency ?? 'USD';
     const byDay = new Map<string, number>();
+    const donationsByDay = new Map<string, number>();
     for (const o of orders) {
       const k = dayKey(o.paidAt!);
       // Organizer share of the tickets (protection is Eventro's), after discounts and refunds. A refund comes out of
       // it in full, except an Eventro Guarantee refund: only the organizer's share of that ticket (`organizerCents`),
       // as Eventro returns its own fee and protection (see src/guarantee).
       const eventroReturned = o.guaranteeClaims.reduce((s, g) => s + (g.amountCents - g.organizerCents), 0);
-      const net = organizerNet(o.unitCents, o.event.feeMode, config.organizerFeePermille) * o.quantity - o.discountCents - (o.refundedCents - eventroReturned);
-      byDay.set(k, (byDay.get(k) ?? 0) + Math.max(0, this.fx.convert(net, o.currency, currency)));
+      // A donation is its own line: paid to the organizer in full (no fee), less any donation refund; ticket refunds
+      // don't touch it, and refunds of it don't touch the tickets' share.
+      // A fan-resale order's ticket money is the seller's (paid out by Eventro from the listing): the organizer's part
+      // of it is only the event's resale royalty. Its donation, like any, is the organizer's in full.
+      const net = o.resaleListing
+        ? (o.resaleListing.royaltyCents ?? 0)
+        : organizerNet(o.unitCents, o.event.feeMode, config.organizerFeePermille) * o.quantity - o.discountCents - (ticketRefunded(o) - eventroReturned);
+      const ticketCents = Math.max(0, this.fx.convert(net, o.currency, currency));
+      const donationCents = Math.max(0, this.fx.convert(donationLeft(o), o.currency, currency));
+      byDay.set(k, (byDay.get(k) ?? 0) + ticketCents + donationCents);
+      donationsByDay.set(k, (donationsByDay.get(k) ?? 0) + donationCents);
     }
+    const donationsOn = (k: string) => donationsByDay.get(k) ?? 0;
     const today = dayKey(new Date());
     const history = [...byDay.entries()]
       .filter(([d]) => d < today)
       .sort((a, b) => b[0].localeCompare(a[0]))
-      .map(([date, cents]) => ({ salesDate: date, amountCents: cents, status: 'PAID' as const }));
+      .map(([date, cents]) => ({ salesDate: date, amountCents: cents, ticketCents: cents - donationsOn(date), donationCents: donationsOn(date), status: 'PAID' as const }));
+    const yesterday = dayKey(new Date(Date.now() - DAY));
     return {
       currency,
       converted: counts.size > 1,
       schedule: org.payoutSchedule,
       pendingCents: byDay.get(today) ?? 0,
-      nextPayoutCents: org.payoutSchedule === 'DAILY' ? (byDay.get(dayKey(new Date(Date.now() - DAY))) ?? 0) : history.slice(0, 7).reduce((s, h) => s + h.amountCents, 0),
+      nextPayoutCents: org.payoutSchedule === 'DAILY' ? (byDay.get(yesterday) ?? 0) : history.slice(0, 7).reduce((s, h) => s + h.amountCents, 0),
+      // Donations collected on the organizer's behalf, inside the amounts above and shown as their own line.
+      pendingDonationCents: donationsOn(today),
+      nextPayoutDonationCents: org.payoutSchedule === 'DAILY' ? donationsOn(yesterday) : history.slice(0, 7).reduce((s, h) => s + h.donationCents, 0),
+      donationsCents: [...donationsByDay.values()].reduce((a, b) => a + b, 0),
+      donationNote: DONATION_NOTE,
+      // Donations refunded after the organizer had already been paid for them: owed to Eventro (in the payout currency).
+      donationOwedCents: owed.reduce((s, g) => s + this.fx.convert(g._sum.donationOwedCents ?? 0, g.currency, currency), 0),
       payoutMethod:
         org.payoutProvider === 'paystack' && org.paystackSubaccount
           ? { provider: 'paystack', bankLast4: org.bankLast4, bankName: org.bankName, accountName: org.bankAccountName, country: org.bankCountry, updatedAt: org.payoutUpdatedAt }

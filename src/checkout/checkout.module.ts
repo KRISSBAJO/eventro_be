@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Delete, Get, Headers, HttpCode, Module, Param, Post, Query, Req } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, Headers, HttpCode, Module, Param, Patch, Post, Query, Req } from '@nestjs/common';
 import { ApiBearerAuth, ApiProperty, ApiPropertyOptional, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import { ArrayMaxSize, IsArray, IsBoolean, IsDateString, IsEmail, IsIn, IsInt, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
@@ -7,6 +7,7 @@ import { CheckoutService } from './checkout.service';
 import { Payments } from './payments';
 import { CurrentUser, OptionalAuth, Public, type AuthUser } from '../common/auth';
 import { RATE_RULES, RateLimit } from '../common/rate-limit';
+import { DONATION_MAX_CENTS, PWYW_CEILING_CENTS } from '../domain/pwyw';
 
 const lower = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim().toLowerCase() : value);
 
@@ -26,6 +27,18 @@ export class CreateHoldDto {
   @ValidateNested({ each: true })
   @Type(() => SeatChoiceDto)
   seats?: SeatChoiceDto[];
+  @ApiPropertyOptional({ description: 'Pay what you want: the base amount per ticket (minor units), required for those tiers; the event’s fee mode applies to it' })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(PWYW_CEILING_CENTS)
+  amountCents?: number;
+}
+
+/** Pay what you want and donations, on the quote and the order. */
+class PriceExtrasDto {
+  @ApiPropertyOptional({ description: 'Pay what you want: change the base amount per ticket chosen at the hold' }) @IsOptional() @IsInt() @Min(0) @Max(PWYW_CEILING_CENTS) amountCents?: number;
+  @ApiPropertyOptional({ description: 'A donation to the event’s cause (minor units; 0 = none). No fee is taken on it.' }) @IsOptional() @IsInt() @Min(0) @Max(DONATION_MAX_CENTS) donationCents?: number;
 }
 
 export class GiftDto {
@@ -36,7 +49,7 @@ export class GiftDto {
   @ApiPropertyOptional({ default: true }) @IsOptional() @IsBoolean() hidePrice?: boolean;
 }
 
-export class CreateOrderDto {
+export class CreateOrderDto extends PriceExtrasDto {
   @ApiProperty() @IsString() @MaxLength(40) holdId: string;
   @ApiProperty() @Transform(lower) @IsEmail() email: string;
   @ApiProperty() @IsString() @MinLength(2) @MaxLength(80) name: string;
@@ -49,7 +62,24 @@ export class CreateOrderDto {
   returnTo?: 'app';
 }
 
+/** What the fan chose before checkout moves elsewhere (the app hands card payments to the website). */
+export class UpdateHoldDto {
+  @ApiPropertyOptional({ description: 'A donation to the event’s cause (minor units; 0 = none), used by the quote and the order when they send none' })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(DONATION_MAX_CENTS)
+  donationCents?: number;
+  @ApiPropertyOptional({ description: 'Pay what you want: the base amount per ticket' }) @IsOptional() @IsInt() @Min(0) @Max(PWYW_CEILING_CENTS) amountCents?: number;
+}
+
 export class ResaleOrderDto {
+  @ApiPropertyOptional({ description: 'A donation to the event’s cause (minor units; 0 = none), for the organizer, not the seller. No fee is taken on it.' })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(DONATION_MAX_CENTS)
+  donationCents?: number;
   @ApiProperty({ description: 'From POST /resale/:id/hold' }) @IsString() @MaxLength(64) holdKey: string;
   @ApiProperty() @Transform(lower) @IsEmail() email: string;
   @ApiProperty() @IsString() @MinLength(2) @MaxLength(80) name: string;
@@ -59,7 +89,7 @@ export class ResaleOrderDto {
   returnTo?: 'app';
 }
 
-export class QuoteDto {
+export class QuoteDto extends PriceExtrasDto {
   @ApiProperty() @IsString() @MaxLength(40) holdId: string;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() protection?: boolean;
   @ApiPropertyOptional() @IsOptional() @IsString() @Matches(/^[A-Za-z0-9]{3,15}$/) promoCode?: string;
@@ -88,6 +118,13 @@ export class CheckoutController {
   @Get('holds/:id')
   getHold(@Param('id') id: string) {
     return this.checkout.getHold(id);
+  }
+
+  @Public()
+  @Patch('holds/:id')
+  @RateLimit(RATE_RULES.checkout)
+  updateHold(@Param('id') id: string, @Body() dto: UpdateHoldDto) {
+    return this.checkout.updateHold(id, dto);
   }
 
   @Public()

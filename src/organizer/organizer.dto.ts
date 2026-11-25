@@ -1,5 +1,6 @@
 import { CURRENCY_CODES } from '../domain/currency';
 import { TIER_STYLE_INPUTS } from '../domain/tier-look';
+import { DONATION_MAX_CENTS, MAX_DONATION_SUGGESTIONS, MAX_QUICK_PICKS, PWYW_CEILING_CENTS } from '../domain/pwyw';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import {
@@ -21,6 +22,7 @@ import {
   MaxLength,
   Min,
   MinLength,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 import { Category } from '@prisma/client';
@@ -63,7 +65,8 @@ export class VenueInputDto {
 export class TicketTypeInputDto {
   @ApiProperty() @IsString() @MinLength(1) @MaxLength(60) name: string;
   @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(300) description?: string;
-  @ApiProperty({ description: 'Organizer price in cents (0 = free). The fan price is calculated from the fee mode.' })
+  @ApiProperty({ description: 'Organizer price in cents (0 = free). The fan price is calculated from the fee mode. Optional (ignored) with pay what you want.' })
+  @ValidateIf((o: { pricing?: string; basePriceCents?: unknown }) => o.pricing !== 'PWYW' || o.basePriceCents !== undefined)
   @IsInt()
   @Min(0)
   @Max(10_000_000)
@@ -83,9 +86,49 @@ export class TicketTypeInputDto {
   @IsOptional()
   @IsIn(TIER_STYLE_INPUTS)
   style?: string | null;
+  @ApiPropertyOptional({ enum: ['FIXED', 'PWYW'], description: 'Fixed price, or pay what you want (the fan picks an amount within the limits below)' })
+  @IsOptional()
+  @IsIn(['FIXED', 'PWYW'])
+  pricing?: 'FIXED' | 'PWYW';
+  @ApiPropertyOptional({ description: 'Pay what you want: the minimum base amount (minor units, 0 or more); required with PWYW' })
+  @ValidateIf((o: { pricing?: string; pwywMinCents?: unknown }) => o.pricing === 'PWYW' || o.pwywMinCents !== undefined)
+  @IsInt()
+  @Min(0)
+  @Max(PWYW_CEILING_CENTS)
+  pwywMinCents?: number;
+  @ApiPropertyOptional({ nullable: true, description: 'Pay what you want: the suggested amount, shown as the default' }) @IsOptional() @IsInt() @Min(0) @Max(PWYW_CEILING_CENTS) pwywSuggestedCents?: number | null;
+  @ApiPropertyOptional({ nullable: true, description: 'Pay what you want: the most a fan can pay (null = no maximum; capped at 10,000,000)' }) @IsOptional() @IsInt() @Min(1) @Max(PWYW_CEILING_CENTS) pwywMaxCents?: number | null;
+  @ApiPropertyOptional({ type: [Number], description: `Pay what you want: up to ${MAX_QUICK_PICKS} quick-pick amounts` })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(MAX_QUICK_PICKS)
+  @IsInt({ each: true })
+  @Min(0, { each: true })
+  @Max(PWYW_CEILING_CENTS, { each: true })
+  pwywQuickPicks?: number[];
 }
 
-export class CreateEventDto {
+/** Charity donations at checkout and the comp limit, on create and edit. */
+export class EventExtrasDto {
+  @ApiPropertyOptional({ description: "Accept donations at checkout. Eventro collects donations on the organizer's behalf; the organizer is responsible for passing them to the cause." })
+  @IsOptional()
+  @IsBoolean()
+  donationsEnabled?: boolean;
+  @ApiPropertyOptional({ nullable: true, description: "The cause donations go to (required when donations are on), e.g. \"Lagos Children's Fund\"" }) @IsOptional() @IsString() @MaxLength(80) donationCause?: string | null;
+  @ApiPropertyOptional({ nullable: true }) @IsOptional() @IsString() @MaxLength(280) donationDescription?: string | null;
+  @ApiPropertyOptional({ type: [Number], description: `Up to ${MAX_DONATION_SUGGESTIONS} suggested amounts (minor units)` })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(MAX_DONATION_SUGGESTIONS)
+  @IsInt({ each: true })
+  @Min(1, { each: true })
+  @Max(DONATION_MAX_CENTS, { each: true })
+  donationSuggestedCents?: number[];
+  @ApiPropertyOptional({ nullable: true, description: 'Smallest donation (minor units)' }) @IsOptional() @IsInt() @Min(1) @Max(DONATION_MAX_CENTS) donationMinCents?: number | null;
+  @ApiPropertyOptional({ nullable: true, description: 'Most live complimentary tickets on this event (null = no limit)' }) @IsOptional() @IsInt() @Min(0) @Max(200_000) compLimit?: number | null;
+}
+
+export class CreateEventDto extends EventExtrasDto {
   @ApiProperty() @IsString() @MinLength(3) @MaxLength(120) title: string;
   @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(120) subtitle?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(5000) description?: string;
@@ -118,7 +161,7 @@ export class CreateEventDto {
   ticketTypes: TicketTypeInputDto[];
 }
 
-export class UpdateEventDto {
+export class UpdateEventDto extends EventExtrasDto {
   @ApiPropertyOptional() @IsOptional() @IsString() @MinLength(3) @MaxLength(120) title?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(120) subtitle?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(5000) description?: string;
@@ -178,6 +221,26 @@ export class UpdateTicketTypeDto {
   @IsOptional()
   @IsIn(TIER_STYLE_INPUTS)
   style?: string | null;
+  @ApiPropertyOptional({ enum: ['FIXED', 'PWYW'], description: 'Fixed price, or pay what you want (the fan picks an amount within the limits below)' })
+  @IsOptional()
+  @IsIn(['FIXED', 'PWYW'])
+  pricing?: 'FIXED' | 'PWYW';
+  @ApiPropertyOptional({ description: 'Pay what you want: the minimum base amount (minor units, 0 or more); required with PWYW' })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(PWYW_CEILING_CENTS)
+  pwywMinCents?: number;
+  @ApiPropertyOptional({ nullable: true, description: 'Pay what you want: the suggested amount, shown as the default' }) @IsOptional() @IsInt() @Min(0) @Max(PWYW_CEILING_CENTS) pwywSuggestedCents?: number | null;
+  @ApiPropertyOptional({ nullable: true, description: 'Pay what you want: the most a fan can pay (null = no maximum; capped at 10,000,000)' }) @IsOptional() @IsInt() @Min(1) @Max(PWYW_CEILING_CENTS) pwywMaxCents?: number | null;
+  @ApiPropertyOptional({ type: [Number], description: `Pay what you want: up to ${MAX_QUICK_PICKS} quick-pick amounts` })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(MAX_QUICK_PICKS)
+  @IsInt({ each: true })
+  @Min(0, { each: true })
+  @Max(PWYW_CEILING_CENTS, { each: true })
+  pwywQuickPicks?: number[];
 }
 
 export class TicketOrderDto {
@@ -240,4 +303,81 @@ export class PayoutSettingsDto {
 export class CancelEventDto {
   @ApiProperty({ minLength: 10, description: 'Shown to buyers in the cancellation email and kept in the audit log' }) @IsString() @MinLength(10) @MaxLength(500) reason: string;
   @ApiProperty({ description: 'The event title, typed again to confirm' }) @IsString() @MaxLength(200) confirmTitle: string;
+}
+
+/* ---------- comps and the guest list ---------- */
+
+export class CompRecipientDto {
+  @ApiProperty() @IsString() @MinLength(1) @MaxLength(80) name: string;
+  @ApiProperty() @Transform(lower) @IsEmail() email: string;
+}
+
+export class IssueCompsDto {
+  @ApiProperty() @IsString() @MaxLength(40) ticketTypeId: string;
+  @ApiPropertyOptional({ type: [CompRecipientDto], description: 'One comp each (1-200)' })
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(200)
+  @ValidateNested({ each: true })
+  @Type(() => CompRecipientDto)
+  recipients?: CompRecipientDto[];
+  @ApiPropertyOptional({ description: 'Or pasted lines: "Name, email", "Name <email>" or "Name<TAB>email" (up to 200)' }) @IsOptional() @IsString() @MaxLength(40_000) text?: string;
+  @ApiPropertyOptional({ description: 'Group label, e.g. Press, Artist, Sponsor' }) @IsOptional() @IsString() @MaxLength(40) group?: string;
+  @ApiPropertyOptional({ description: 'Private note for the team' }) @IsOptional() @IsString() @MaxLength(300) note?: string;
+}
+
+export class RevokeCompDto {
+  @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(300) reason?: string;
+}
+
+export class GuestEntryDto {
+  @ApiProperty() @IsString() @MinLength(1) @MaxLength(80) name: string;
+  @ApiPropertyOptional() @IsOptional() @Transform(lower) @IsEmail() email?: string;
+  @ApiPropertyOptional({ minimum: 0, maximum: 10 }) @IsOptional() @IsInt() @Min(0) @Max(10) plusOnes?: number;
+  @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(40) group?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(300) note?: string;
+}
+
+export class AddGuestsDto {
+  @ApiPropertyOptional({ type: [GuestEntryDto] })
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(500)
+  @ValidateNested({ each: true })
+  @Type(() => GuestEntryDto)
+  entries?: GuestEntryDto[];
+  @ApiPropertyOptional({ description: 'Or pasted lines: name[, email][, +N][, group] (up to 500)' }) @IsOptional() @IsString() @MaxLength(60_000) text?: string;
+  @ApiPropertyOptional({ description: 'Group for pasted lines that have none' }) @IsOptional() @IsString() @MaxLength(40) group?: string;
+}
+
+export class UpdateGuestDto {
+  @ApiPropertyOptional() @IsOptional() @IsString() @MinLength(1) @MaxLength(80) name?: string;
+  @ApiPropertyOptional({ nullable: true }) @IsOptional() @Transform(lower) @IsEmail() email?: string | null;
+  @ApiPropertyOptional() @IsOptional() @IsInt() @Min(0) @Max(10) plusOnes?: number;
+  @ApiPropertyOptional({ nullable: true }) @IsOptional() @IsString() @MaxLength(40) group?: string | null;
+  @ApiPropertyOptional({ nullable: true }) @IsOptional() @IsString() @MaxLength(300) note?: string | null;
+}
+
+export class GuestCheckInDto {
+  @ApiPropertyOptional({ minimum: 1, maximum: 11, default: 1, description: 'How many of the party just arrived' }) @IsOptional() @IsInt() @Min(1) @Max(11) guests?: number;
+  @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(80) deviceId?: string;
+}
+
+export class GuestOfflineDto {
+  @ApiProperty() @IsString() @MaxLength(40) entryId: string;
+  @ApiProperty({ minimum: 1, maximum: 11 }) @IsInt() @Min(1) @Max(11) guests: number;
+  @ApiProperty({ description: "When the scanner checked them in (ISO 8601, the scanner's clock)" }) @IsDateString() at: string;
+  @ApiProperty({ description: 'Unique per check-in (e.g. a UUID): the same one sent again is applied once' }) @IsString() @MinLength(1) @MaxLength(64) opId: string;
+}
+
+export class GuestSyncDto {
+  @ApiProperty() @IsString() @MinLength(1) @MaxLength(80) deviceId: string;
+  @ApiProperty({ type: [GuestOfflineDto], maxItems: 500 })
+  @IsArray()
+  @ArrayMaxSize(500)
+  @ValidateNested({ each: true })
+  @Type(() => GuestOfflineDto)
+  checkIns: GuestOfflineDto[];
 }

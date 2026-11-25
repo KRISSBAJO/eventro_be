@@ -1,8 +1,10 @@
 /**
  * The Eventro Guarantee (the scan guarantee): "If your ticket doesn't scan, you get your money back."
  *
- * Covered: every ticket from a paid order (total above zero, PAID or PARTIALLY_REFUNDED), also after it's transferred
- * on. Free tickets, comps and $0 orders aren't: there's nothing to refund. Its current holder can claim once, from
+ * Covered: every ticket from a paid order (ticket total above zero, PAID or PARTIALLY_REFUNDED), also after it's
+ * transferred on, pay-what-you-want tickets bought for more than $0 included. Free tickets ($0 pay-what-you-want
+ * included), comps (Order.kind COMP) and guest-list entries aren't: there's nothing to refund. A donation added at
+ * checkout is never part of it: shares come from the ticket total (totalCents - donationCents). Its current holder can claim once, from
  * 3 hours before the event starts until 48 hours after it ends (no end time: start + 6 hours + 48 hours).
  *
  * Who pays an approved claim (`payer`, fixed when the claim is made):
@@ -49,6 +51,8 @@ import { MailService, formatMoney, render } from '../mail/mail.module';
 import { NoticeService } from '../push/notices';
 import { instantToWallClock, wallClockLabel, wallClockToInstant } from '../domain/wallclock';
 import { organizerNet } from '../domain/money';
+import { ticketLeft, ticketTotal } from '../domain/pwyw';
+import { organizerPaidOut } from '../domain/paid-out';
 import { AdminService } from '../admin/admin.module';
 
 const HOUR = 3600_000;
@@ -101,10 +105,11 @@ export function splitCents(total: number, parts: number, index: number) {
 
 /**
  * A ticket's all-in share of its order. Every ticket in an order is the same ticket type at the same price
- * (Order.ticketTypeId, unitCents), so its proportional share of the total (after any promo discount, with fees and
- * ticket protection) is the total split evenly; the shares of all the order's tickets add up to the total.
+ * (Order.ticketTypeId, unitCents; a pay-what-you-want order's chosen amount too), so its proportional share of the
+ * ticket total (after any promo discount, with fees and ticket protection) is that total split evenly; the shares of
+ * all the order's tickets add up to it. A donation is not part of any ticket's share.
  */
-export const ticketShare = (o: { totalCents: number; quantity: number }, ticketId: string) => splitCents(o.totalCents, o.quantity, ticketIndex(ticketId, o.quantity));
+export const ticketShare = (o: { totalCents: number; quantity: number; donationCents?: number }, ticketId: string) => splitCents(ticketTotal(o), o.quantity, ticketIndex(ticketId, o.quantity));
 
 /**
  * The organizer's share of one ticket: what their payout counts for it (OrganizerService.payouts: the ticket's price
@@ -115,45 +120,38 @@ export function organizerTicketShare(o: { unitCents: number; quantity: number; d
   return splitCents(net, o.quantity, ticketIndex(ticketId, o.quantity));
 }
 
-/** What a claim on this ticket refunds now: its share, capped at what's still refundable on the order. */
-export const refundableShare = (o: { totalCents: number; refundedCents: number; quantity: number }, ticketId: string) => Math.max(0, Math.min(ticketShare(o, ticketId), o.totalCents - o.refundedCents));
+/** What a claim on this ticket refunds now: its share, capped at what's still refundable of the order's tickets. */
+export const refundableShare = (o: { totalCents: number; refundedCents: number; quantity: number; donationCents?: number; donationRefundedCents?: number }, ticketId: string) =>
+  Math.max(0, Math.min(ticketShare(o, ticketId), ticketLeft(o)));
 
 /**
  * The organizer's part of a refund of `amountCents` on this ticket (ORGANIZER claims): their share of the ticket,
  * scaled down if the refund was capped. Eventro covers the rest (its fee and any ticket protection).
  */
-export function organizerPart(o: { totalCents: number; unitCents: number; quantity: number; discountCents: number }, feeMode: FeeMode, ticketId: string, amountCents: number) {
+export function organizerPart(o: { totalCents: number; unitCents: number; quantity: number; discountCents: number; donationCents?: number }, feeMode: FeeMode, ticketId: string, amountCents: number) {
   const share = ticketShare(o, ticketId);
   if (share <= 0 || amountCents <= 0) return 0;
   const org = organizerTicketShare(o, feeMode, ticketId);
   return Math.min(amountCents, amountCents >= share ? org : Math.round((org * amountCents) / share));
 }
 
-/**
- * Whether the organizer has already been paid for an order, reckoned the way their payouts screen is
- * (OrganizerService.payouts): sales paid through a Paystack subaccount split settle to the organizer at payment;
- * otherwise a day's sales are paid out the next day (DAILY), or within the week (WEEKLY).
- */
-export function organizerPaidOut(
-  order: { provider: string; paidAt: Date | null },
-  org: { payoutSchedule: PayoutSchedule; payoutProvider: string | null; paystackSubaccount: string | null },
-  now = new Date(),
-) {
-  if (order.provider === 'paystack' && org.payoutProvider === 'paystack' && org.paystackSubaccount) return true;
-  if (!order.paidAt) return false;
-  const day = (d: Date) => d.toISOString().slice(0, 10);
-  return day(order.paidAt) < day(new Date(now.getTime() - (org.payoutSchedule === 'DAILY' ? 1 : 7) * DAY));
-}
+/** Whether the organizer has already been paid for an order (src/domain/paid-out.ts; shared with donation refunds). */
+export { organizerPaidOut };
 
-export type NotCovered = 'FREE' | 'REFUNDED';
+export type NotCovered = 'FREE' | 'COMP' | 'REFUNDED';
 
 /**
  * Whether a ticket is covered, and who pays. Resale tickets: Eventro. Other tickets from a paid order: the organizer.
+ * Comps and free tickets ($0 pay what you want too) aren't; a donation on the order doesn't make a free ticket paid.
  * A ticket with a claim stays covered (its order may be refunded since).
  */
-export function coverage(t: { resaleGuarantee: boolean; guaranteeClaim?: Pick<GuaranteeClaim, 'payer'> | null }, o: { totalCents: number; status: OrderStatus }): { covered: boolean; payer: GuaranteePayer | null; notCovered: NotCovered | null } {
+export function coverage(
+  t: { resaleGuarantee: boolean; guaranteeClaim?: Pick<GuaranteeClaim, 'payer'> | null },
+  o: { totalCents: number; status: OrderStatus; donationCents?: number; kind?: string },
+): { covered: boolean; payer: GuaranteePayer | null; notCovered: NotCovered | null } {
   if (t.guaranteeClaim) return { covered: true, payer: t.guaranteeClaim.payer as GuaranteePayer, notCovered: null };
-  if (o.totalCents <= 0) return { covered: false, payer: null, notCovered: 'FREE' };
+  if (o.kind === 'COMP') return { covered: false, payer: null, notCovered: 'COMP' };
+  if (ticketTotal(o) <= 0) return { covered: false, payer: null, notCovered: 'FREE' };
   if (!COVERED_ORDERS.includes(o.status)) return { covered: false, payer: null, notCovered: 'REFUNDED' };
   return { covered: true, payer: t.resaleGuarantee ? 'EVENTRO' : 'ORGANIZER', notCovered: null };
 }
@@ -202,7 +200,7 @@ export function claimView(c: GuaranteeClaim) {
  */
 export function guaranteeFor(
   t: { id: string; resaleGuarantee: boolean; guaranteeClaim?: GuaranteeClaim | null },
-  o: { totalCents: number; refundedCents: number; quantity: number; status: OrderStatus },
+  o: { totalCents: number; refundedCents: number; quantity: number; status: OrderStatus; donationCents?: number; donationRefundedCents?: number; kind?: string },
   e: { startsAt: Date; endsAt: Date | null; timezone: string | null },
   now = Date.now(),
 ) {
@@ -261,6 +259,9 @@ const ADMIN_INCLUDE = {
       promoCode: true,
       totalCents: true,
       refundedCents: true,
+      donationCents: true,
+      donationRefundedCents: true,
+      kind: true,
       status: true,
       provider: true,
       currency: true,
@@ -302,7 +303,7 @@ export class GuaranteeService {
       where: { id },
       include: {
         event: { select: { id: true, title: true, status: true, startsAt: true, endsAt: true, timezone: true } },
-        order: { select: { id: true, status: true, quantity: true, totalCents: true, refundedCents: true, currency: true, email: true } },
+        order: { select: { id: true, status: true, quantity: true, totalCents: true, refundedCents: true, donationCents: true, donationRefundedCents: true, kind: true, currency: true, email: true } },
         guaranteeClaim: true,
       },
     });
@@ -321,6 +322,7 @@ export class GuaranteeService {
     if (t.resoldAt) throw new BadRequestException('You sold this ticket on resale, so there’s nothing to claim.');
     if (t.event.status === 'CANCELLED') throw new BadRequestException('This event was cancelled, so your order is refunded in full automatically.');
     const cover = coverage(t, t.order);
+    if (cover.notCovered === 'COMP') throw new BadRequestException('This is a complimentary ticket, so there’s nothing to refund. The Eventro Guarantee covers paid tickets.');
     if (cover.notCovered === 'FREE') throw new BadRequestException('This ticket was free, so there’s nothing to refund. The Eventro Guarantee covers paid tickets.');
     if (!cover.covered) throw new BadRequestException('This order has already been cancelled or refunded, so there’s nothing to claim.');
     if (t.status === 'VOID') throw new BadRequestException('This ticket has been cancelled, so there’s nothing to claim.');
@@ -383,7 +385,8 @@ export class GuaranteeService {
       where: { id: claimId },
       include: { order: true, event: { select: { feeMode: true, org: { select: { payoutSchedule: true, payoutProvider: true, paystackSubaccount: true } } } } },
     });
-    const left = c.order.totalCents - c.order.refundedCents;
+    // Only the tickets: a donation on the order is never refunded by the guarantee.
+    const left = ticketLeft(c.order);
     const amount = Math.min(c.amountCents, left);
     const organizer = c.payer === 'ORGANIZER';
     const organizerCents = organizer ? organizerPart(c.order, c.event.feeMode, c.ticketId, amount) : 0;
@@ -514,7 +517,7 @@ export class GuaranteeService {
       const { checkedInBy, ticketType, ...ticket } = r.ticket;
       const { org, feeMode, ...event } = r.event;
       const checker = checkedInBy ? (who.get(checkedInBy) ?? null) : null;
-      const left = r.order.totalCents - r.order.refundedCents;
+      const left = ticketLeft(r.order);
       const share = ticketShare(r.order, r.ticketId);
       const organizer = r.payer === 'ORGANIZER';
       // Before the refund: what approving would cost the organizer now (after it, what it did cost).
@@ -548,7 +551,9 @@ export class GuaranteeService {
         // This ticket's share of the order and the rest of it (other tickets, what's left to refund).
         share: {
           ticketCents: share,
-          restCents: r.order.totalCents - share,
+          restCents: ticketTotal(r.order) - share,
+          // a donation on the order: never part of a guarantee refund
+          donationCents: r.order.donationCents,
           remainingCents: left,
           tickets: siblings
             .filter((s) => s.orderId === r.orderId)
@@ -567,7 +572,7 @@ export class GuaranteeService {
     const note = dto.note?.trim() || null;
     const c = await this.prisma.guaranteeClaim.findUnique({
       where: { id },
-      include: { order: { select: { status: true, totalCents: true, refundedCents: true } }, ticket: { select: { status: true, resoldAt: true } } },
+      include: { order: { select: { status: true, totalCents: true, refundedCents: true, donationCents: true, donationRefundedCents: true } }, ticket: { select: { status: true, resoldAt: true } } },
     });
     if (!c) throw new NotFoundException('Claim not found.');
     if (dto.decision === 'DECLINE') {
@@ -580,7 +585,7 @@ export class GuaranteeService {
     }
     // Approving also overrides an automatic decline (e.g. it was scanned, but they were still turned away).
     if (c.status === 'APPROVED') throw new ConflictException('This claim is already approved.');
-    if (c.order.status === 'REFUNDED' || c.order.totalCents - c.order.refundedCents <= 0) throw new BadRequestException('This order has already been refunded in full, so there’s nothing left to refund.');
+    if (c.order.status === 'REFUNDED' || ticketLeft(c.order) <= 0) throw new BadRequestException('This order has already been refunded in full, so there’s nothing left to refund.');
     // The ticket may have moved on since the claim was made.
     if (c.ticket.resoldAt) throw new BadRequestException('This ticket was sold on resale after the claim, so there’s nothing to refund.');
     if (c.ticket.status === 'VOID') throw new BadRequestException('This ticket has been cancelled, so there’s nothing to refund.');

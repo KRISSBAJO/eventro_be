@@ -67,6 +67,18 @@ enum PayoutSchedule {
   WEEKLY
 }
 
+/// How a ticket type is priced: a fixed price, or pay what you want (the fan picks a base amount within the tier's limits).
+enum TicketPricing {
+  FIXED
+  PWYW
+}
+
+/// SALE: bought at checkout (free tickets included). COMP: a complimentary ticket issued by the organizer ($0, no payment).
+enum OrderKind {
+  SALE
+  COMP
+}
+
 enum HoldStatus {
   ACTIVE
   CONVERTED
@@ -367,6 +379,19 @@ model Event {
   transfersEnabled      Boolean @default(true)
   transferCutoffMinutes Int     @default(60)
 
+  /// Charity donations at checkout: on or off, the cause (snapshotted on each order), a short description, up to 4
+  /// suggested amounts and an optional minimum (minor units). Eventro collects them on the organizer's behalf and pays
+  /// them out with the organizer's payout; the organizer passes them to the cause.
+  donationsEnabled       Boolean @default(false)
+  donationCause          String?
+  donationDescription    String?
+  donationSuggestedCents Int[]   @default([])
+  donationMinCents       Int?
+  /// Most live complimentary tickets (comps) the event may have; null = no limit beyond the tiers' capacity.
+  compLimit              Int?
+  guestList              GuestListEntry[]
+  guestCheckIns          GuestCheckIn[]
+
   @@index([status, startsAt])
   @@index([orgId])
 }
@@ -389,6 +414,14 @@ model TicketType {
   badge       String?
   /// The ticket's look on the website and in the app: early, standard, vip, vvip, platinum or table. Null = picked from the name.
   style       String?
+  /// FIXED: priceCents is the price. PWYW: the fan picks a base amount between pwywMinCents and pwywMaxCents (null = the
+  /// API's ceiling); priceCents is then the all-in price of the minimum ("from"). Amounts are base amounts, like the
+  /// organizer's basePriceCents: the event's fee mode adds Eventro's fee on top (BUYER) or takes it out (ORGANIZER).
+  pricing            TicketPricing @default(FIXED)
+  pwywMinCents       Int?
+  pwywSuggestedCents Int?
+  pwywMaxCents       Int?
+  pwywQuickPicks     Int[]         @default([])
   salesStart  DateTime?
   salesEnd    DateTime?
 
@@ -409,6 +442,11 @@ model Hold {
   /// Seats reserved by this hold: [{ section, row, seat }]. Row and seat are null in standing sections.
   seats        Json?
   quantity     Int
+  /// Pay what you want: the base amount per ticket the fan chose (checked against the tier's limits).
+  amountCents  Int?
+  /// The donation the fan chose before checkout moved elsewhere (the app hands card payments to the website); the
+  /// quote and the order use it when none is sent, and check it again. 0 = none.
+  donationCents Int     @default(0)
   userId       String?
   status       HoldStatus @default(ACTIVE)
   expiresAt    DateTime
@@ -444,6 +482,19 @@ model Order {
   clientIp        String?
   createdAt       DateTime    @default(now())
   paidAt          DateTime?
+  kind            OrderKind   @default(SALE)
+  /// A charity donation added at checkout (inside totalCents, no Eventro fee), the cause it was for, and how much of
+  /// it has been refunded (also counted in refundedCents). Ticket revenue and guarantee shares leave it out.
+  donationCents         Int     @default(0)
+  donationCause         String?
+  donationRefundedCents Int     @default(0)
+  /// Donation refunds made after the organizer had already been paid for this order: owed by them to Eventro.
+  donationOwedCents     Int     @default(0)
+  /// Comps: the group label ("Press", "Artist"…), the organizer's private note, who issued it and when it was revoked.
+  compGroup       String?
+  compNote        String?
+  compIssuedById  String?
+  compRevokedAt   DateTime?
 
   event      Event          @relation(fields: [eventId], references: [id])
   ticketType TicketType     @relation(fields: [ticketTypeId], references: [id])
@@ -459,6 +510,7 @@ model Order {
   guaranteeClaims GuaranteeClaim[]
 
   @@index([eventId, status, paidAt])
+  @@index([eventId, kind])
   @@index([email])
 }
 
@@ -866,6 +918,54 @@ model ScanAttempt {
 
   @@index([ticketId, at])
   @@index([eventId, at])
+}
+
+/// A name on the event's guest list, without a ticket: the person and up to 10 plus-ones. `arrived` counts how many
+/// of the party (1 + plusOnes) are in. Each arrival is logged in GuestCheckIn, the guest list's door log.
+model GuestListEntry {
+  id             String    @id @default(cuid())
+  eventId        String
+  name           String
+  email          String?
+  plusOnes       Int       @default(0)
+  group          String?
+  note           String?
+  arrived        Int       @default(0)
+  firstArrivedAt DateTime?
+  lastArrivedAt  DateTime?
+  createdById    String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @default(now()) @updatedAt
+
+  event    Event          @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  checkIns GuestCheckIn[]
+
+  @@index([eventId, name])
+}
+
+/// The guest list's door log, beside the ticket scan log (ScanAttempt): every guest-list check-in, online or synced
+/// from an offline scanner. `guests` is how many of the party it let in (0 when they were all in already: result
+/// ALREADY_USED). Like ScanAttempt it keeps only what the door needs (no names, emails or IPs); offline check-ins keep
+/// the scanner's time, and `dedupeKey` (a hash of scanner and check-in id) stops a re-sent sync from counting twice.
+model GuestCheckIn {
+  id        String     @id @default(cuid())
+  eventId   String
+  entryId   String?
+  guests    Int
+  result    ScanResult
+  offline   Boolean    @default(false)
+  deviceId  String?
+  /// the staff member who checked them in
+  userId    String?
+  at        DateTime
+  dedupeKey String?    @unique
+  createdAt DateTime   @default(now())
+
+  event Event           @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  entry GuestListEntry? @relation(fields: [entryId], references: [id], onDelete: SetNull)
+
+  @@index([eventId, at])
+  @@index([entryId, at])
 }
 
 enum GuaranteeClaimStatus {

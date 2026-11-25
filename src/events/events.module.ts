@@ -13,6 +13,8 @@ import { FxService } from '../fx/fx.module';
 import { CURRENCY_CODES } from '../domain/currency';
 import { resolveLook } from '../domain/tier-look';
 import { pastCutoff } from '../resale/resale.module';
+import { donationsView, pwywView } from '../domain/pwyw';
+import { config } from '../config';
 
 /** "Trending" counts paid tickets from this many days back. */
 const TRENDING_DAYS = 14;
@@ -212,6 +214,10 @@ export class EventsService {
       timezone: e.timezone,
       online: e.online,
       currency: e.currency,
+      // Pay what you want: the fee rate, so the page can show what an amount costs all-in.
+      feeMode: e.feeMode,
+      feePermille: config.organizerFeePermille,
+      donations: donationsView(e),
       salesPaused: e.salesPaused,
       ...(cancelled ? { status: e.status, cancelledAt: e.cancelledAt, cancelReason: e.cancelReason } : e.status !== 'PUBLISHED' ? { preview: true, status: e.status } : {}),
       presentedBy: e.org.name,
@@ -227,6 +233,8 @@ export class EventsService {
         badge: t.badge,
         style: t.style,
         look: resolveLook(t.name, t.style),
+        pricing: t.pricing,
+        pwyw: pwywView(t, e.feeMode, config.organizerFeePermille),
         available: cancelled ? 0 : (avail.get(t.id) ?? 0),
       })),
       media: ((e.media as MediaItem[] | null) ?? []).map(mediaUrls),

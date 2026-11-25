@@ -6,7 +6,7 @@ import { InventoryService } from '../common/inventory.service';
 import { AuditService } from '../common/audit.service';
 import { config } from '../config';
 import { orderCode, ticketCode } from '../domain/codes';
-import { organizerNet, quote } from '../domain/money';
+import { buyerPrice, organizerNet, quote } from '../domain/money';
 import { FRAUD_FLAG_THRESHOLD, scoreOrder } from '../domain/fraud';
 import { pickFromSections, rowLabel, type SeatMap, type SeatPick } from '../domain/seatmap';
 import { Payments } from './payments';
@@ -18,8 +18,34 @@ import { isCurrency, type Currency } from '../domain/currency';
 import type { AuthUser } from '../common/auth';
 import { paystackCountryFor } from '../organizer/payout-accounts';
 import { NoticeService } from '../push/notices';
+import { PROMO_ON_PWYW, checkDonation, donationsView, isPwyw, pwywUnit, pwywView, type DonationSettings, type PwywTier } from '../domain/pwyw';
 
 type Tx = Prisma.TransactionClient;
+
+/** What the fan can change about the price of a hold at the quote and the order. */
+export type PriceInput = { promoCode?: string; protection?: boolean; amountCents?: number; donationCents?: number };
+
+/** Turns a rule's plain Error into a 400 for the fan. */
+const fanRule = <T>(fn: () => T): T => {
+  try {
+    return fn();
+  } catch (e) {
+    throw new BadRequestException((e as Error).message);
+  }
+};
+
+/**
+ * The all-in price per ticket for a hold: the tier's price, or for pay what you want the fan's chosen base amount
+ * (checked against the tier's limits) with the event's fee mode applied exactly as for a fixed price.
+ */
+function unitFor(tt: PwywTier & { priceCents: number }, ev: { feeMode: 'BUYER' | 'ORGANIZER'; currency: string }, amountCents: number | null | undefined) {
+  if (!isPwyw(tt)) return { unitCents: tt.priceCents, amountCents: null };
+  const unitCents = fanRule(() => pwywUnit(tt, amountCents, ev.feeMode, config.organizerFeePermille, ev.currency));
+  return { unitCents, amountCents: amountCents! };
+}
+
+/** Eventro's fee inside the tickets' price that the fan pays on top (BUYER mode); 0 when the organizer absorbs it. */
+const buyerFee = (unitCents: number, quantity: number, feeMode: 'BUYER' | 'ORGANIZER') => (feeMode === 'BUYER' ? (unitCents - organizerNet(unitCents, 'BUYER', config.organizerFeePermille)) * quantity : 0);
 
 /** Serializes inventory changes per ticket type (row lock for the rest of the transaction). */
 const lockTicketType = (tx: Tx, id: string) => tx.$queryRaw`SELECT id FROM "TicketType" WHERE id = ${id} FOR UPDATE`;
@@ -42,7 +68,7 @@ export class CheckoutService {
 
   /* ---------- holds ---------- */
 
-  async createHold(input: { ticketTypeId: string; quantity: number; sectionId?: string; seats?: { row: string; seat: number }[] }, user: AuthUser | null) {
+  async createHold(input: { ticketTypeId: string; quantity: number; sectionId?: string; seats?: { row: string; seat: number }[]; amountCents?: number }, user: AuthUser | null) {
     const now = new Date();
     return this.prisma.$transaction(async (tx) => {
       await lockTicketType(tx, input.ticketTypeId);
@@ -54,6 +80,8 @@ export class CheckoutService {
       if (ev.startsAt <= now) throw new BadRequestException('This event has already started.');
       if ((tt.salesStart && tt.salesStart > now) || (tt.salesEnd && tt.salesEnd < now)) throw new BadRequestException('These tickets are not on sale right now.');
       if (input.quantity > tt.maxPerOrder) throw new BadRequestException(`You can buy up to ${tt.maxPerOrder} of these per order.`);
+      // Pay what you want: the amount is checked here, and again at the quote and the order.
+      const { amountCents } = unitFor(tt, ev, input.amountCents);
 
       const left = await this.inventory.availableForType(tx, tt.id, now);
       if (left < input.quantity) throw new ConflictException(left ? `Only ${left} left.` : 'Sold out.');
@@ -98,10 +126,11 @@ export class CheckoutService {
           sectionId: seats?.[0]?.section ?? input.sectionId ?? null,
           ...(seats ? { seats } : {}),
           quantity: input.quantity,
+          amountCents,
           userId: user?.id ?? null,
           expiresAt: new Date(now.getTime() + config.holdMinutes * 60_000),
         },
-        select: { id: true, quantity: true, expiresAt: true, sectionId: true, ticketTypeId: true, seats: true },
+        select: { id: true, quantity: true, expiresAt: true, sectionId: true, ticketTypeId: true, seats: true, amountCents: true },
       });
     });
   }
@@ -111,14 +140,37 @@ export class CheckoutService {
     const h = await this.prisma.hold.findUnique({
       where: { id },
       include: {
-        ticketType: { select: { id: true, description: true, priceCents: true, ...TIER_FIELDS } },
-        event: { select: { slug: true, title: true, subtitle: true, category: true, currency: true, timezone: true, imageUrl: true, startsAt: true, doorsAt: true, description: true, seatMap: true, venue: { select: { name: true, city: true, address: true } } } },
+        ticketType: { select: { id: true, description: true, priceCents: true, pricing: true, pwywMinCents: true, pwywSuggestedCents: true, pwywMaxCents: true, pwywQuickPicks: true, ...TIER_FIELDS } },
+        event: {
+          select: {
+            slug: true,
+            title: true,
+            subtitle: true,
+            category: true,
+            currency: true,
+            timezone: true,
+            imageUrl: true,
+            startsAt: true,
+            doorsAt: true,
+            description: true,
+            seatMap: true,
+            feeMode: true,
+            donationsEnabled: true,
+            donationCause: true,
+            donationDescription: true,
+            donationSuggestedCents: true,
+            donationMinCents: true,
+            venue: { select: { name: true, city: true, address: true } },
+          },
+        },
         order: { select: { id: true, status: true } },
       },
     });
     if (!h) throw new NotFoundException('Hold not found.');
-    const { seatMap, ...event } = h.event;
+    const { seatMap, donationsEnabled, donationCause, donationDescription, donationSuggestedCents, donationMinCents, ...event } = h.event;
     const section = (seatMap as SeatMap | null)?.sections.find((s) => s.id === h.sectionId);
+    const { pwywMinCents, pwywSuggestedCents, pwywMaxCents, pwywQuickPicks, ...tt } = h.ticketType;
+    const pwyw = pwywView(h.ticketType, event.feeMode, config.organizerFeePermille);
     return {
       id: h.id,
       status: h.status === 'ACTIVE' && h.expiresAt <= new Date() ? 'EXPIRED' : h.status,
@@ -126,23 +178,68 @@ export class CheckoutService {
       expiresAt: h.expiresAt,
       section: section ? { id: section.id, label: section.label, level: section.level ?? null, seating: section.seating } : null,
       seats: (h.seats as SeatPick[] | null) ?? [],
-      ticketType: withLook(h.ticketType),
-      event,
+      // Pay what you want: the base amount chosen per ticket, and what each ticket costs all-in.
+      amountCents: h.amountCents,
+      unitCents: pwyw && h.amountCents !== null ? buyerPrice(h.amountCents, event.feeMode, config.organizerFeePermille) : h.ticketType.priceCents,
+      // The donation chosen before checkout moved here (PATCH /holds/:id); 0 = none. The quote and order use it by default.
+      donationCents: h.donationCents,
+      ticketType: { ...withLook(tt), pwyw },
+      event: { ...event, feePermille: config.organizerFeePermille, donations: donationsView({ donationsEnabled, donationCause, donationDescription, donationSuggestedCents, donationMinCents }) },
       order: h.order,
     };
   }
 
   /** Prices for a hold with an optional promo code, before an order exists. */
-  async quoteHold(input: { holdId: string; promoCode?: string; protection?: boolean }) {
-    const hold = await this.prisma.hold.findUnique({ where: { id: input.holdId }, include: { ticketType: true } });
+  async quoteHold(input: PriceInput & { holdId: string }) {
+    const hold = await this.prisma.hold.findUnique({ where: { id: input.holdId }, include: { ticketType: true, event: true } });
     if (!hold) throw new NotFoundException('Hold not found.');
+    const p = await this.price(hold, input);
+    return { promo: p.promo, ...p.q, ticketTotalCents: p.q.totalCents - p.q.donationCents, feeCents: p.feeCents, amountCents: p.amountCents };
+  }
+
+  /**
+   * The prices for a hold: the ticket price (pay what you want: the chosen amount, from the order or the hold,
+   * checked again), any promo code (refused on pay-what-you-want tiers), protection and a donation (checked against
+   * the event's settings; no fee, discount or protection on it).
+   */
+  private async price(
+    hold: { eventId: string; quantity: number; amountCents: number | null; donationCents: number; ticketType: PwywTier & { priceCents: number }; event: DonationSettings & { feeMode: 'BUYER' | 'ORGANIZER'; currency: string } },
+    input: PriceInput,
+  ) {
+    const { unitCents, amountCents } = unitFor(hold.ticketType, hold.event, input.amountCents ?? hold.amountCents);
     let promo: { code: string; percent: number } | null = null;
     if (input.promoCode) {
+      if (isPwyw(hold.ticketType)) throw new BadRequestException(PROMO_ON_PWYW);
       const p = await this.prisma.promo.findUnique({ where: { eventId_code: { eventId: hold.eventId, code: input.promoCode.trim().toUpperCase() } } });
       if (!p || !p.active || (p.limit !== null && p.used >= p.limit)) throw new BadRequestException('That promo code isn’t valid for this event.');
       promo = { code: p.code, percent: p.percent };
     }
-    return { promo, ...quote(hold.ticketType.priceCents, hold.quantity, promo?.percent ?? null, !!input.protection) };
+    // Left out: the donation stored on the hold (chosen in the app before the card payment moved to the website).
+    const donationCents = fanRule(() => checkDonation(hold.event, input.donationCents ?? hold.donationCents, hold.event.currency));
+    // The donation goes on top of the tickets' quote as it is: no fee, discount or protection applies to it.
+    const t = quote(unitCents, hold.quantity, promo?.percent ?? null, !!input.protection);
+    const q = { ...t, donationCents, totalCents: t.totalCents + donationCents };
+    return { promo, q, amountCents, feeCents: buyerFee(unitCents, hold.quantity, hold.event.feeMode) };
+  }
+
+  /**
+   * Stores what the fan chose on a hold before checkout moves elsewhere (the app hands card payments to the website):
+   * the donation and, for pay what you want, the amount per ticket. Checked exactly as at the order, and again there.
+   * The hold id is the key, as for the quote and the order.
+   */
+  async updateHold(id: string, input: { donationCents?: number; amountCents?: number }) {
+    const hold = await this.prisma.hold.findUnique({ where: { id }, include: { ticketType: true, event: true, order: { select: { id: true } } } });
+    if (!hold) throw new NotFoundException('Hold not found.');
+    if (hold.order) throw new ConflictException('An order already exists for these seats.');
+    if (hold.status !== 'ACTIVE' || hold.expiresAt <= new Date()) throw new ConflictException('Your seats were released. Please pick them again.');
+    const data: Prisma.HoldUpdateInput = {};
+    if (input.amountCents !== undefined) {
+      if (!isPwyw(hold.ticketType)) throw new BadRequestException('These tickets have a set price.');
+      data.amountCents = unitFor(hold.ticketType, hold.event, input.amountCents).amountCents;
+    }
+    if (input.donationCents !== undefined) data.donationCents = fanRule(() => checkDonation(hold.event, input.donationCents, hold.event.currency));
+    if (Object.keys(data).length) await this.prisma.hold.update({ where: { id }, data });
+    return this.getHold(id);
   }
 
   async releaseHold(id: string) {
@@ -158,17 +255,18 @@ export class CheckoutService {
    * and any discount) settles straight to their bank; Eventro keeps the rest (fee and ticket protection).
    * No split while payouts are on hold after a bank change, or if the sale is in a different currency than their bank.
    */
-  private async paystackSplit(orgId: string, currency: string, q: { unitCents: number; quantity: number; discountCents: number; totalCents: number }, feeMode: 'BUYER' | 'ORGANIZER') {
+  private async paystackSplit(orgId: string, currency: string, q: { unitCents: number; quantity: number; discountCents: number; totalCents: number; donationCents: number }, feeMode: 'BUYER' | 'ORGANIZER') {
     const org = await this.prisma.organization.findUnique({ where: { id: orgId }, select: { payoutProvider: true, paystackSubaccount: true, bankCountry: true, payoutHoldUntil: true } });
     if (org?.payoutProvider !== 'paystack' || !org.paystackSubaccount) return {};
     if (org.payoutHoldUntil && org.payoutHoldUntil > new Date()) return {};
     if (paystackCountryFor(currency)?.code !== org.bankCountry) return {};
-    const share = Math.max(0, organizerNet(q.unitCents, feeMode, config.organizerFeePermille) * q.quantity - q.discountCents);
+    // The organizer's share of the tickets, plus the whole donation (Eventro takes no fee on it).
+    const share = Math.max(0, organizerNet(q.unitCents, feeMode, config.organizerFeePermille) * q.quantity - q.discountCents) + q.donationCents;
     return { split: { subaccount: org.paystackSubaccount, platformCents: Math.max(0, q.totalCents - share) } };
   }
 
   async createOrder(
-    input: { holdId: string; email: string; name: string; protection?: boolean; promoCode?: string; gift?: GiftInput; returnTo?: 'app' },
+    input: PriceInput & { holdId: string; email: string; name: string; gift?: GiftInput; returnTo?: 'app' },
     user: AuthUser | null,
     clientIp: string | null,
   ) {
@@ -178,15 +276,9 @@ export class CheckoutService {
     if (hold.order) throw new ConflictException('An order already exists for these seats.');
     if (hold.status !== 'ACTIVE' || hold.expiresAt <= now) throw new ConflictException('Your seats were released. Please pick them again.');
 
-    let promo: { code: string; percent: number } | null = null;
-    if (input.promoCode) {
-      const p = await this.prisma.promo.findUnique({ where: { eventId_code: { eventId: hold.eventId, code: input.promoCode.trim().toUpperCase() } } });
-      if (!p || !p.active || (p.limit !== null && p.used >= p.limit)) throw new BadRequestException('That promo code isn’t valid for this event.');
-      promo = { code: p.code, percent: p.percent };
-    }
-
+    // The price is worked out again here (pay what you want and the donation are checked again, promos refused on PWYW).
+    const { promo, q, amountCents, feeCents } = await this.price(hold, input);
     const gift = input.gift ? this.gifts.validate(input.gift, input.email, hold.event.startsAt) : null;
-    const q = quote(hold.ticketType.priceCents, hold.quantity, promo?.percent ?? null, !!input.protection);
     const since = new Date(now.getTime() - 10 * 60_000);
     const [sameEmail, sameIp] = await Promise.all([
       this.prisma.order.count({ where: { email: input.email, createdAt: { gte: since } } }),
@@ -205,7 +297,9 @@ export class CheckoutService {
 
     const id = orderCode();
     const currency: Currency = isCurrency(hold.event.currency) ? hold.event.currency : 'USD';
-    const provider = this.payments.forCurrency(currency);
+    // Nothing to pay (free tickets, $0 pay what you want, no donation): no payment provider, the tickets are issued now.
+    const free = q.totalCents === 0;
+    const provider = free ? null : this.payments.forCurrency(currency);
     const order = await this.prisma.order.create({
       data: {
         id,
@@ -221,14 +315,22 @@ export class CheckoutService {
         discountCents: q.discountCents,
         protectionCents: q.protectionCents,
         totalCents: q.totalCents,
+        donationCents: q.donationCents,
+        donationCause: q.donationCents > 0 ? hold.event.donationCause : null,
         promoCode: promo?.code ?? null,
         currency,
-        provider: provider.name,
+        provider: provider?.name ?? 'free',
         clientIp,
         ...(risk.score >= FRAUD_FLAG_THRESHOLD ? { fraudFlag: { create: { score: risk.score, reasons: risk.reasons } } } : {}),
         ...(gift ? { gift: { create: gift } } : {}),
       },
     });
+    const extra = { donationCents: q.donationCents, ticketTotalCents: q.totalCents - q.donationCents, feeCents, amountCents };
+
+    if (!provider) {
+      const done = await this.fulfil(id);
+      return { orderId: id, status: done.status, provider: 'free', currency, clientSecret: null, redirectUrl: null, holdExpiresAt: hold.expiresAt, ...q, ...extra };
+    }
 
     const pay = await provider.createPayment({
       orderId: id,
@@ -250,17 +352,27 @@ export class CheckoutService {
       redirectUrl: pay.redirectUrl ?? null,
       holdExpiresAt: hold.expiresAt,
       ...q,
+      ...extra,
     };
   }
 
-  /** Pays for a fan-resale listing the buyer is holding (POST /resale/:id/hold gave them the key). */
-  async createResaleOrder(listingId: string, input: { holdKey: string; email: string; name: string; returnTo?: 'app' }, user: AuthUser | null, clientIp: string | null) {
+  /**
+   * Pays for a fan-resale listing the buyer is holding (POST /resale/:id/hold gave them the key), with an optional
+   * donation to the event's cause (checked as at a normal order). The donation is the organizer's, not the seller's:
+   * the seller's payout comes from the listing price only (fulfil), no Eventro fee is taken on it, and it counts in
+   * the organizer's donations and payouts. With Paystack and an organizer paid through a subaccount, the payment is
+   * split so the donation settles to the organizer, as on a normal order; the listing price stays with Eventro, which
+   * pays the seller (and keeps its resale fee) as before.
+   */
+  async createResaleOrder(listingId: string, input: { holdKey: string; email: string; name: string; returnTo?: 'app'; donationCents?: number }, user: AuthUser | null, clientIp: string | null) {
     const l = await this.prisma.resaleListing.findUnique({ where: { id: listingId }, include: { event: true, ticket: { include: { ticketType: true } }, order: true } });
     if (!l || l.status !== 'HELD' || l.heldBy !== input.holdKey || !l.heldUntil || l.heldUntil <= new Date()) {
       throw new ConflictException('Your hold on that ticket ran out. Pick it again.');
     }
     if (l.order) throw new ConflictException('An order already exists for this ticket.');
     if (user?.id === l.sellerId) throw new BadRequestException('That’s your own listing.');
+    const donationCents = fanRule(() => checkDonation(l.event, input.donationCents, l.event.currency));
+    const totalCents = l.priceCents + donationCents;
     const id = orderCode();
     const currency: Currency = isCurrency(l.currency) ? l.currency : 'USD';
     const provider = this.payments.forCurrency(currency);
@@ -275,14 +387,20 @@ export class CheckoutService {
         quantity: 1,
         unitCents: l.priceCents,
         subtotalCents: l.priceCents,
-        totalCents: l.priceCents,
+        totalCents,
+        donationCents,
+        donationCause: donationCents > 0 ? l.event.donationCause : null,
         currency,
         provider: provider.name,
         clientIp,
         resaleListingId: l.id,
       },
     });
-    const pay = await provider.createPayment({ orderId: id, amountCents: l.priceCents, currency, email: input.email, description: `Resale: ${l.ticket.ticketType.name} — ${l.event.title}`, returnTo: input.returnTo });
+    // Paystack split: only the donation goes to the organizer's subaccount (a resale order's ticket share is the
+    // seller's, paid out by Eventro). Same rules as a normal order (subaccount, no payout hold, same currency).
+    const split =
+      provider.name === 'paystack' && donationCents > 0 ? await this.paystackSplit(l.event.orgId, currency, { unitCents: 0, quantity: 1, discountCents: 0, totalCents, donationCents }, l.event.feeMode) : {};
+    const pay = await provider.createPayment({ orderId: id, amountCents: totalCents, currency, email: input.email, description: `Resale: ${l.ticket.ticketType.name} — ${l.event.title}`, returnTo: input.returnTo, ...split });
     await this.prisma.order.update({ where: { id }, data: { paymentRef: pay.paymentRef } });
     return {
       orderId: order.id,
@@ -296,7 +414,9 @@ export class CheckoutService {
       subtotalCents: l.priceCents,
       discountCents: 0,
       protectionCents: 0,
-      totalCents: l.priceCents,
+      donationCents,
+      ticketTotalCents: l.priceCents,
+      totalCents,
     };
   }
 
@@ -304,6 +424,8 @@ export class CheckoutService {
   async payMock(orderId: string) {
     const o = await this.prisma.order.findUnique({ where: { id: orderId } });
     if (!o) throw new NotFoundException('Order not found.');
+    // A $0 order was completed when it was made: this just returns it.
+    if (o.provider === 'free') return this.fulfil(orderId);
     if (o.provider !== 'mock') throw new ForbiddenException('This order is paid through a payment provider.');
     if (config.isProduction) throw new ForbiddenException('Test payments are switched off on this site.');
     return this.fulfil(orderId);
@@ -509,9 +631,14 @@ export class CheckoutService {
     const { html, text } = render({
       preheader: `${o.quantity} × ${o.ticketType.name} for ${o.event.title}. Order ${o.id}.`,
       heading: `You're going to ${o.event.title}`,
-      highlight: { label: `Order ${o.id} · paid`, value: formatMoney(o.totalCents, o.currency) },
+      highlight: { label: `Order ${o.id} · ${o.totalCents > 0 ? 'paid' : 'confirmed'}`, value: o.totalCents > 0 ? formatMoney(o.totalCents, o.currency) : 'Free' },
       paragraphs: [
-        `${o.quantity} × ${o.ticketType.name}`,
+        `${o.quantity} × ${o.ticketType.name}: ${o.totalCents - o.donationCents > 0 ? formatMoney(o.totalCents - o.donationCents, o.currency) : 'Free'}`,
+        ...(o.donationCents > 0
+          ? [
+              `Donation to ${o.donationCause ?? 'the organizer’s cause'}: ${formatMoney(o.donationCents, o.currency)}. Thank you! Eventro collects donations on the organizer's behalf; the organizer is responsible for passing them to the cause. Donations aren’t refunded if a ticket doesn’t scan.`,
+            ]
+          : []),
         `${when}${where ? ` · ${where}` : ''}`,
         ...(seats.length ? [`Seats: ${seats.join('; ')}`] : []),
         giftLine ?? 'Your tickets are in your Eventro account. The QR code refreshes every few seconds, so screenshots won’t work at the door.',
@@ -545,7 +672,8 @@ export class CheckoutService {
       },
     });
     if (!o) throw new NotFoundException('Order not found.');
-    const { clientIp: _ip, paymentRef: _ref, ...safe } = o;
+    // A comp's note and issuer are the organizer's own.
+    const { clientIp: _ip, paymentRef: _ref, compNote: _note, compIssuedById: _by, ...safe } = o;
     return { ...safe, ticketType: withLook(safe.ticketType) };
   }
 
@@ -586,6 +714,11 @@ export class CheckoutService {
         discountCents: true,
         totalCents: true,
         refundedCents: true,
+        kind: true,
+        donationCents: true,
+        donationCause: true,
+        donationRefundedCents: true,
+        compGroup: true,
         promoCode: true,
         currency: true,
         provider: true,
@@ -607,6 +740,7 @@ export class CheckoutService {
     const o = await this.prisma.order.findUnique({ where: { id: orderId } });
     if (!o || (o.buyerId !== user.id && o.email !== user.email)) throw new NotFoundException('Order not found.');
     if (o.status !== 'PAID') throw new BadRequestException('Only paid orders can be refunded.');
+    if (o.kind === 'COMP') throw new BadRequestException('This is a complimentary ticket, so there’s nothing to refund.');
     const open = await this.prisma.refundRequest.findFirst({ where: { orderId, status: 'OPEN' } });
     if (open) throw new ConflictException('There’s already an open refund request for this order.');
     return this.prisma.refundRequest.create({ data: { orderId, reason: reason.trim() } });

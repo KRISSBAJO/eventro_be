@@ -6,9 +6,11 @@ import { IsIn, IsInt, IsOptional, IsString, MaxLength, Min, MinLength } from 'cl
 import { PrismaService } from '../prisma.service';
 import { AuditService } from '../common/audit.service';
 import { Payments } from '../checkout/payments';
-import { MailService, render } from '../mail/mail.module';
+import { MailService, formatMoney, render } from '../mail/mail.module';
 import { config } from '../config';
 import { CurrentUser, Roles, type AuthUser } from '../common/auth';
+import { donationLeft, ticketLeft, ticketTotal } from '../domain/pwyw';
+import { organizerPaidOut } from '../domain/paid-out';
 
 export class RejectDto {
   @ApiProperty() @IsString() @MinLength(5) @MaxLength(500) note: string;
@@ -155,12 +157,19 @@ export class AdminService {
     // database failure can't refund twice.
     if (o.paymentRef && amountCents > 0) await this.payments.byName(o.provider).refund(o.paymentRef, amountCents, opts.refundKey);
     const full = amountCents === remaining;
+    // A donation is refunded last: a partial refund counts against the tickets first, and only what goes past the
+    // ticket total is the donation. A full refund (e.g. the event was cancelled) refunds the donation too.
+    const donationRefundedCents = full ? o.donationCents : Math.min(o.donationCents, Math.max(o.donationRefundedCents, o.refundedCents + amountCents - ticketTotal(o)));
+    // The tickets are done once everything paid for them is back, even if a donation stays on the order (an Eventro
+    // Guarantee refund of a resale order that came with a donation): they're voided as on a full refund. Without a
+    // donation this is the same as a full refund.
+    const ticketsDone = full || (amountCents > 0 && amountCents >= ticketLeft(o));
     await this.prisma.$transaction(async (tx) => {
       await tx.order.update({
         where: { id: orderId },
-        data: { refundedCents: { increment: amountCents }, status: full ? 'REFUNDED' : 'PARTIALLY_REFUNDED' },
+        data: { refundedCents: { increment: amountCents }, donationRefundedCents, status: full ? 'REFUNDED' : 'PARTIALLY_REFUNDED' },
       });
-      if (full) {
+      if (ticketsDone) {
         const { count } = await tx.ticket.updateMany({ where: { orderId, status: { not: 'VOID' } }, data: { status: 'VOID', listCents: null, transferTo: null } });
         // A resale order's seat was already counted as sold for the original buyer; hold the seller's payout for review.
         if (o.resaleListingId) {
@@ -197,6 +206,62 @@ export class AdminService {
     });
     await this.audit.log(admin?.id ?? null, status === 'REFUNDED' ? 'order.refund' : 'order.partial_refund', 'Order', orderId, { amountCents, currency: o.currency, reason, ticketId });
     return status;
+  }
+
+  /**
+   * Refunds what's left of an order's charity donation, by hand: an Eventro admin (admin console) or the event's org
+   * admin (OrganizerDonations). The tickets are untouched. Both go through here, guarded by a conditional update (so
+   * a double click, or an admin and an organizer at once, refunds once) and the provider idempotency key
+   * `donation-<orderId>`. If the organizer had already been paid for the order (organizerPaidOut, as for guarantee
+   * claims), the refunded amount is recorded as owed by them to Eventro (Order.donationOwedCents). Their payouts drop
+   * by it either way (they count donationCents − donationRefundedCents). The buyer gets an email.
+   */
+  async refundDonation(orderId: string, admin: Pick<AuthUser, 'id'>, reason: string, opts: { by?: 'eventro' | 'organizer' } = {}) {
+    const o = await this.prisma.order.findUnique({ where: { id: orderId }, include: { event: { select: { title: true, org: { select: { name: true, payoutSchedule: true, payoutProvider: true, paystackSubaccount: true } } } } } });
+    if (!o) throw new NotFoundException('Order not found.');
+    if (!['PAID', 'PARTIALLY_REFUNDED'].includes(o.status)) throw new BadRequestException('Only paid orders can be refunded.');
+    const amount = Math.min(donationLeft(o), o.totalCents - o.refundedCents);
+    if (amount <= 0) throw new BadRequestException('This order has no donation left to refund.');
+    // Claim the refund first: only one call moves donationRefundedCents.
+    const { count } = await this.prisma.order.updateMany({
+      where: { id: orderId, donationRefundedCents: o.donationRefundedCents, refundedCents: o.refundedCents },
+      data: { donationRefundedCents: { increment: amount }, refundedCents: { increment: amount } },
+    });
+    if (!count) throw new ConflictException('This order changed a moment ago. Refresh and try again.');
+    try {
+      if (o.paymentRef) await this.payments.byName(o.provider).refund(o.paymentRef, amount, `donation-${orderId}`);
+    } catch (e) {
+      await this.prisma.order.update({ where: { id: orderId }, data: { donationRefundedCents: { decrement: amount }, refundedCents: { decrement: amount } } });
+      throw e;
+    }
+    const live = await this.prisma.ticket.count({ where: { orderId, status: { not: 'VOID' } } });
+    const after = await this.prisma.order.findUniqueOrThrow({ where: { id: orderId } });
+    // Fully refunded only when nothing is left on it and none of its tickets work any more.
+    const status = live === 0 && after.refundedCents >= after.totalCents ? 'REFUNDED' : 'PARTIALLY_REFUNDED';
+    const owed = organizerPaidOut(o, o.event.org) ? amount : 0;
+    await this.prisma.order.update({ where: { id: orderId }, data: { status, ...(owed ? { donationOwedCents: { increment: owed } } : {}) } });
+    await this.audit.log(admin.id, 'order.donation_refund', 'Order', orderId, { amountCents: amount, currency: o.currency, cause: o.donationCause, reason, by: opts.by ?? 'eventro', organizerOwedCents: owed });
+    void this.donationRefundEmail(o, amount).catch(() => undefined);
+    const view = await this.prisma.order.findUniqueOrThrow({
+      where: { id: orderId },
+      select: { id: true, status: true, refundedCents: true, totalCents: true, donationCents: true, donationRefundedCents: true, donationCause: true, currency: true, donationOwedCents: true },
+    });
+    return { ...view, refundedNowCents: amount };
+  }
+
+  /** "Your donation of $X to {cause} was refunded." to the buyer. Email trouble never undoes the refund. */
+  private async donationRefundEmail(o: { id: string; email: string; currency: string; donationCause: string | null; event: { title: string; org: { name: string } } }, amount: number) {
+    const cause = o.donationCause ?? 'the organizer’s cause';
+    const line = `Your donation of ${formatMoney(amount, o.currency)} to ${cause} was refunded.`;
+    const { html, text } = render({
+      preheader: line,
+      heading: 'Your donation was refunded',
+      highlight: { label: `Order ${o.id} · ${o.event.title}`, value: formatMoney(amount, o.currency) },
+      paragraphs: [line, 'It goes back to your original payment method and can take 5–10 business days to show up, depending on your bank. Your tickets aren’t affected.'],
+      cta: { label: 'View my tickets', url: `${config.webUrl}/tickets` },
+      footer: `You got this email because you donated through Eventro at checkout for an event by ${o.event.org.name}.`,
+    });
+    await this.mail.send('order.donation_refund', { to: o.email, subject: `Your donation to ${cause} was refunded`, html, text });
   }
 
   refunds(status = 'OPEN') {

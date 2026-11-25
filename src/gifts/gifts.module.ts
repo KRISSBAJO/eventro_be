@@ -95,9 +95,10 @@ export class GiftService implements OnModuleInit, OnModuleDestroy {
   async deliver(id: string) {
     const g = await this.prisma.gift.findUnique({
       where: { id },
-      include: { order: { include: { event: { include: { venue: true } }, ticketType: true, tickets: { select: { id: true, status: true } } } } },
+      include: { order: { include: { event: { include: { venue: true, org: { select: { name: true } } } }, ticketType: true, tickets: { select: { id: true, status: true } } } } },
     });
     if (!g || g.claimedAt || g.order.status !== 'PAID') return false;
+    if (g.order.kind === 'COMP') return this.deliverComp(g);
     // Tickets the buyer took back (cancelled the transfer) stay theirs. If they took them all back, there's no gift
     // left: mark it done without emailing the recipient a link to nothing.
     const held = g.order.tickets.filter((t) => t.status === 'TRANSFER_PENDING').length;
@@ -131,23 +132,63 @@ export class GiftService implements OnModuleInit, OnModuleDestroy {
     return true;
   }
 
+  /**
+   * A complimentary ticket (see src/comps): "You’re on the guest list for {event}", from the organizer, with the same
+   * claim link as a gift. Its ticket waits (TRANSFER_PENDING) for the guest to claim it into their account.
+   */
+  private async deliverComp(g: {
+    id: string;
+    token: string;
+    sentAt: Date | null;
+    recipientName: string;
+    recipientEmail: string;
+    order: { compGroup: string | null; quantity: number; ticketType: { name: string }; event: { title: string; startsAt: Date; online: boolean; venue: { name: string; city: string } | null; org: { name: string } } };
+  }) {
+    const e = g.order.event;
+    const when = new Intl.DateTimeFormat('en-US', { weekday: 'long', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'UTC' }).format(e.startsAt);
+    const where = e.online ? 'Online' : e.venue ? `${e.venue.name}, ${e.venue.city}` : '';
+    const { html, text } = render({
+      preheader: `${e.org.name} put you on the guest list for ${e.title}.`,
+      heading: `You’re on the guest list for ${e.title}`,
+      highlight: { label: g.order.compGroup ? `Complimentary · ${g.order.compGroup}` : 'Complimentary ticket', value: g.order.ticketType.name },
+      paragraphs: [
+        `Hi ${firstName(g.recipientName)}, ${e.org.name} has given you a complimentary ticket to ${e.title}.`,
+        `${g.order.ticketType.name} · ${when}${where ? ` · ${where}` : ''}`,
+        'Claim it to add it to your Eventro account. Your QR code appears there, and that’s what gets you in at the door.',
+      ],
+      cta: { label: 'Claim your ticket', url: `${config.webUrl}/gift/${g.token}` },
+      footer: `${e.org.name} sent this through Eventro. Not you? Just ignore this email.`,
+    });
+    const ok = await this.mail.send('comp.issued', { to: g.recipientEmail, subject: `You’re on the guest list for ${e.title}`, html, text });
+    await this.prisma.gift.update({ where: { id: g.id }, data: { sentAt: g.sentAt ?? new Date() } });
+    void this.notices.giftDelivered(g.id);
+    this.log.log(`Comp ${g.id} sent to the guest (${ok ? 'email sent' : 'email not sent'})`);
+    return true;
+  }
+
   async view(t: string) {
     const g = t.length <= 64 ? await this.prisma.gift.findUnique({
       where: { token: t },
       include: {
         order: {
           include: {
-            event: { select: { slug: true, title: true, subtitle: true, startsAt: true, imageUrl: true, online: true, timezone: true, seatMap: true, venue: { select: { name: true, city: true } } } },
+            event: { select: { slug: true, title: true, subtitle: true, startsAt: true, imageUrl: true, online: true, timezone: true, seatMap: true, venue: { select: { name: true, city: true } }, org: { select: { name: true } } } },
             ticketType: { select: TIER_FIELDS },
             tickets: { select: { id: true, section: true, row: true, seat: true, status: true } },
           },
         },
       },
     }) : null;
+    const comp = g?.order.kind === 'COMP';
+    // A comp the organizer cancelled: say so, rather than a dead link.
+    if (g && comp && g.order.compRevokedAt) return { comp: true, group: g.order.compGroup, from: g.order.event.org.name, to: g.recipientName, status: 'cancelled' as const, sendAt: g.sendAt };
     if (!g || g.order.status !== 'PAID') throw new NotFoundException('That gift link isn’t valid.');
     const opened = !!g.sentAt;
     return {
-      from: g.order.buyerName,
+      // Comps come from the organizer (the order is in the guest's name).
+      comp,
+      group: comp ? g.order.compGroup : null,
+      from: comp ? g.order.event.org.name : g.order.buyerName,
       to: g.recipientName,
       status: g.claimedAt ? 'claimed' : opened ? 'ready' : 'scheduled',
       sendAt: g.sendAt,
@@ -155,7 +196,7 @@ export class GiftService implements OnModuleInit, OnModuleDestroy {
       ...(opened
         ? {
             message: g.message,
-            event: (({ seatMap: _map, ...ev }) => ev)(g.order.event),
+            event: (({ seatMap: _map, org: _org, ...ev }) => ev)(g.order.event),
             ticketType: withLook(g.order.ticketType),
             quantity: g.order.quantity,
             seats: g.order.tickets
@@ -171,7 +212,7 @@ export class GiftService implements OnModuleInit, OnModuleDestroy {
   }
 
   async claim(t: string, user: AuthUser) {
-    const g = t.length <= 64 ? await this.prisma.gift.findUnique({ where: { token: t }, include: { order: { select: { status: true, buyerId: true, email: true } } } }) : null;
+    const g = t.length <= 64 ? await this.prisma.gift.findUnique({ where: { token: t }, include: { order: { select: { status: true, buyerId: true, email: true, kind: true } } } }) : null;
     return this.claimGift(g, user);
   }
 
@@ -180,13 +221,13 @@ export class GiftService implements OnModuleInit, OnModuleDestroy {
    * to): that claims the whole gift, the same as opening the link.
    */
   async claimById(id: string, user: AuthUser) {
-    const g = await this.prisma.gift.findUnique({ where: { id }, include: { order: { select: { status: true, buyerId: true, email: true } } } });
+    const g = await this.prisma.gift.findUnique({ where: { id }, include: { order: { select: { status: true, buyerId: true, email: true, kind: true } } } });
     if (g && g.recipientEmail !== user.email.toLowerCase()) throw new NotFoundException('Transfer not found, or it has expired.');
     return this.claimGift(g, user);
   }
 
   private async claimGift(
-    g: { id: string; orderId: string; sentAt: Date | null; claimedAt: Date | null; claimedBy: string | null; order: { status: string; buyerId: string | null; email: string } } | null,
+    g: { id: string; orderId: string; sentAt: Date | null; claimedAt: Date | null; claimedBy: string | null; order: { status: string; buyerId: string | null; email: string; kind: string } } | null,
     user: AuthUser,
   ) {
     if (!g || g.order.status !== 'PAID') throw new NotFoundException('That gift link isn’t valid.');
@@ -195,7 +236,8 @@ export class GiftService implements OnModuleInit, OnModuleDestroy {
       if (g.claimedBy === user.id) return { claimed: true, already: true };
       throw new BadRequestException('This gift has already been claimed.');
     }
-    if (g.order.buyerId === user.id || g.order.email === user.email) throw new BadRequestException('You bought this gift, so it can’t go into your own account. Send the link to the person it’s for.');
+    // A comp's order is in the guest's own name, so they can claim it with that email.
+    if (g.order.kind !== 'COMP' && (g.order.buyerId === user.id || g.order.email === user.email)) throw new BadRequestException('You bought this gift, so it can’t go into your own account. Send the link to the person it’s for.');
     const result = await this.prisma.$transaction(async (tx) => {
       const { count } = await tx.ticket.updateMany({
         where: { orderId: g.orderId, status: 'TRANSFER_PENDING' },
@@ -206,7 +248,7 @@ export class GiftService implements OnModuleInit, OnModuleDestroy {
       await tx.gift.update({ where: { id: g.id }, data: { claimedAt: new Date(), claimedBy: user.id } });
       return count;
     });
-    await this.audit.log(user.id, 'gift.claim', 'Gift', g.id, { tickets: result });
+    await this.audit.log(user.id, g.order.kind === 'COMP' ? 'comp.claim' : 'gift.claim', 'Gift', g.id, { tickets: result });
     return { claimed: true, tickets: result };
   }
 

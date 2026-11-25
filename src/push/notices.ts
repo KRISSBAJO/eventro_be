@@ -178,15 +178,19 @@ export class NoticeService implements OnModuleInit, OnModuleDestroy {
   /** A gift arrived: to the recipient, if they have an account. Opens the gift page. */
   giftDelivered(giftId: string) {
     return this.guard(`gift.delivered ${giftId}`, async () => {
-      const g = await this.prisma.gift.findUnique({ where: { id: giftId }, include: { order: { include: { event: { select: { title: true } }, ticketType: { select: { name: true } } } } } });
+      const g = await this.prisma.gift.findUnique({ where: { id: giftId }, include: { order: { include: { event: { select: { title: true, org: { select: { name: true } } } }, ticketType: { select: { name: true } } } } } });
       if (!g || g.claimedAt) return;
       const to = (await this.usersByEmail([g.recipientEmail])).get(g.recipientEmail);
       if (!to) return;
+      const comp = g.order.kind === 'COMP';
       await this.push.send('gift.delivered', 'tickets', [
         {
           userId: to,
-          title: `🎁 ${first(g.order.buyerName)} sent you tickets`,
-          body: `${g.order.quantity} × ${g.order.ticketType.name} for ${g.order.event.title}. Open your gift to add them.`,
+          // A comp is from the organizer: the order is in the guest's own name.
+          title: comp ? `You’re on the guest list for ${g.order.event.title}` : `🎁 ${first(g.order.buyerName)} sent you tickets`,
+          body: comp
+            ? `${g.order.event.org.name} sent you a complimentary ${g.order.ticketType.name} ticket. Claim it to add it to your tickets.`
+            : `${g.order.quantity} × ${g.order.ticketType.name} for ${g.order.event.title}. Open your gift to add them.`,
           data: link(`/gift/${g.token}`, { type: 'gift.delivered', giftId }),
           dedupeKey: `gift.delivered:${giftId}`,
         },

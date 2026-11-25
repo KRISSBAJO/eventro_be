@@ -80,6 +80,10 @@ export class AdminRefundDto {
   @ApiProperty() @IsString() @MinLength(5) @MaxLength(300) reason: string;
 }
 
+export class DonationRefundDto {
+  @ApiProperty() @IsString() @MinLength(5) @MaxLength(300) reason: string;
+}
+
 export class BroadcastDto {
   @ApiProperty() @IsString() @MinLength(3) @MaxLength(150) subject: string;
   @ApiProperty() @IsString() @MinLength(3) @MaxLength(150) heading: string;
@@ -541,6 +545,11 @@ export class AdminConsoleService {
           quantity: true,
           totalCents: true,
           refundedCents: true,
+          kind: true,
+          donationCents: true,
+          donationRefundedCents: true,
+          donationOwedCents: true,
+          donationCause: true,
           currency: true,
           status: true,
           provider: true,
@@ -564,6 +573,10 @@ export class AdminConsoleService {
     const left = o.totalCents - o.refundedCents;
     await this.admin.refundOrder(id, dto.amountCents ?? left, me, dto.reason);
     return this.prisma.order.findUnique({ where: { id }, select: { id: true, status: true, refundedCents: true, totalCents: true, currency: true } });
+  }
+
+  async refundDonation(id: string, me: AuthUser, reason: string) {
+    return this.admin.refundDonation(id, me, reason.trim());
   }
 
   /* ----- subscribers & broadcasts ----- */
@@ -788,6 +801,10 @@ export class AdminConsoleController {
   @Post('orders/:id/refund') @HttpCode(200) refund(@Param('id') id: string, @CurrentUser() u: AuthUser, @Body() dto: AdminRefundDto) {
     return this.svc.refund(id, u, dto);
   }
+  /** Refunds what's left of the order's charity donation (the tickets stay as they are). */
+  @Post('orders/:id/refund-donation') @HttpCode(200) refundDonation(@Param('id') id: string, @CurrentUser() u: AuthUser, @Body() dto: DonationRefundDto) {
+    return this.svc.refundDonation(id, u, dto.reason);
+  }
 
   @Get('subscribers') subscribers(@Query('q') q?: string, @Query('status') status?: string, @Query('page') page?: string) {
     return this.svc.subscribers(q, status, page);
@@ -824,7 +841,7 @@ export class AdminConsoleController {
   // The Eventro Guarantee (scan guarantee) lives here too: its refunds go through AdminService (refundOrder, refundTicket).
   controllers: [AdminController, AdminConsoleController, GuaranteeController, OrganizerGuaranteeController, AdminGuaranteeController],
   providers: [AdminService, AdminConsoleService, EventCancellation, GuaranteeService],
-  // The organizer module cancels events through the same service.
-  exports: [EventCancellation],
+  // The organizer module cancels events through the same service, and refunds donations through AdminService.
+  exports: [EventCancellation, AdminService],
 })
 export class AdminModule {}

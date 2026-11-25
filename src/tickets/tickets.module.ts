@@ -67,6 +67,8 @@ export class TicketsService {
         AND: [
           { OR: [{ ownerId: user.id }, { holderEmail: user.email }] },
           { OR: [{ status: { not: 'VOID' } }, { event: { status: 'CANCELLED' }, resoldAt: null }, { guaranteeClaim: { isNot: null }, resoldAt: null }] },
+          // Tickets waiting for this account (a comp sent to this email) are listed under incoming, not here.
+          { OR: [{ status: { not: 'TRANSFER_PENDING' } }, { transferTo: null }, { transferTo: { not: user.email } }] },
         ],
       },
       include: {
@@ -78,6 +80,10 @@ export class TicketsService {
             quantity: true,
             totalCents: true,
             refundedCents: true,
+            donationCents: true,
+            donationRefundedCents: true,
+            kind: true,
+            compGroup: true,
             status: true,
             currency: true,
             gift: { select: { id: true, recipientName: true, recipientEmail: true, sendAt: true, sentAt: true, claimedAt: true } },
@@ -107,15 +113,19 @@ export class TicketsService {
         transferExpiresAt: true,
         event: { select: { title: true, startsAt: true } },
         ticketType: { select: TIER_FIELDS },
-        order: { select: { buyerName: true, gift: { select: { id: true, message: true, claimedAt: true } } } },
+        order: { select: { buyerName: true, kind: true, compGroup: true, event: { select: { org: { select: { name: true } } } }, gift: { select: { id: true, message: true, claimedAt: true } } } },
       },
     });
-    // Gifts are labelled ("A gift from Ada", with the note), so apps don't show them as a plain transfer.
-    const incomingTransfers = incoming.map(({ order, ...t }) => ({
-      ...t,
-      ticketType: withLook(t.ticketType),
-      gift: order.gift && !order.gift.claimedAt ? { id: order.gift.id, from: order.buyerName, message: order.gift.message || null } : null,
-    }));
+    // Gifts are labelled ("A gift from Ada", with the note), so apps don't show them as a plain transfer. Comps come
+    // from the organizer.
+    const incomingTransfers = incoming.map(({ order, ...t }) => {
+      const comp = order.kind === 'COMP';
+      return {
+        ...t,
+        ticketType: withLook(t.ticketType),
+        gift: order.gift && !order.gift.claimedAt ? { id: order.gift.id, from: comp ? order.event.org.name : order.buyerName, message: order.gift.message || null, comp, group: comp ? order.compGroup : null } : null,
+      };
+    });
     // The event rules above and the fee rate let the website show the resale breakdown before listing.
     return { tickets, incomingTransfers, resaleFeePermille: config.resaleFeePermille };
   }
@@ -194,7 +204,10 @@ export class TicketsService {
     if (t.status !== 'ACTIVE') throw new BadRequestException('Only active tickets can be listed.');
     if (!t.event.resaleEnabled) throw new BadRequestException('The organizer doesn’t allow resale for this event.');
     if (pastCutoff(t.event)) throw new BadRequestException('Resale has closed for this event.');
-    const face = t.ticketType.priceCents;
+    const order = await this.prisma.order.findUniqueOrThrow({ where: { id: t.orderId }, select: { kind: true, unitCents: true, resaleListing: { select: { faceCents: true } } } });
+    if (order.kind === 'COMP') throw new BadRequestException('Complimentary tickets can’t be resold.');
+    // Pay what you want: face value is what the ticket was first bought for (all-in), not the tier's minimum.
+    const face = t.ticketType.pricing === 'PWYW' ? (order.resaleListing?.faceCents ?? order.unitCents) : t.ticketType.priceCents;
     const cap = t.event.resaleCapPercent === null ? null : Math.floor((face * t.event.resaleCapPercent) / 100);
     if (cap !== null && priceCents > cap) {
       throw new BadRequestException(`The organizer caps resale at ${t.event.resaleCapPercent}% of face value: at most ${(cap / 100).toFixed(2)} ${t.event.currency}.`);

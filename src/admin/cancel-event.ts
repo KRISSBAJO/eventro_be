@@ -58,7 +58,7 @@ export class EventCancellation {
   async preview(eventId: string) {
     const e = await this.prisma.event.findUnique({ where: { id: eventId }, select: { id: true, title: true, status: true, cancelledAt: true, cancelReason: true } });
     if (!e) throw new NotFoundException('Event not found.');
-    const orders = await this.prisma.order.findMany({ where: { eventId, status: { in: [...REFUNDABLE] } }, select: { totalCents: true, refundedCents: true, currency: true } });
+    const orders = await this.prisma.order.findMany({ where: { eventId, kind: 'SALE', status: { in: [...REFUNDABLE] } }, select: { totalCents: true, refundedCents: true, currency: true } });
     const totals: Record<string, number> = {};
     for (const o of orders) totals[o.currency] = (totals[o.currency] ?? 0) + (o.totalCents - o.refundedCents);
     const [tickets, listings] = await Promise.all([
@@ -115,18 +115,25 @@ export class EventCancellation {
     const holders = await this.notices.holders(eventId).catch(() => [] as string[]);
 
     // 2. Refund each paid order on its own, so one failure doesn't stop the rest.
+    // Sales only (a donation on an order is refunded with it: there's no event). Comps have nothing to refund; they're
+    // voided below and their holders hear separately.
     const orders = await this.prisma.order.findMany({
-      where: { eventId, status: { in: [...REFUNDABLE] } },
-      select: { id: true, email: true, buyerName: true, quantity: true, totalCents: true, refundedCents: true, currency: true },
+      where: { eventId, kind: 'SALE', status: { in: [...REFUNDABLE] } },
+      select: { id: true, email: true, buyerName: true, quantity: true, totalCents: true, refundedCents: true, currency: true, donationCents: true, donationRefundedCents: true, donationCause: true },
       orderBy: { createdAt: 'asc' },
     });
-    const refunded: { id: string; email: string; buyerName: string; quantity: number; cents: number; currency: string }[] = [];
+    const comps = await this.prisma.order.findMany({
+      where: { eventId, kind: 'COMP', status: 'PAID' },
+      select: { id: true, tickets: { where: { status: { not: 'VOID' } }, select: { holderEmail: true, holderName: true } } },
+    });
+    await this.prisma.order.updateMany({ where: { id: { in: comps.map((c) => c.id) } }, data: { status: 'CANCELLED' } });
+    const refunded: { id: string; email: string; buyerName: string; quantity: number; cents: number; currency: string; donationCents: number; donationCause: string | null }[] = [];
     const failed: { orderId: string; message: string; email: string; buyerName: string; cents: number; currency: string }[] = [];
     for (const o of orders) {
       const left = o.totalCents - o.refundedCents;
       try {
         await this.admin.refundOrder(o.id, left, actor, `Event cancelled: ${shownReason}`);
-        refunded.push({ id: o.id, email: o.email, buyerName: o.buyerName, quantity: o.quantity, cents: left, currency: o.currency });
+        refunded.push({ id: o.id, email: o.email, buyerName: o.buyerName, quantity: o.quantity, cents: left, currency: o.currency, donationCents: o.donationCents - o.donationRefundedCents, donationCause: o.donationCause });
       } catch (err) {
         const message = ((err as Error).message || 'Refund failed').slice(0, 300);
         this.log.warn(`Refund of ${o.id} for cancelled event ${eventId} failed: ${message}`);
@@ -153,7 +160,8 @@ export class EventCancellation {
     });
 
     // 4. One email per order, after replying: refunded ones say how much; failed ones that a refund is coming.
-    void this.emailBuyers(e, shownReason, refunded, failed, alreadyCancelled).catch((err) => this.log.warn(`Cancellation emails for ${eventId}: ${(err as Error).message}`));
+    const compHolders = comps.flatMap((c) => c.tickets.map((t) => ({ email: t.holderEmail, name: t.holderName })));
+    void this.emailBuyers(e, shownReason, refunded, failed, alreadyCancelled, compHolders).catch((err) => this.log.warn(`Cancellation emails for ${eventId}: ${(err as Error).message}`));
     // Push to every ticket holder with an account (once per person, even if cancel is retried).
     void this.notices.eventCancelled({ id: e.id, title: e.title, orgName: e.org.name }, holders);
 
@@ -174,9 +182,10 @@ export class EventCancellation {
   private async emailBuyers(
     e: { title: string; slug: string; startsAt: Date; venue: { name: string; city: string } | null; org: { name: string; supportEmail: string } },
     reason: string,
-    refunded: { id: string; email: string; buyerName: string; cents: number; currency: string }[],
+    refunded: { id: string; email: string; buyerName: string; cents: number; currency: string; donationCents: number; donationCause: string | null }[],
     failed: { orderId: string; email: string; buyerName: string; cents: number; currency: string }[],
     retry: boolean,
+    compHolders: { email: string; name: string }[] = [],
   ) {
     const when = e.startsAt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
     const where = e.venue ? ` at ${e.venue.name}, ${e.venue.city}` : '';
@@ -193,7 +202,7 @@ export class EventCancellation {
           paragraphs: [
             `Hi ${first(r.buyerName)}, we’re sorry: ${e.title} by ${e.org.name} (${when}${where}) has been cancelled.`,
             `The reason given: “${reason}”`,
-            `We’ve refunded ${amount} for order ${r.id} to your original payment method. It can take 5–10 business days to show up, depending on your bank.`,
+            `We’ve refunded ${amount} for order ${r.id} to your original payment method${r.donationCents > 0 ? `, including your ${formatMoney(r.donationCents, r.currency)} donation${r.donationCause ? ` to ${r.donationCause}` : ''}` : ''}. It can take 5–10 business days to show up, depending on your bank.`,
             'Your tickets have been cancelled, so there’s nothing else you need to do.',
           ],
           highlight: { label: 'Refunded', value: amount },
@@ -219,6 +228,30 @@ export class EventCancellation {
             ],
             highlight: { label: 'Refund due', value: amount },
             footer,
+          }),
+        });
+      }
+    }
+    // Complimentary tickets: nothing to refund, but the guest needs to know (once, not on a retry).
+    if (!retry) {
+      const seen = new Set<string>();
+      for (const c of compHolders) {
+        const to = c.email.trim().toLowerCase();
+        if (!to || seen.has(to)) continue;
+        seen.add(to);
+        mails.push({
+          to,
+          subject: `Cancelled: ${e.title}`,
+          ...render({
+            preheader: `${e.title} won’t go ahead. Your complimentary ticket has been cancelled.`,
+            heading: `${e.title} has been cancelled`,
+            paragraphs: [
+              `Hi ${first(c.name)}, we’re sorry: ${e.title} by ${e.org.name} (${when}${where}) has been cancelled.`,
+              `The reason given: “${reason}”`,
+              'You were on the guest list with a complimentary ticket. It has been cancelled, so there’s nothing else you need to do.',
+            ],
+            cta: { label: 'Find another event', url: `${config.webUrl}/events` },
+            footer: `You’re getting this because ${e.org.name} put you on the guest list for ${e.title} on Eventro.`,
           }),
         });
       }

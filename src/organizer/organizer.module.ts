@@ -9,6 +9,9 @@ import { CurrentUser, type AuthUser } from '../common/auth';
 import { RATE_RULES, RateLimit } from '../common/rate-limit';
 import { config } from '../config';
 import { VenuesModule } from '../venues/venues.module';
+import { CompController, CompService } from './comps';
+import { GuestListController, GuestListService } from './guest-list';
+import { DonationController, DonationService } from './donations';
 import {
   AttachBookingDto,
   CancelEventDto,
@@ -180,8 +183,9 @@ export class OrganizerController {
   }
   @ApiQuery({ name: 'q', required: false })
   @ApiQuery({ name: 'status', required: false, enum: ['checked-in', 'not-checked-in'] })
-  @Get('events/:id/attendees') attendees(@Param('id') id: string, @CurrentUser() u: AuthUser, @Query('q') q?: string, @Query('status') status?: string) {
-    return this.svc.attendees(id, u, q, status);
+  @ApiQuery({ name: 'type', required: false, enum: ['paid', 'comp'] })
+  @Get('events/:id/attendees') attendees(@Param('id') id: string, @CurrentUser() u: AuthUser, @Query('q') q?: string, @Query('status') status?: string, @Query('type') type?: string) {
+    return this.svc.attendees(id, u, q, status, type);
   }
   @Get('events/:id/attendees.csv')
   @Header('Content-Type', 'text/csv; charset=utf-8')
@@ -227,7 +231,7 @@ export class OrganizerController {
 
 @Module({
   imports: [CheckoutModule, AdminModule, VenuesModule],
-  controllers: [OrganizerController],
-  providers: [OrganizerService, PayoutAccounts, VenueChange],
+  controllers: [OrganizerController, CompController, GuestListController, DonationController],
+  providers: [OrganizerService, PayoutAccounts, VenueChange, CompService, GuestListService, DonationService],
 })
 export class OrganizerModule {}
