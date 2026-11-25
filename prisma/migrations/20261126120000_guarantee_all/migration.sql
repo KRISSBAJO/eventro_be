@@ -1,0 +1,5 @@
+-- AlterTable
+ALTER TABLE "GuaranteeClaim" ADD COLUMN     "organizerCents" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN     "organizerOwedCents" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN     "payer" TEXT NOT NULL DEFAULT 'EVENTRO';
+

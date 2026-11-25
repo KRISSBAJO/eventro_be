@@ -61,7 +61,7 @@ export class TicketsService {
   async mine(user: AuthUser) {
     await this.expireTransfers();
     const rows = await this.prisma.ticket.findMany({
-      // Voided tickets stay hidden, except for cancelled events and resale guarantee claims, so holders see what
+      // Voided tickets stay hidden, except for cancelled events and Eventro Guarantee claims, so holders see what
       // happened to them.
       where: {
         AND: [
@@ -90,13 +90,13 @@ export class TicketsService {
     });
     // Section names come from the event's seat map ("Lower Level 104"); the map itself stays out of the response.
     // Online events: the stream link goes only with tickets the holder still has (not ones being sold or transferred).
-    // Resale tickets carry the scan guarantee: its claim window and any claim (see src/guarantee).
+    // Paid tickets carry the Eventro Guarantee: cover, who pays, the claim window and any claim (see src/guarantee).
     const tickets = rows.map(({ event: { seatMap, streamUrl, ...event }, guaranteeClaim, ...t }) => {
       const s = (seatMap as SeatMap | null)?.sections.find((x) => x.id === t.section);
       const watch = event.online && (t.status === 'ACTIVE' || t.status === 'CHECKED_IN') ? streamUrl : null;
       // Usable tickets carry their QR seed, so the app can show the door code offline (see GET /tickets/:id/qr-seed).
       const seed = t.status === 'ACTIVE' ? { qrSeed: seedFor(t) } : {};
-      const guarantee = guaranteeFor({ resaleGuarantee: t.resaleGuarantee, guaranteeClaim }, event);
+      const guarantee = guaranteeFor({ id: t.id, resaleGuarantee: t.resaleGuarantee, guaranteeClaim }, t.order, event);
       return { ...t, ticketType: withLook(t.ticketType), ...seed, event: { ...event, streamUrl: watch }, sectionName: s ? sectionName(s) : null, guarantee };
     });
     const incoming = await this.prisma.ticket.findMany({

@@ -171,6 +171,34 @@ export class AdminService {
     await this.audit.log(admin?.id ?? null, full ? 'order.refund' : 'order.partial_refund', 'Order', orderId, { amountCents, currency: o.currency, reason });
   }
 
+  /**
+   * Refunds one ticket of an order (the Eventro Guarantee on a normal order): `amountCents` back through the payment
+   * provider, and only that ticket voided and returned to sale. The order becomes REFUNDED once none of its tickets
+   * is left and its whole total has been refunded; until then it is PARTIALLY_REFUNDED. Not for resale orders, whose
+   * seller payout rules live in `refundOrder`.
+   */
+  async refundTicket(orderId: string, ticketId: string, amountCents: number, admin: Pick<AuthUser, 'id'> | null, reason: string, opts: { refundKey?: string } = {}) {
+    const o = await this.prisma.order.findUnique({ where: { id: orderId } });
+    if (!o) throw new NotFoundException('Order not found.');
+    if (o.resaleListingId) throw new BadRequestException('Resale orders are refunded as a whole.');
+    const t = await this.prisma.ticket.findUnique({ where: { id: ticketId }, select: { orderId: true, status: true, ticketTypeId: true } });
+    if (!t || t.orderId !== orderId) throw new NotFoundException('Ticket not found on this order.');
+    if (t.status === 'VOID') throw new BadRequestException('This ticket has already been cancelled.');
+    const remaining = o.totalCents - o.refundedCents;
+    if (amountCents > remaining) throw new BadRequestException(`At most ${remaining} cents can still be refunded.`);
+    if (o.paymentRef && amountCents > 0) await this.payments.byName(o.provider).refund(o.paymentRef, amountCents, opts.refundKey);
+    const status = await this.prisma.$transaction(async (tx) => {
+      const { count } = await tx.ticket.updateMany({ where: { id: ticketId, status: { not: 'VOID' } }, data: { status: 'VOID', listCents: null, transferTo: null } });
+      if (count) await tx.ticketType.update({ where: { id: t.ticketTypeId }, data: { sold: { decrement: count } } });
+      const live = await tx.ticket.count({ where: { orderId, status: { not: 'VOID' } } });
+      const next = live === 0 && amountCents === remaining ? 'REFUNDED' : 'PARTIALLY_REFUNDED';
+      await tx.order.update({ where: { id: orderId }, data: { refundedCents: { increment: amountCents }, status: next } });
+      return next;
+    });
+    await this.audit.log(admin?.id ?? null, status === 'REFUNDED' ? 'order.refund' : 'order.partial_refund', 'Order', orderId, { amountCents, currency: o.currency, reason, ticketId });
+    return status;
+  }
+
   refunds(status = 'OPEN') {
     return this.prisma.refundRequest.findMany({
       where: { status: status as 'OPEN' },

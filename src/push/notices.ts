@@ -211,7 +211,7 @@ export class NoticeService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  /** A resale guarantee claim was received or decided, or its refund went out: to the claimant, opening the ticket. */
+  /** An Eventro Guarantee claim was received or decided, or its refund went out: to the claimant, opening the ticket. */
   guaranteeClaim(kind: 'received' | 'approved' | 'declined' | 'refunded', m: { userId: string; claimId: string; ticketId: string; title: string; body: string }) {
     return this.guard(`guarantee.${kind} ${m.claimId}`, async () => {
       await this.push.send(`guarantee.${kind}`, 'orders', [

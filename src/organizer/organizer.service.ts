@@ -937,7 +937,16 @@ export class OrganizerService {
     const since = new Date(Date.now() - 31 * DAY);
     const orders = await this.prisma.order.findMany({
       where: { event: { orgId }, status: { in: ['PAID', 'PARTIALLY_REFUNDED'] }, paidAt: { gte: since } },
-      select: { paidAt: true, quantity: true, unitCents: true, discountCents: true, refundedCents: true, currency: true, event: { select: { feeMode: true } } },
+      select: {
+        paidAt: true,
+        quantity: true,
+        unitCents: true,
+        discountCents: true,
+        refundedCents: true,
+        currency: true,
+        event: { select: { feeMode: true } },
+        guaranteeClaims: { where: { payer: 'ORGANIZER', refundStatus: 'REFUNDED' }, select: { amountCents: true, organizerCents: true } },
+      },
     });
     // Payouts are shown in the organization's main currency (the one most of its sales are in);
     // sales in other currencies are converted at today's rate and marked as approximate.
@@ -948,8 +957,11 @@ export class OrganizerService {
     const byDay = new Map<string, number>();
     for (const o of orders) {
       const k = dayKey(o.paidAt!);
-      // Organizer share of the tickets (protection is Eventro's), after discounts and refunds.
-      const net = organizerNet(o.unitCents, o.event.feeMode, config.organizerFeePermille) * o.quantity - o.discountCents - o.refundedCents;
+      // Organizer share of the tickets (protection is Eventro's), after discounts and refunds. A refund comes out of
+      // it in full, except an Eventro Guarantee refund: only the organizer's share of that ticket (`organizerCents`),
+      // as Eventro returns its own fee and protection (see src/guarantee).
+      const eventroReturned = o.guaranteeClaims.reduce((s, g) => s + (g.amountCents - g.organizerCents), 0);
+      const net = organizerNet(o.unitCents, o.event.feeMode, config.organizerFeePermille) * o.quantity - o.discountCents - (o.refundedCents - eventroReturned);
       byDay.set(k, (byDay.get(k) ?? 0) + Math.max(0, this.fx.convert(net, o.currency, currency)));
     }
     const today = dayKey(new Date());

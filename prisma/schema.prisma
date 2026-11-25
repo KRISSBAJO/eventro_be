@@ -486,7 +486,8 @@ model Ticket {
   qrVersion    Int          @default(0)
   /// Which door scanner checked it in (offline scans sync later)
   checkedInDevice String?
-  /// Bought on Eventro fan resale: covered by the resale scan guarantee (stays covered after a transfer).
+  /// Bought on Eventro fan resale: its Eventro Guarantee claims are paid by Eventro, not the organizer (stays so after
+  /// a transfer). Every other ticket from a paid order is covered too, at the organizer's cost (see src/guarantee).
   resaleGuarantee Boolean   @default(false)
   createdAt    DateTime     @default(now())
 
@@ -873,9 +874,11 @@ enum GuaranteeClaimStatus {
   DECLINED
 }
 
-/// A resale scan guarantee claim: "it didn't scan, give me my money back". One per ticket, by its holder, decided
-/// automatically when the scan log settles it, otherwise by Eventro. Approval refunds the resale order in full at
-/// Eventro's cost (the seller's payout is untouched); `amountCents` is what the guarantee refunds, for cost totals.
+/// An Eventro Guarantee (scan guarantee) claim: "it didn't scan, give me my money back". One per ticket, by its
+/// holder, declined automatically when the ticket was checked in, otherwise decided by Eventro. Approval refunds that
+/// ticket's all-in share of its order. Fan resale tickets: Eventro pays (the seller's payout is untouched). Every other
+/// paid ticket: the organizer pays their share out of their payout and Eventro returns its fee (see src/guarantee).
+/// `amountCents` is what the guarantee refunds, for cost totals.
 model GuaranteeClaim {
   id           String               @id @default(cuid())
   ticketId     String               @unique
@@ -894,6 +897,13 @@ model GuaranteeClaim {
   decisionNote String?
   amountCents  Int
   currency     String
+  /// Who pays an approved claim: EVENTRO (fan resale tickets) or ORGANIZER (every other paid ticket)
+  payer        String               @default("EVENTRO")
+  /// ORGANIZER claims, once refunded: the organizer's part of the refund (their share of the ticket, which comes out
+  /// of their payout). Eventro covers the rest of `amountCents`: its fee and any ticket protection.
+  organizerCents     Int            @default(0)
+  /// ORGANIZER claims refunded after the organizer had already been paid for the order: what they owe Eventro
+  organizerOwedCents Int            @default(0)
   /// NONE, PENDING (being sent), REFUNDED or FAILED (admins can retry)
   refundStatus String               @default("NONE")
   refundError  String?
