@@ -141,13 +141,19 @@ export class AdminService {
     }
   }
 
-  /** Refunds through the payment provider; a full refund voids the tickets and returns them to sale. */
-  async refundOrder(orderId: string, amountCents: number, admin: Pick<AuthUser, 'id'>, reason: string) {
+  /**
+   * Refunds through the payment provider; a full refund voids the tickets and returns them to sale.
+   * A full refund of a resale order holds the seller's payout for review, except with `keepSellerPayout`: the resale
+   * scan guarantee refunds at Eventro's cost, and the seller (whose ticket was voided at sale) is paid as normal.
+   */
+  async refundOrder(orderId: string, amountCents: number, admin: Pick<AuthUser, 'id'> | null, reason: string, opts: { keepSellerPayout?: boolean; refundKey?: string } = {}) {
     const o = await this.prisma.order.findUnique({ where: { id: orderId } });
     if (!o) throw new NotFoundException('Order not found.');
     const remaining = o.totalCents - o.refundedCents;
     if (amountCents > remaining) throw new BadRequestException(`At most ${remaining} cents can still be refunded.`);
-    if (o.paymentRef && amountCents > 0) await this.payments.byName(o.provider).refund(o.paymentRef, amountCents);
+    // `refundKey`: a retried refund is a no-op at providers that support idempotency (Stripe), so a retry after a
+    // database failure can't refund twice.
+    if (o.paymentRef && amountCents > 0) await this.payments.byName(o.provider).refund(o.paymentRef, amountCents, opts.refundKey);
     const full = amountCents === remaining;
     await this.prisma.$transaction(async (tx) => {
       await tx.order.update({
@@ -157,11 +163,12 @@ export class AdminService {
       if (full) {
         const { count } = await tx.ticket.updateMany({ where: { orderId, status: { not: 'VOID' } }, data: { status: 'VOID', listCents: null, transferTo: null } });
         // A resale order's seat was already counted as sold for the original buyer; hold the seller's payout for review.
-        if (o.resaleListingId) await tx.resaleListing.update({ where: { id: o.resaleListingId }, data: { payoutStatus: 'HELD', payoutNote: `Buyer refunded: ${reason}` } });
-        else if (count) await tx.ticketType.update({ where: { id: o.ticketTypeId }, data: { sold: { decrement: count } } });
+        if (o.resaleListingId) {
+          if (!opts.keepSellerPayout) await tx.resaleListing.update({ where: { id: o.resaleListingId }, data: { payoutStatus: 'HELD', payoutNote: `Buyer refunded: ${reason}` } });
+        } else if (count) await tx.ticketType.update({ where: { id: o.ticketTypeId }, data: { sold: { decrement: count } } });
       }
     });
-    await this.audit.log(admin.id, full ? 'order.refund' : 'order.partial_refund', 'Order', orderId, { amountCents, currency: o.currency, reason });
+    await this.audit.log(admin?.id ?? null, full ? 'order.refund' : 'order.partial_refund', 'Order', orderId, { amountCents, currency: o.currency, reason });
   }
 
   refunds(status = 'OPEN') {

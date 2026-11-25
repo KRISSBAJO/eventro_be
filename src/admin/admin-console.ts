@@ -20,6 +20,7 @@ import { CheckoutModule } from '../checkout/checkout.module';
 import { VenuesModule } from '../venues/venues.module';
 import { AdminController, AdminService } from './admin.module';
 import { EventCancellation } from './cancel-event';
+import { AdminGuaranteeController, GuaranteeController, GuaranteeService } from '../guarantee/guarantee';
 
 const PAGE = 25;
 const DAY = 86400_000;
@@ -167,8 +168,10 @@ export class AdminConsoleService {
 
     const events = Object.fromEntries(EVENT_STATUSES.map((s) => [s, byStatus.find((b) => b.status === s)?._count._all ?? 0]));
     const mailCounts = Object.fromEntries(['SENT', 'FAILED', 'SKIPPED'].map((s) => [s, emailStats.find((e) => e.status === s)?._count._all ?? 0]));
+    // Resale guarantee claims waiting for a decision (the console's "Guarantee claims" queue).
+    const openGuaranteeClaims = await this.prisma.guaranteeClaim.count({ where: { status: 'PENDING' } });
     return {
-      counts: { users, suspendedUsers, organizers, orgs, verifiedOrgs, suspendedOrgs, events, upcomingPublished: upcoming, ordersPaid: currencies.reduce((s, c) => s + c.orders, 0), ticketsSold, subscribers, priceWatchers: watchers, openRefunds, openFraud, venues, openVenueClaims },
+      counts: { users, suspendedUsers, organizers, orgs, verifiedOrgs, suspendedOrgs, events, upcomingPublished: upcoming, ordersPaid: currencies.reduce((s, c) => s + c.orders, 0), ticketsSold, subscribers, priceWatchers: watchers, openRefunds, openFraud, openGuaranteeClaims, venues, openVenueClaims },
       money: {
         currencies,
         usd: { grossCents: grossUsd, refundedCents: refundedUsd, netCents: grossUsd - refundedUsd, estFeeCents: Math.round(((grossUsd - refundedUsd) * config.organizerFeePermille) / 1000) },
@@ -818,8 +821,9 @@ export class AdminConsoleController {
 @Module({
   // VenuesModule: cancelling an event cancels its venue booking too.
   imports: [CheckoutModule, VenuesModule],
-  controllers: [AdminController, AdminConsoleController],
-  providers: [AdminService, AdminConsoleService, EventCancellation],
+  // The resale scan guarantee lives here too: its refunds go through AdminService.refundOrder.
+  controllers: [AdminController, AdminConsoleController, GuaranteeController, AdminGuaranteeController],
+  providers: [AdminService, AdminConsoleService, EventCancellation, GuaranteeService],
   // The organizer module cancels events through the same service.
   exports: [EventCancellation],
 })

@@ -7,6 +7,7 @@ import { PrismaService } from './prisma.service';
 import { AuthGuard, Public } from './common/auth';
 import { AuditService } from './common/audit.service';
 import { InventoryService } from './common/inventory.service';
+import { ScanLog } from './common/scan-log';
 import { AuthModule } from './auth/auth.module';
 import { EventsModule } from './events/events.module';
 import { CheckoutModule } from './checkout/checkout.module';
@@ -42,8 +43,8 @@ class HealthController {
 
 @Global()
 @Module({
-  providers: [PrismaService, AuditService, InventoryService],
-  exports: [PrismaService, AuditService, InventoryService],
+  providers: [PrismaService, AuditService, InventoryService, ScanLog],
+  exports: [PrismaService, AuditService, InventoryService, ScanLog],
 })
 class CoreModule {}
 

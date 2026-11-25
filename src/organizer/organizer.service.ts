@@ -1,8 +1,9 @@
 import { previewToken } from '../events/preview';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { MemberRole, Prisma } from '@prisma/client';
+import { MemberRole, Prisma, type ScanResult } from '@prisma/client';
 import { PrismaService } from '../prisma.service';
 import { AuditService } from '../common/audit.service';
+import { ScanLog } from '../common/scan-log';
 import { config } from '../config';
 import { Payments } from '../checkout/payments';
 import { randomSuffix, slugify } from '../domain/codes';
@@ -40,6 +41,16 @@ const DOOR: MemberRole[] = ['ADMIN', 'MANAGER', 'DOOR'];
 const ADMIN_ONLY: MemberRole[] = ['ADMIN'];
 
 const DAY = 86_400_000;
+
+/** Offline sync answers as door scan log results. */
+const SYNC_SCAN_RESULT: Record<string, ScanResult> = {
+  unknown: 'NOT_FOUND',
+  'wrong-event': 'WRONG_EVENT',
+  'bad-code': 'INVALID',
+  'expired-code': 'EXPIRED_CODE',
+  void: 'VOID',
+  'transfer-pending': 'TRANSFER_PENDING',
+};
 const dayKey = (d: Date) => d.toISOString().slice(0, 10);
 
 /** Trimmed, de-duplicated perks (case-insensitive), at most 8. */
@@ -63,6 +74,7 @@ export class OrganizerService {
     private readonly cancellation: EventCancellation,
     private readonly venues: VenueChange,
     private readonly bookings: VenueBookingService,
+    private readonly scans: ScanLog,
   ) {}
 
   /* ---------- access ---------- */
@@ -649,38 +661,54 @@ export class OrganizerService {
 
   async checkIn(id: string, user: AuthUser, code: string, deviceId?: string) {
     await this.eventFor(id, user, DOOR);
+    const device = deviceId?.trim() || null;
+    // A signed QR from the camera, or a ticket code typed in by the door staff (manual check-in).
+    const method = code.includes('.') ? 'QR' : 'MANUAL';
+    // Every answer goes into the door scan log too (what the resale guarantee checks claims against).
+    const logged = async <T>(result: ScanResult, ticketId: string | null, answer: T) => {
+      await this.scans.record({ eventId: id, ticketId, result, method, deviceId: device, userId: user.id, at: new Date() });
+      return answer;
+    };
     let ticketId = code.trim().toUpperCase();
     const invalidCode = { result: 'invalid', message: 'Not a valid Eventro code.' };
     let t: Prisma.TicketGetPayload<{ include: { ticketType: { select: { name: true } } } }> | null = null;
     if (code.includes('.')) {
       // Codes are signed with the ticket's own seed (its qrVersion), so find the ticket first, then check.
       const p = parseQr(code);
-      if (!p.ok) return invalidCode;
+      if (!p.ok) return logged('INVALID', null, invalidCode);
       t = await this.prisma.ticket.findUnique({ where: { id: p.ticketId }, include: { ticketType: { select: { name: true } } } });
-      if (!t) return invalidCode;
+      if (!t) return logged('NOT_FOUND', null, invalidCode);
       const v = verifyQr(config.qrSecret, code.trim(), Date.now(), t.qrVersion);
-      if (!v.ok) return { result: v.reason === 'expired' ? 'expired-code' : 'invalid', message: v.reason === 'expired' ? 'This code has expired. Ask them to reopen the ticket.' : 'Not a valid Eventro code.' };
+      if (!v.ok) {
+        // Logged against the ticket the code names: a real ticket's code failing is what "it didn't scan" means.
+        return logged(v.reason === 'expired' ? 'EXPIRED_CODE' : 'INVALID', t.id, {
+          result: v.reason === 'expired' ? 'expired-code' : 'invalid',
+          message: v.reason === 'expired' ? 'This code has expired. Ask them to reopen the ticket.' : 'Not a valid Eventro code.',
+        });
+      }
       ticketId = v.ticketId;
     } else {
       t = await this.prisma.ticket.findUnique({ where: { id: ticketId }, include: { ticketType: { select: { name: true } } } });
     }
-    if (!t) return { result: 'invalid', message: 'Ticket not found.' };
-    if (t.eventId !== id) return { result: 'wrong-event', message: 'This ticket is for a different event.' };
-    if (t.status === 'CHECKED_IN') return this.duplicate(t);
-    if (t.status === 'VOID') return { result: 'invalid', message: 'This ticket was refunded or cancelled.' };
-    if (t.status === 'TRANSFER_PENDING') return { result: 'invalid', message: 'This ticket is being transferred.' };
+    if (!t) return logged('NOT_FOUND', null, { result: 'invalid', message: 'Ticket not found.' });
+    if (t.eventId !== id) return logged('WRONG_EVENT', t.id, { result: 'wrong-event', message: 'This ticket is for a different event.' });
+    if (t.status === 'CHECKED_IN') return logged('ALREADY_USED', t.id, await this.duplicate(t));
+    if (t.status === 'VOID') return logged('VOID', t.id, { result: 'invalid', message: 'This ticket was refunded or cancelled.' });
+    if (t.status === 'TRANSFER_PENDING') return logged('TRANSFER_PENDING', t.id, { result: 'invalid', message: 'This ticket is being transferred.' });
     // Conditional update so two scanners can't admit the same ticket twice.
     const { count } = await this.prisma.ticket.updateMany({
       where: { id: t.id, status: { in: ['ACTIVE', 'LISTED'] } },
-      data: { status: 'CHECKED_IN', checkedInAt: new Date(), checkedInBy: user.id, checkedInDevice: deviceId?.trim() || null, listCents: null },
+      data: { status: 'CHECKED_IN', checkedInAt: new Date(), checkedInBy: user.id, checkedInDevice: device, listCents: null },
     });
     if (!count) {
       // Another scanner got there a moment ago: report theirs.
       const fresh = await this.prisma.ticket.findUniqueOrThrow({ where: { id: t.id }, select: { status: true, checkedInAt: true, checkedInBy: true, checkedInDevice: true } });
-      if (fresh.status !== 'CHECKED_IN') return { result: 'invalid', message: fresh.status === 'VOID' ? 'This ticket was refunded or cancelled.' : 'This ticket is being transferred.' };
-      return this.duplicate({ ...t, ...fresh });
+      if (fresh.status !== 'CHECKED_IN') {
+        return logged(fresh.status === 'VOID' ? 'VOID' : 'TRANSFER_PENDING', t.id, { result: 'invalid', message: fresh.status === 'VOID' ? 'This ticket was refunded or cancelled.' : 'This ticket is being transferred.' });
+      }
+      return logged('ALREADY_USED', t.id, await this.duplicate({ ...t, ...fresh }));
     }
-    return { result: 'ok', message: 'Valid: let them in.', ticket: this.doorView(t) };
+    return logged('ADMITTED', t.id, { result: 'ok', message: 'Valid: let them in.', ticket: this.doorView(t) });
   }
 
   /** "Already checked in", with when, by whom and on which scanner (like the offline sync's `already`). */
@@ -836,6 +864,19 @@ export class OrganizerService {
     const people = checkerIds.size ? await this.prisma.user.findMany({ where: { id: { in: [...checkerIds] } }, select: { id: true, name: true } }) : [];
     const nameOf = new Map(people.map((p) => [p.id, p.name]));
     for (const r of results) if (r.checkedInBy) r.checkedInBy.name = nameOf.get(r.checkedInBy.id) ?? null;
+    // The door scan log, with each scan's own time. A batch sent again adds nothing (see ScanLog.recordSynced).
+    await this.scans.recordSynced(
+      results.map((r) => ({
+        eventId: id,
+        ticketId: r.reason === 'unknown' ? null : r.ticketId,
+        result: r.result === 'invalid' ? (SYNC_SCAN_RESULT[r.reason ?? ''] ?? 'INVALID') : r.result === 'already' ? 'ALREADY_USED' : 'ADMITTED',
+        method: 'OFFLINE' as const,
+        deviceId,
+        userId: user.id,
+        at: r.scannedAt,
+        scanned: `${r.ticketId}|${scans[r.index].scannedAt}`,
+      })),
+    );
     const summary = { checked_in: 0, already: 0, invalid: 0 };
     for (const r of results) summary[r.result]++;
     await this.audit.log(user.id, 'checkin.sync', 'Event', id, { deviceId, scans: scans.length, ...summary });

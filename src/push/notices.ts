@@ -14,6 +14,7 @@
  *   reminder.day            holders of ACTIVE     reminders   reminder.day:<eventId>:<userId>
  *   reminder.doors           holders of ACTIVE     reminders   reminder.doors:<eventId>:<userId>
  *   order.sale               org admins, managers  sales       order.sale:<orderId>:<userId>
+ *   guarantee.<kind>         claimant              orders      guarantee.<kind>:<claimId>   (received, approved, declined, refunded)
  *
  * Every method swallows its own errors (logged), so callers can `void` them.
  */
@@ -205,6 +206,21 @@ export class NoticeService implements OnModuleInit, OnModuleDestroy {
           body: `${l.event.title}: sold for ${formatMoney(l.priceCents, l.currency)}.${l.payoutCents !== null ? ` You’ll receive ${formatMoney(l.payoutCents, l.currency)}.` : ''}`,
           data: link('/tickets', { type: 'resale.sold', listingId }),
           dedupeKey: `resale.sold:${listingId}`,
+        },
+      ]);
+    });
+  }
+
+  /** A resale guarantee claim was received or decided, or its refund went out: to the claimant, opening the ticket. */
+  guaranteeClaim(kind: 'received' | 'approved' | 'declined' | 'refunded', m: { userId: string; claimId: string; ticketId: string; title: string; body: string }) {
+    return this.guard(`guarantee.${kind} ${m.claimId}`, async () => {
+      await this.push.send(`guarantee.${kind}`, 'orders', [
+        {
+          userId: m.userId,
+          title: m.title,
+          body: m.body,
+          data: link(`/tickets/${m.ticketId}`, { type: `guarantee.${kind}`, claimId: m.claimId, ticketId: m.ticketId }),
+          dedupeKey: `guarantee.${kind}:${m.claimId}`,
         },
       ]);
     });

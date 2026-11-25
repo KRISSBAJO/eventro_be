@@ -88,7 +88,8 @@ class MockPayoutBanks implements PayoutBanks {
 export interface PaymentProvider {
   readonly name: ProviderName;
   createPayment(input: PaymentInput): Promise<CreatedPayment>;
-  refund(paymentRef: string, amountCents: number): Promise<void>;
+  /** `key` makes a retried refund a no-op at the provider where it supports that (Stripe), e.g. a guarantee retry. */
+  refund(paymentRef: string, amountCents: number, key?: string): Promise<void>;
 }
 
 /** Local development: payments always succeed when the client calls POST /orders/:id/pay. */
@@ -122,8 +123,8 @@ class StripeProvider implements PaymentProvider {
     return { clientSecret: pi.client_secret ?? '', paymentRef: pi.id };
   }
 
-  async refund(paymentRef: string, amountCents: number) {
-    await this.stripe.refunds.create({ payment_intent: paymentRef, amount: amountCents });
+  async refund(paymentRef: string, amountCents: number, key?: string) {
+    await this.stripe.refunds.create({ payment_intent: paymentRef, amount: amountCents }, key ? { idempotencyKey: key } : undefined);
   }
 }
 

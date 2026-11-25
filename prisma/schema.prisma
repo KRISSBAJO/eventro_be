@@ -355,6 +355,8 @@ model Event {
   savedBy      SavedEvent[]
   venueBooking VenueBooking?
   resaleListings ResaleListing[]
+  scanAttempts   ScanAttempt[]
+  guaranteeClaims GuaranteeClaim[]
 
   /// Fan resale: allowed at all, the most a ticket may be listed for (% of face value; null = no cap),
   /// the organizer's cut of each resale (per mille), transfers allowed, and how long before the start
@@ -454,6 +456,7 @@ model Order {
   /// set on orders that bought a fan-resale listing (one ticket, handed over from the seller)
   resaleListingId String?        @unique
   resaleListing   ResaleListing? @relation(fields: [resaleListingId], references: [id])
+  guaranteeClaims GuaranteeClaim[]
 
   @@index([eventId, status, paidAt])
   @@index([email])
@@ -483,6 +486,8 @@ model Ticket {
   qrVersion    Int          @default(0)
   /// Which door scanner checked it in (offline scans sync later)
   checkedInDevice String?
+  /// Bought on Eventro fan resale: covered by the resale scan guarantee (stays covered after a transfer).
+  resaleGuarantee Boolean   @default(false)
   createdAt    DateTime     @default(now())
 
   order      Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)
@@ -490,6 +495,8 @@ model Ticket {
   ticketType TicketType @relation(fields: [ticketTypeId], references: [id])
   owner      User?      @relation("TicketOwner", fields: [ownerId], references: [id], onDelete: SetNull)
   listings   ResaleListing[]
+  scanAttempts   ScanAttempt[]
+  guaranteeClaim GuaranteeClaim?
 
   /// A reserved seat can only be sold once (GA tickets have no seat, so they don't collide).
   @@unique([eventId, section, row, seat])
@@ -816,4 +823,91 @@ model ResaleListing {
   @@index([eventId, status])
   @@index([sellerId])
   @@index([payoutStatus])
+}
+
+/// What the door scanner saw. ADMITTED is a successful check-in; everything else is a rejected scan.
+enum ScanResult {
+  ADMITTED
+  ALREADY_USED
+  VOID
+  WRONG_EVENT
+  INVALID
+  EXPIRED_CODE
+  NOT_FOUND
+  TRANSFER_PENDING
+}
+
+/// How the scan reached the API: a QR scanned online, a ticket code typed in, or an offline scan synced later.
+enum ScanMethod {
+  QR
+  MANUAL
+  OFFLINE
+}
+
+/// Every door scan attempt, successful or not (check-ins alone live on Ticket). Only what the scan needs: no codes,
+/// names or IPs. `ticketId` is null when the code was unreadable or matched no ticket. Offline scans keep the time the
+/// scanner made them; `dedupeKey` (a hash of scanner, ticket and time) stops a re-sent sync from logging twice.
+model ScanAttempt {
+  id        String     @id @default(cuid())
+  eventId   String
+  ticketId  String?
+  result    ScanResult
+  method    ScanMethod
+  deviceId  String?
+  /// the staff member who scanned
+  userId    String?
+  at        DateTime
+  dedupeKey String?    @unique
+  createdAt DateTime   @default(now())
+
+  event  Event   @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  ticket Ticket? @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+
+  @@index([ticketId, at])
+  @@index([eventId, at])
+}
+
+enum GuaranteeClaimStatus {
+  PENDING
+  APPROVED
+  DECLINED
+}
+
+/// A resale scan guarantee claim: "it didn't scan, give me my money back". One per ticket, by its holder, decided
+/// automatically when the scan log settles it, otherwise by Eventro. Approval refunds the resale order in full at
+/// Eventro's cost (the seller's payout is untouched); `amountCents` is what the guarantee refunds, for cost totals.
+model GuaranteeClaim {
+  id           String               @id @default(cuid())
+  ticketId     String               @unique
+  orderId      String
+  eventId      String
+  /// the holder who claimed
+  userId       String?
+  /// DID_NOT_SCAN, TURNED_AWAY or OTHER
+  reason       String
+  details      String?
+  status       GuaranteeClaimStatus @default(PENDING)
+  /// decided by the scan log rather than a person
+  auto         Boolean              @default(false)
+  decidedById  String?
+  decidedAt    DateTime?
+  decisionNote String?
+  amountCents  Int
+  currency     String
+  /// NONE, PENDING (being sent), REFUNDED or FAILED (admins can retry)
+  refundStatus String               @default("NONE")
+  refundError  String?
+  refundedAt   DateTime?
+  /// which emails went out (claim.received, claim.approved…), so each is sent once
+  noticesSent  String[]             @default([])
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @default(now()) @updatedAt
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  order  Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  event  Event  @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt])
+  @@index([refundStatus])
+  @@index([eventId])
 }

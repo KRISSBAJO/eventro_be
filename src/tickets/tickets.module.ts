@@ -14,6 +14,7 @@ import { MailService, render } from '../mail/mail.module';
 import { pastCutoff } from '../resale/resale.module';
 import { NoticeService } from '../push/notices';
 import { GiftService } from '../gifts/gifts.module';
+import { guaranteeFor } from '../guarantee/guarantee';
 
 /** How the phone turns a seed into door codes (also in the README). */
 export const QR_SEED_SPEC = {
@@ -60,11 +61,12 @@ export class TicketsService {
   async mine(user: AuthUser) {
     await this.expireTransfers();
     const rows = await this.prisma.ticket.findMany({
-      // Voided tickets stay hidden, except for cancelled events, so holders see what happened to them.
+      // Voided tickets stay hidden, except for cancelled events and resale guarantee claims, so holders see what
+      // happened to them.
       where: {
         AND: [
           { OR: [{ ownerId: user.id }, { holderEmail: user.email }] },
-          { OR: [{ status: { not: 'VOID' } }, { event: { status: 'CANCELLED' }, resoldAt: null }] },
+          { OR: [{ status: { not: 'VOID' } }, { event: { status: 'CANCELLED' }, resoldAt: null }, { guaranteeClaim: { isNot: null }, resoldAt: null }] },
         ],
       },
       include: {
@@ -81,18 +83,21 @@ export class TicketsService {
             gift: { select: { id: true, recipientName: true, recipientEmail: true, sendAt: true, sentAt: true, claimedAt: true } },
           },
         },
-        event: { select: { slug: true, title: true, subtitle: true, currency: true, status: true, cancelledAt: true, cancelReason: true, startsAt: true, doorsAt: true, imageUrl: true, seatMap: true, online: true, streamUrl: true, timezone: true, resaleEnabled: true, resaleCapPercent: true, resaleRoyaltyPermille: true, transfersEnabled: true, transferCutoffMinutes: true, venue: { select: { name: true, address: true, city: true } } } },
+        guaranteeClaim: true,
+        event: { select: { slug: true, title: true, subtitle: true, currency: true, status: true, cancelledAt: true, cancelReason: true, startsAt: true, doorsAt: true, endsAt: true, imageUrl: true, seatMap: true, online: true, streamUrl: true, timezone: true, resaleEnabled: true, resaleCapPercent: true, resaleRoyaltyPermille: true, transfersEnabled: true, transferCutoffMinutes: true, venue: { select: { name: true, address: true, city: true } } } },
       },
       orderBy: [{ event: { startsAt: 'asc' } }, { id: 'asc' }],
     });
     // Section names come from the event's seat map ("Lower Level 104"); the map itself stays out of the response.
     // Online events: the stream link goes only with tickets the holder still has (not ones being sold or transferred).
-    const tickets = rows.map(({ event: { seatMap, streamUrl, ...event }, ...t }) => {
+    // Resale tickets carry the scan guarantee: its claim window and any claim (see src/guarantee).
+    const tickets = rows.map(({ event: { seatMap, streamUrl, ...event }, guaranteeClaim, ...t }) => {
       const s = (seatMap as SeatMap | null)?.sections.find((x) => x.id === t.section);
       const watch = event.online && (t.status === 'ACTIVE' || t.status === 'CHECKED_IN') ? streamUrl : null;
       // Usable tickets carry their QR seed, so the app can show the door code offline (see GET /tickets/:id/qr-seed).
       const seed = t.status === 'ACTIVE' ? { qrSeed: seedFor(t) } : {};
-      return { ...t, ticketType: withLook(t.ticketType), ...seed, event: { ...event, streamUrl: watch }, sectionName: s ? sectionName(s) : null };
+      const guarantee = guaranteeFor({ resaleGuarantee: t.resaleGuarantee, guaranteeClaim }, event);
+      return { ...t, ticketType: withLook(t.ticketType), ...seed, event: { ...event, streamUrl: watch }, sectionName: s ? sectionName(s) : null, guarantee };
     });
     const incoming = await this.prisma.ticket.findMany({
       where: { transferTo: user.email, status: 'TRANSFER_PENDING' },

@@ -397,6 +397,8 @@ export class CheckoutService {
               section: old.section,
               row: old.row,
               seat: old.seat,
+              // Bought on fan resale: covered by the resale scan guarantee (GuaranteeService), even after a transfer.
+              resaleGuarantee: true,
             },
           });
           const fee = Math.round((l.priceCents * config.resaleFeePermille) / 1000);
