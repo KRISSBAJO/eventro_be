@@ -171,6 +171,33 @@ test('sort=popular ranks by paid tickets in the last 14 days, ties soonest first
   assert.equal((await call('GET', '/events?sort=hot')).status, 400);
 });
 
+test('cards carry resaleCount: active listings only, 0 while held or when resale is off', async () => {
+  const { admin, org, orgId } = await setup();
+  const fan = await account(`gap-rs-seller-${run}@test.local`, 'Rhea Seller');
+  const buyer = await account(`gap-rs-buyer-${run}@test.local`, 'Remi Buyer');
+  const listed = await publishedEvent(org.token, admin.token, orgId, { title: 'Resale Rave', days: 15, basePriceCents: 3000 });
+  const plain = await publishedEvent(org.token, admin.token, orgId, { title: 'No Resale Night', days: 16, basePriceCents: 3000 });
+  const paid = await buyMock(fan, listed.ticketTypes[0].id, 2);
+  const [t1, t2] = (paid.tickets as Json[]).map((t) => t.id as string);
+  const l1 = await ok(call('POST', `/tickets/${t1}/listing`, { priceCents: 3000 }, fan.token));
+  await ok(call('POST', `/tickets/${t2}/listing`, { priceCents: 3300 }, fan.token));
+
+  const slugs = [listed.slug, plain.slug];
+  const counts = async () =>
+    Object.fromEntries(((await ok(call('GET', `/events?city=${encodeURIComponent(CITY)}&pageSize=100`))).items as Json[]).filter((c) => slugs.includes(c.slug)).map((c) => [c.slug, c.resaleCount]));
+  assert.deepEqual(await counts(), { [listed.slug]: 2, [plain.slug]: 0 });
+
+  // A held listing isn't on sale; the public list agrees.
+  const hold = await ok(call('POST', `/resale/${l1.listingId}/hold`, undefined, buyer.token));
+  assert.ok(hold.holdKey);
+  assert.deepEqual(await counts(), { [listed.slug]: 1, [plain.slug]: 0 });
+  assert.equal((await ok(call('GET', `/events/${listed.slug}/resale`))).listings.length, 1);
+
+  // Resale switched off: nothing can be bought, so the card says 0.
+  await ok(call('PATCH', `/organizer/events/${listed.id}`, { resaleEnabled: false }, org.token));
+  assert.deepEqual(await counts(), { [listed.slug]: 0, [plain.slug]: 0 });
+});
+
 test('currency: maxPrice compares in the visitor’s currency, and cards get fromCentsIn', async () => {
   const { admin, org, orgId } = await setup();
   const naira = await publishedEvent(org.token, admin.token, orgId, { title: 'Naira Night', days: 12, currency: 'NGN', basePriceCents: 2_500_000 });

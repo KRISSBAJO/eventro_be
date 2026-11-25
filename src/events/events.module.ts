@@ -12,6 +12,7 @@ import { previewOk } from './preview';
 import { FxService } from '../fx/fx.module';
 import { CURRENCY_CODES } from '../domain/currency';
 import { resolveLook } from '../domain/tier-look';
+import { pastCutoff } from '../resale/resale.module';
 
 /** "Trending" counts paid tickets from this many days back. */
 const TRENDING_DAYS = 14;
@@ -75,6 +76,7 @@ export class EventCardDto {
   @ApiProperty({ nullable: true }) lng: number | null;
   @ApiPropertyOptional({ nullable: true, description: 'With near: straight-line km from the visitor (null for online events)' }) distanceKm?: number | null;
   @ApiProperty({ description: `Paid tickets sold in the last ${TRENDING_DAYS} days` }) soldRecent: number;
+  @ApiProperty({ description: 'Fan-resale listings on sale now (0 when resale is off or has closed for the event)' }) resaleCount: number;
   @ApiPropertyOptional({ description: 'With currency: fromCents converted to that currency (approximate, for display)', example: { currency: 'USD', cents: 1613 } })
   fromCentsIn?: { currency: string; cents: number };
 }
@@ -98,9 +100,21 @@ export class EventsService {
     return new Map(rows.map((r) => [r.eventId, r._sum.quantity ?? 0]));
   }
 
+  /**
+   * Active fan-resale listings per event, in one grouped query. Events with resale switched off or past the
+   * organizer's cutoff count 0, since nobody could buy from them (as GET /events/:slug/resale and the hold say).
+   * Held listings don't count; a hold that ran out counts again once the resale module tidies it.
+   */
+  private async resaleListed(events: { id: string; resaleEnabled: boolean; startsAt: Date; transferCutoffMinutes: number }[]) {
+    const open = events.filter((e) => e.resaleEnabled && !pastCutoff(e)).map((e) => e.id);
+    if (!open.length) return new Map<string, number>();
+    const rows = await this.prisma.resaleListing.groupBy({ by: ['eventId'], where: { eventId: { in: open }, status: 'ACTIVE' }, _count: { _all: true } });
+    return new Map(rows.map((r) => [r.eventId, r._count._all]));
+  }
+
   /** Event cards (the GET /events item shape) for events loaded with their venue and ticket prices, in the same order. */
   async cards(rows: (Prisma.EventGetPayload<{ include: { venue: true } }> & { ticketTypes: { priceCents: number }[] })[]): Promise<EventCardDto[]> {
-    const recent = await this.soldRecently(rows.map((e) => e.id));
+    const [recent, resale] = await Promise.all([this.soldRecently(rows.map((e) => e.id)), this.resaleListed(rows)]);
     return rows.map((e) => ({
       slug: e.slug,
       title: e.title,
@@ -116,6 +130,7 @@ export class EventsService {
       currency: e.currency,
       fromCents: e.ticketTypes.length ? Math.min(...e.ticketTypes.map((t) => t.priceCents)) : 0,
       soldRecent: recent.get(e.id) ?? 0,
+      resaleCount: resale.get(e.id) ?? 0,
     }));
   }
 
