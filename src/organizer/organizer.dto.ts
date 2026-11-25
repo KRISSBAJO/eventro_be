@@ -26,6 +26,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { Category } from '@prisma/client';
+import { DATE_MODES, MAX_DATES, MAX_DAYS, type DateMode } from '../domain/event-dates';
 
 const lower = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim().toLowerCase() : value);
 const upper = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim().toUpperCase() : value);
@@ -106,6 +107,32 @@ export class TicketTypeInputDto {
   @Min(0, { each: true })
   @Max(PWYW_CEILING_CENTS, { each: true })
   pwywQuickPicks?: number[];
+  @ApiPropertyOptional({
+    type: 'object',
+    additionalProperties: { type: 'integer' },
+    example: { '0': 200, '1': 150 },
+    description: 'Multiple dates (DATES): capacity on particular dates, keyed by date ref (the date’s id, or its index in `dates`); other dates get `capacity`',
+  })
+  @IsOptional()
+  @IsObject()
+  capacityByDate?: Record<string, number>;
+  @ApiPropertyOptional({ type: [String], description: 'Multi-day event (DAYS, required there): the days this ticket admits on, as date refs (the date’s id, or its index in `dates`)' })
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(14)
+  @IsString({ each: true })
+  @MaxLength(40, { each: true })
+  validDates?: string[];
+}
+
+/** One date of a DATES or DAYS event, on create and edit. */
+export class EventDateInputDto {
+  @ApiPropertyOptional({ description: 'Edit only: an existing date (leave out to add a new one)' }) @IsOptional() @IsString() @MaxLength(40) id?: string;
+  @ApiProperty() @IsDateString() startsAt: string;
+  @ApiPropertyOptional() @IsOptional() @IsDateString() doorsAt?: string;
+  @ApiPropertyOptional() @IsOptional() @IsDateString() endsAt?: string;
+  @ApiPropertyOptional({ description: 'e.g. "Matinee" or "Day 1: Afrobeats" (empty clears it)' }) @IsOptional() @IsString() @MaxLength(60) label?: string;
 }
 
 /** Charity donations at checkout and the comp limit, on create and edit. */
@@ -134,9 +161,23 @@ export class CreateEventDto extends EventExtrasDto {
   @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(5000) description?: string;
   @ApiProperty({ enum: Object.values(Category) }) @IsIn(Object.values(Category)) category: Category;
   @ApiPropertyOptional() @IsOptional() @IsUrl({ require_protocol: true }) imageUrl?: string;
-  @ApiProperty() @IsDateString() startsAt: string;
+  @ApiProperty({ description: 'One date (SINGLE). Multiple dates and multi-day events send `dates` instead (the event times are worked out from them)' })
+  @ValidateIf((o: { dateMode?: string }) => !o.dateMode || o.dateMode === 'SINGLE')
+  @IsDateString()
+  startsAt: string;
   @ApiPropertyOptional() @IsOptional() @IsDateString() doorsAt?: string;
   @ApiPropertyOptional() @IsOptional() @IsDateString() endsAt?: string;
+  @ApiPropertyOptional({ enum: DATE_MODES, default: 'SINGLE', description: 'One date, multiple dates (separate performances) or a multi-day event (festival, conference)' })
+  @IsOptional()
+  @IsIn(DATE_MODES)
+  dateMode?: DateMode;
+  @ApiPropertyOptional({ type: [EventDateInputDto], description: `DATES (1–${MAX_DATES}) and DAYS (1–${MAX_DAYS}, distinct calendar days): the dates` })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(MAX_DATES)
+  @ValidateNested({ each: true })
+  @Type(() => EventDateInputDto)
+  dates?: EventDateInputDto[];
   @ApiPropertyOptional({ example: 'Africa/Lagos' }) @IsOptional() @IsString() @MaxLength(60) timezone?: string;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() online?: boolean;
   @ApiPropertyOptional() @IsOptional() @IsUrl({ require_protocol: true }) streamUrl?: string;
@@ -169,6 +210,17 @@ export class UpdateEventDto extends EventExtrasDto {
   @ApiPropertyOptional() @IsOptional() @IsDateString() startsAt?: string;
   @ApiPropertyOptional() @IsOptional() @IsDateString() doorsAt?: string;
   @ApiPropertyOptional() @IsOptional() @IsDateString() endsAt?: string;
+  @ApiPropertyOptional({ enum: DATE_MODES, description: 'Can change only while the event has no orders' }) @IsOptional() @IsIn(DATE_MODES) dateMode?: DateMode;
+  @ApiPropertyOptional({
+    type: [EventDateInputDto],
+    description: 'DATES/DAYS: the full list of dates. With `id`: keep (and change times or label); without: add (DATES: copies of every tier are made). An active date left out is removed, if it has no sales (cancel it instead). Cancelled dates can be left out.',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(MAX_DATES)
+  @ValidateNested({ each: true })
+  @Type(() => EventDateInputDto)
+  dates?: EventDateInputDto[];
   @ApiPropertyOptional({ enum: ['PUBLIC', 'UNLISTED'] }) @IsOptional() @IsIn(['PUBLIC', 'UNLISTED']) visibility?: 'PUBLIC' | 'UNLISTED';
   /** Fan resale and transfer rules */
   @ApiPropertyOptional() @IsOptional() @IsBoolean() resaleEnabled?: boolean;
@@ -241,6 +293,18 @@ export class UpdateTicketTypeDto {
   @Min(0, { each: true })
   @Max(PWYW_CEILING_CENTS, { each: true })
   pwywQuickPicks?: number[];
+  @ApiPropertyOptional({ type: 'object', additionalProperties: { type: 'integer' }, description: 'Multiple dates (DATES): capacity on particular dates, keyed by date id (or index in the event’s `dates`). `capacity` sets every date.' })
+  @IsOptional()
+  @IsObject()
+  capacityByDate?: Record<string, number>;
+  @ApiPropertyOptional({ type: [String], description: 'Multi-day event (DAYS): the days this ticket admits on (date ids, or indexes in the event’s `dates`). Once sold, days can only be added.' })
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(14)
+  @IsString({ each: true })
+  @MaxLength(40, { each: true })
+  validDates?: string[];
 }
 
 export class TicketOrderDto {
@@ -267,16 +331,19 @@ export class TemplateDto {
 export class CheckInDto {
   @ApiProperty({ description: 'Scanned QR token, or a ticket ID typed in' }) @IsString() @MinLength(4) @MaxLength(200) code: string;
   @ApiPropertyOptional({ description: 'Which scanner (stored on the ticket as checkedInDevice)' }) @IsOptional() @IsString() @MaxLength(80) deviceId?: string;
+  @ApiPropertyOptional({ description: 'DATES/DAYS: the date the door is working on (default: the date running today at the venue, else the next one)' }) @IsOptional() @IsString() @MaxLength(40) eventDateId?: string;
 }
 
 export class OfflineScanDto {
   @ApiProperty({ example: 'EVT-AB12-CD34-01' }) @IsString() @MinLength(4) @MaxLength(64) ticketId: string;
   @ApiProperty({ description: 'When the scanner admitted it (ISO 8601, the scanner’s clock)' }) @IsDateString() scannedAt: string;
   @ApiPropertyOptional({ description: 'The QR code that was scanned; checked against the ticket’s seed when sent' }) @IsOptional() @IsString() @MaxLength(200) code?: string;
+  @ApiPropertyOptional({ description: 'DATES/DAYS: the date the scanner was working on (default: the batch’s eventDateId, else the date of scannedAt at the venue)' }) @IsOptional() @IsString() @MaxLength(40) eventDateId?: string;
 }
 
 export class CheckInSyncDto {
   @ApiProperty({ description: 'A stable id for this scanner' }) @IsString() @MinLength(1) @MaxLength(80) deviceId: string;
+  @ApiPropertyOptional({ description: 'DATES/DAYS: the date the scanner was working on, for scans that don’t say' }) @IsOptional() @IsString() @MaxLength(40) eventDateId?: string;
   @ApiProperty({ type: [OfflineScanDto], maxItems: 500 })
   @IsArray()
   @ArrayMaxSize(500)
@@ -298,6 +365,16 @@ export class UpdatePromoDto {
 
 export class PayoutSettingsDto {
   @ApiPropertyOptional({ enum: ['DAILY', 'WEEKLY'] }) @IsOptional() @IsIn(['DAILY', 'WEEKLY']) schedule?: 'DAILY' | 'WEEKLY';
+}
+
+/** POST /organizer/events/:id/dates/:dateId/cancel and the admin one */
+export class CancelDateDto {
+  @ApiPropertyOptional({ minLength: 10, description: 'Shown to buyers in the cancellation email and kept in the audit log. Required to cancel; leave it out to retry the refunds of a date already cancelled (its stored reason is kept).' })
+  @IsOptional()
+  @IsString()
+  @MinLength(10)
+  @MaxLength(500)
+  reason?: string;
 }
 
 export class CancelEventDto {

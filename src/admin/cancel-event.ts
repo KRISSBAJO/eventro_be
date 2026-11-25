@@ -10,7 +10,7 @@
  * A refund that fails leaves its order PAID and is listed in the answer and the audit entry. Calling cancel again
  * retries only those: orders already refunded are skipped, so nothing is refunded twice.
  */
-import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { AuditService } from '../common/audit.service';
 import { MailService, formatMoney, render, type Mail } from '../mail/mail.module';
@@ -19,6 +19,7 @@ import type { AuthUser } from '../common/auth';
 import { AdminService } from './admin.module';
 import { NoticeService } from '../push/notices';
 import { VenueBookingService } from '../venues/venue-bookings';
+import { dateName, dateView, summaryTimes, type DateRow } from '../domain/event-dates';
 
 const REFUNDABLE = ['PAID', 'PARTIALLY_REFUNDED'] as const;
 
@@ -98,6 +99,8 @@ export class EventCancellation {
     // 1. Stop sales first so nothing new is sold while refunds run.
     if (!alreadyCancelled) {
       await this.prisma.event.update({ where: { id: eventId }, data: { status: 'CANCELLED', cancelledAt, cancelReason: reason, salesPaused: true } });
+      // Multiple dates and multi-day events: every date still on goes with it.
+      await this.prisma.eventDate.updateMany({ where: { eventId, status: 'ACTIVE' }, data: { status: 'CANCELLED', cancelledAt, cancelReason: reason } });
     }
     const [holds, listings] = await Promise.all([
       this.prisma.hold.updateMany({ where: { eventId, status: 'ACTIVE' }, data: { status: 'RELEASED' } }),
@@ -176,6 +179,169 @@ export class EventCancellation {
       listingsCancelled: listings.count,
       holdsReleased: holds.count,
       venueBookingCancelled,
+    };
+  }
+
+  /* ---------- one date of a multiple-dates event ---------- */
+
+  /** The event and the date to cancel (DATES only). */
+  private async dateOf(eventId: string, dateId: string) {
+    const e = await this.prisma.event.findUnique({
+      where: { id: eventId },
+      include: { dates: { orderBy: { startsAt: 'asc' } }, venue: { select: { name: true, city: true } }, org: { select: { name: true, supportEmail: true } } },
+    });
+    if (!e) throw new NotFoundException('Event not found.');
+    if (e.dateMode !== 'DATES') throw new BadRequestException('Only events with multiple dates can cancel one date. Cancel the whole event instead.');
+    const d = e.dates.find((x) => x.id === dateId);
+    if (!d) throw new NotFoundException('Date not found.');
+    return { e, d };
+  }
+
+  /** What cancelling one date would refund: its paid orders and totals per currency, and whether it's the last one. */
+  async previewDate(eventId: string, dateId: string) {
+    const { e, d } = await this.dateOf(eventId, dateId);
+    const types = (await this.prisma.ticketType.findMany({ where: { eventDateId: d.id }, select: { id: true } })).map((t) => t.id);
+    const orders = await this.prisma.order.findMany({ where: { ticketTypeId: { in: types }, kind: 'SALE', status: { in: [...REFUNDABLE] } }, select: { totalCents: true, refundedCents: true, currency: true } });
+    const totals: Record<string, number> = {};
+    for (const o of orders) totals[o.currency] = (totals[o.currency] ?? 0) + (o.totalCents - o.refundedCents);
+    const [tickets, listings] = await Promise.all([
+      this.prisma.ticket.count({ where: { eventDateId: d.id, status: { not: 'VOID' } } }),
+      this.prisma.resaleListing.count({ where: { ticket: { eventDateId: d.id }, status: { in: ['ACTIVE', 'HELD'] } } }),
+    ]);
+    const others = e.dates.filter((x) => x.id !== d.id && x.status === 'ACTIVE').length;
+    return {
+      id: e.id,
+      title: e.title,
+      date: dateView(d),
+      // an already-cancelled date: when and why (a retry only re-runs failed refunds and keeps this reason)
+      cancelledAt: d.cancelledAt,
+      cancelReason: d.cancelReason,
+      paidOrders: orders.length,
+      refundCents: Object.entries(totals).map(([currency, cents]) => ({ currency, cents })),
+      tickets,
+      resaleListings: listings,
+      // Cancelling the only active date cancels the whole event.
+      cancelsEvent: d.status === 'ACTIVE' && others === 0,
+    };
+  }
+
+  /**
+   * Cancels one performance of a DATES event: the date becomes CANCELLED and its tier copies stop selling; active
+   * holds on them are released and resale listings of its tickets taken down; every paid order for that date is
+   * refunded in full (donations included) through AdminService.refundOrder (resale orders: the seller's payout is
+   * held, as when a whole event is cancelled); comps are cancelled and every ticket for the date voided; buyers and
+   * comp guests get one email, holders a push; the event's summary times move to the dates left; and it's audited.
+   * Cancelling the last active date cancels the whole event (EventCancellation.cancel). Calling it again for a
+   * cancelled date retries only the refunds that failed.
+   */
+  async cancelDate(eventId: string, dateId: string, actor: AuthUser, reason: string | undefined, by: 'organizer' | 'admin') {
+    const key = `${eventId}:${dateId}`;
+    if (this.running.has(key) || this.running.has(eventId)) throw new ConflictException('This date is already being cancelled. Refresh in a moment to see the result.');
+    this.running.add(key);
+    try {
+      return await this.runDate(eventId, dateId, actor, reason?.trim() ?? '', by);
+    } finally {
+      this.running.delete(key);
+    }
+  }
+
+  private async runDate(eventId: string, dateId: string, actor: AuthUser, reason: string, by: 'organizer' | 'admin') {
+    const { e, d } = await this.dateOf(eventId, dateId);
+    const alreadyCancelled = d.status === 'CANCELLED';
+    // A retry (the date is already cancelled) keeps the stored reason and needs none; a first cancel does.
+    if (!alreadyCancelled && reason.length < 10) throw new BadRequestException('Give a reason (at least 10 characters): buyers see it in the cancellation email.');
+    const shownReason = alreadyCancelled ? (d.cancelReason ?? reason) : reason;
+    const cancelledAt = d.cancelledAt ?? new Date();
+    const lastOne = !alreadyCancelled && !e.dates.some((x) => x.id !== d.id && x.status === 'ACTIVE');
+
+    // 1. The date stops selling first (its copies refuse holds once it's CANCELLED); the summary times move on.
+    if (!alreadyCancelled) {
+      await this.prisma.$transaction(async (tx) => {
+        await tx.eventDate.update({ where: { id: d.id }, data: { status: 'CANCELLED', cancelledAt, cancelReason: reason } });
+        const s = summaryTimes((await tx.eventDate.findMany({ where: { eventId } })) as DateRow[]);
+        if (s) await tx.event.update({ where: { id: eventId }, data: s });
+      });
+    }
+    // The last active date: the whole event goes (it refunds everything, this date included).
+    if (lastOne) {
+      const summary = await this.cancel(eventId, actor, reason, by);
+      await this.audit.log(actor.id, 'event.date_cancel', 'Event', eventId, { by, dateId: d.id, startsAt: d.startsAt.toISOString(), reason, eventCancelled: true });
+      return { ...summary, dateId: d.id, date: dateView({ ...d, status: 'CANCELLED' }), eventCancelled: true };
+    }
+
+    const types = (await this.prisma.ticketType.findMany({ where: { eventDateId: d.id }, select: { id: true } })).map((t) => t.id);
+    const [holds, listings] = await Promise.all([
+      this.prisma.hold.updateMany({ where: { ticketTypeId: { in: types }, status: 'ACTIVE' }, data: { status: 'RELEASED' } }),
+      this.prisma.resaleListing.updateMany({ where: { ticket: { eventDateId: d.id }, status: { in: ['ACTIVE', 'HELD'] } }, data: { status: 'CANCELLED', cancelReason: 'Date cancelled', heldBy: null, heldUntil: null } }),
+    ]);
+    const liveTickets = await this.prisma.ticket.count({ where: { eventDateId: d.id, status: { not: 'VOID' } } });
+    const holders = await this.notices.holders(eventId, d.id).catch(() => [] as string[]);
+
+    // 2. Refund each paid order for the date on its own (sales, resale orders included), so one failure doesn't stop the rest.
+    const orders = await this.prisma.order.findMany({
+      where: { ticketTypeId: { in: types }, kind: 'SALE', status: { in: [...REFUNDABLE] } },
+      select: { id: true, email: true, buyerName: true, quantity: true, totalCents: true, refundedCents: true, currency: true, donationCents: true, donationRefundedCents: true, donationCause: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    const comps = await this.prisma.order.findMany({
+      where: { ticketTypeId: { in: types }, kind: 'COMP', status: 'PAID' },
+      select: { id: true, tickets: { where: { status: { not: 'VOID' } }, select: { holderEmail: true, holderName: true } } },
+    });
+    await this.prisma.order.updateMany({ where: { id: { in: comps.map((c) => c.id) } }, data: { status: 'CANCELLED' } });
+    const refunded: { id: string; email: string; buyerName: string; quantity: number; cents: number; currency: string; donationCents: number; donationCause: string | null }[] = [];
+    const failed: { orderId: string; message: string; email: string; buyerName: string; cents: number; currency: string }[] = [];
+    for (const o of orders) {
+      const left = o.totalCents - o.refundedCents;
+      try {
+        await this.admin.refundOrder(o.id, left, actor, `Date cancelled (${dateName(d)}): ${shownReason}`);
+        refunded.push({ id: o.id, email: o.email, buyerName: o.buyerName, quantity: o.quantity, cents: left, currency: o.currency, donationCents: o.donationCents - o.donationRefundedCents, donationCause: o.donationCause });
+      } catch (err) {
+        const message = ((err as Error).message || 'Refund failed').slice(0, 300);
+        this.log.warn(`Refund of ${o.id} for cancelled date ${d.id} failed: ${message}`);
+        failed.push({ orderId: o.id, message, email: o.email, buyerName: o.buyerName, cents: left, currency: o.currency });
+      }
+    }
+
+    // 3. No ticket for the date can be used, listed or transferred, refunded or not.
+    await this.prisma.ticket.updateMany({ where: { eventDateId: d.id, status: { not: 'VOID' } }, data: { status: 'VOID', listCents: null, transferTo: null, transferExpiresAt: null } });
+
+    const totalRefundedCents: Record<string, number> = {};
+    for (const r of refunded) totalRefundedCents[r.currency] = (totalRefundedCents[r.currency] ?? 0) + r.cents;
+    await this.audit.log(actor.id, alreadyCancelled ? 'event.date_cancel_retry' : 'event.date_cancel', 'Event', eventId, {
+      by,
+      dateId: d.id,
+      startsAt: d.startsAt.toISOString(),
+      reason: shownReason,
+      refunded: refunded.map((r) => ({ orderId: r.id, cents: r.cents, currency: r.currency })),
+      failed: failed.map((f) => ({ orderId: f.orderId, message: f.message })),
+      totalRefundedCents,
+      ticketsVoided: liveTickets,
+      listingsCancelled: listings.count,
+      holdsReleased: holds.count,
+    });
+
+    // 4. Emails (the event's title with the date) and a push to the date's holders.
+    const compHolders = comps.flatMap((c) => c.tickets.map((t) => ({ email: t.holderEmail, name: t.holderName })));
+    const named = { ...e, title: `${e.title} on ${dateName(d)}`, startsAt: d.startsAt };
+    void this.emailBuyers(named, shownReason, refunded, failed, alreadyCancelled, compHolders).catch((err) => this.log.warn(`Date cancellation emails for ${d.id}: ${(err as Error).message}`));
+    void this.notices.dateCancelled({ id: e.id, title: e.title, orgName: e.org.name }, { id: d.id, name: dateName(d) }, holders);
+
+    const after = await this.prisma.event.findUniqueOrThrow({ where: { id: eventId }, select: { startsAt: true, doorsAt: true, endsAt: true } });
+    return {
+      status: 'CANCELLED' as const,
+      dateId: d.id,
+      date: dateView({ ...d, status: 'CANCELLED' }),
+      eventCancelled: false,
+      alreadyCancelled,
+      cancelledAt,
+      refunded: refunded.length,
+      failed: failed.map(({ orderId, message }) => ({ orderId, message })),
+      totalRefundedCents,
+      ticketsVoided: liveTickets,
+      listingsCancelled: listings.count,
+      holdsReleased: holds.count,
+      // The event's summary times after the change (the dates left)
+      event: after,
     };
   }
 

@@ -10,8 +10,9 @@
  *   resale.sold              seller                orders      resale.sold:<listingId>
  *   price_drop               watchers              priceDrops  price_drop:<dropId>:<userId>
  *   event.cancelled          ticket holders        orders      event.cancelled:<eventId>:<userId>
+ *   event.date_cancelled     the date's holders   orders      event.date_cancelled:<dateId>:<userId>
  *   event.venue              ticket holders        orders      event.venue:<eventId>:<changeId>:<userId>
- *   reminder.day            holders of ACTIVE     reminders   reminder.day:<eventId>:<userId>
+ *   reminder.day            holders of ACTIVE     reminders   reminder.day:<eventId>:<userId>   (per date: reminder.day:<eventId>:<dateId>:<userId>)
  *   reminder.doors           holders of ACTIVE     reminders   reminder.doors:<eventId>:<userId>
  *   order.sale               org admins, managers  sales       order.sale:<orderId>:<userId>
  *   guarantee.<kind>         claimant              orders      guarantee.<kind>:<claimId>   (received, approved, declined, refunded)
@@ -19,10 +20,12 @@
  * Every method swallows its own errors (logged), so callers can `void` them.
  */
 import { Injectable, Logger, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
+import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma.service';
 import { formatMoney } from '../mail/mail.module';
 import { wallClockLabel, wallClockToInstant } from '../domain/wallclock';
 import { PushService, type PushMessage } from './push.service';
+import { ticketTimes } from '../domain/event-dates';
 
 const HOUR = 3600_000;
 const first = (name: string) => name.trim().split(/\s+/)[0] || name;
@@ -73,13 +76,14 @@ export class NoticeService implements OnModuleInit, OnModuleDestroy {
     return this.guard(`order.paid ${orderId}`, async () => {
       const o = await this.prisma.order.findUnique({
         where: { id: orderId },
-        include: { event: { select: { id: true, title: true, startsAt: true } }, ticketType: { select: { name: true } }, tickets: { select: { id: true }, orderBy: { id: 'asc' }, take: 1 }, gift: true },
+        include: { event: { select: { id: true, title: true, startsAt: true, doorsAt: true, endsAt: true, dateMode: true, dates: true } }, ticketType: { select: { name: true, eventDateId: true, validDateIds: true } }, tickets: { select: { id: true }, orderBy: { id: 'asc' }, take: 1 }, gift: true },
       });
       if (!o || o.status !== 'PAID') return;
       const buyerId = o.buyerId ?? (await this.usersByEmail([o.email])).get(o.email);
       if (!buyerId) return;
       const ticketId = o.tickets[0]?.id;
-      const when = wallClockLabel(o.event.startsAt, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+      // The tickets' own date (multiple dates) or first day (multi-day).
+      const when = wallClockLabel(ticketTimes(o.event.dateMode, o.event, o.ticketType, o.event.dates).first.startsAt, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
       const msg: PushMessage = o.gift
         ? {
             userId: buyerId,
@@ -254,9 +258,9 @@ export class NoticeService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  /** Account ids holding any non-void ticket for an event (owners, or accounts with the holder's email). */
-  async holders(eventId: string) {
-    const rows = await this.prisma.ticket.findMany({ where: { eventId, status: { not: 'VOID' } }, select: { ownerId: true, holderEmail: true } });
+  /** Account ids holding any non-void ticket for an event, or one date of it (owners, or accounts with the holder's email). */
+  async holders(eventId: string, eventDateId?: string) {
+    const rows = await this.prisma.ticket.findMany({ where: { eventId, status: { not: 'VOID' }, ...(eventDateId ? { eventDateId } : {}) }, select: { ownerId: true, holderEmail: true } });
     const byEmail = await this.usersByEmail(rows.filter((r) => !r.ownerId).map((r) => r.holderEmail));
     const ids = new Set<string>();
     for (const r of rows) {
@@ -278,6 +282,23 @@ export class NoticeService implements OnModuleInit, OnModuleDestroy {
           body: `${e.orgName} cancelled this event. Refunds go back to the original payment method.`,
           data: link('/tickets', { type: 'event.cancelled', eventId: e.id }),
           dedupeKey: `event.cancelled:${e.id}:${userId}`,
+        })),
+      );
+    });
+  }
+
+  /** One date of a multiple-dates event was cancelled: to everyone who held a ticket for it. */
+  dateCancelled(e: { id: string; title: string; orgName: string }, d: { id: string; name: string }, userIds: string[]) {
+    return this.guard(`event.date_cancelled ${d.id}`, async () => {
+      await this.push.send(
+        'event.date_cancelled',
+        'orders',
+        userIds.map((userId) => ({
+          userId,
+          title: `Cancelled: ${e.title}, ${d.name}`,
+          body: `${e.orgName} cancelled this date. Refunds go back to the original payment method.`,
+          data: link('/tickets', { type: 'event.date_cancelled', eventId: e.id, eventDateId: d.id }),
+          dedupeKey: `event.date_cancelled:${d.id}:${userId}`,
         })),
       );
     });
@@ -313,40 +334,71 @@ export class NoticeService implements OnModuleInit, OnModuleDestroy {
     try {
       const t = now.getTime();
       // Stored times are wall-clock; zones run from UTC−12 to UTC+14, so look a little wider and convert.
+      const from = new Date(t - 15 * HOUR);
+      const to = new Date(t + DAY_REMINDER_TO_MS + 15 * HOUR);
       const events = await this.prisma.event.findMany({
-        where: { status: 'PUBLISHED', startsAt: { gte: new Date(t - 15 * HOUR), lte: new Date(t + DAY_REMINDER_TO_MS + 15 * HOUR) } },
+        where: { status: 'PUBLISHED', dateMode: 'SINGLE', startsAt: { gte: from, lte: to } },
         select: { id: true, slug: true, title: true, startsAt: true, doorsAt: true, timezone: true, online: true, venue: { select: { name: true } } },
       });
+      // Multiple dates and multi-day events: each date on its own, to that date's holders.
+      const dated = await this.prisma.eventDate.findMany({
+        where: { status: 'ACTIVE', startsAt: { gte: from, lte: to }, event: { status: 'PUBLISHED', dateMode: { not: 'SINGLE' } } },
+        select: { id: true, startsAt: true, doorsAt: true, event: { select: { id: true, slug: true, title: true, timezone: true, online: true, dateMode: true, venue: { select: { name: true } } } } },
+      });
+      for (const d of dated) {
+        const r = await this.remind({ ...d.event, startsAt: d.startsAt, doorsAt: d.doorsAt }, t, d.event.dateMode === 'DATES' ? { eventDateId: d.id } : { ticketType: { validDateIds: { has: d.id } } }, d.id);
+        summary.day += r.day;
+        summary.doors += r.doors;
+      }
       for (const e of events) {
-        const start = wallClockToInstant(e.startsAt, e.timezone).getTime();
-        const doors = e.doorsAt ? wallClockToInstant(e.doorsAt, e.timezone).getTime() : start;
-        const untilStart = start - t;
-        const untilDoors = doors - t;
-        const day = untilStart > DAY_REMINDER_FROM_MS && untilStart <= DAY_REMINDER_TO_MS;
-        const soon = untilDoors > 0 && untilDoors <= DOORS_REMINDER_MS && untilStart > 0;
-        if (!day && !soon) continue;
-        const tickets = await this.prisma.ticket.findMany({ where: { eventId: e.id, status: 'ACTIVE', ownerId: { not: null } }, select: { id: true, ownerId: true }, orderBy: { id: 'asc' } });
-        const firstTicket = new Map<string, string>();
-        for (const x of tickets) if (!firstTicket.has(x.ownerId!)) firstTicket.set(x.ownerId!, x.id);
-        if (!firstTicket.size) continue;
-        const where = e.online ? 'Online' : (e.venue?.name ?? '');
-        const kind = day ? 'reminder.day' : 'reminder.doors';
-        const messages: PushMessage[] = [...firstTicket].map(([userId, ticketId]) => ({
-          userId,
-          title: day ? `Tomorrow: ${e.title}` : `Doors open soon: ${e.title}`,
-          body: day
-            ? `${wallClockLabel(e.startsAt)}${where ? ` · ${where}` : ''}. Your ticket is in the app, and works offline.`
-            : `${e.online ? 'Starts' : 'Doors'} at ${wallClockLabel(e.doorsAt ?? e.startsAt, { hour: 'numeric', minute: '2-digit' })}${where ? ` · ${where}` : ''}. Have your ticket ready.`,
-          data: link(`/tickets/${ticketId}`, { type: kind, eventId: e.id, ticketId }),
-          dedupeKey: `${kind}:${e.id}:${userId}`,
-        }));
-        const r = await this.push.send(kind, 'reminders', messages);
-        if (day) summary.day += r.sent + r.skipped + r.failed;
-        else summary.doors += r.sent + r.skipped + r.failed;
+        const r = await this.remind(e, t, {}, null);
+        summary.day += r.day;
+        summary.doors += r.doors;
       }
     } catch (e) {
       this.log.warn(`Reminders: ${(e as Error).message}`);
     }
     return summary;
+  }
+
+  /**
+   * The reminder due now for one start (an event, or one date of it: `dateId`, holders narrowed by `tickets`), if any.
+   * Multi-day passes already used on an earlier day (CHECKED_IN) still hear about the next day.
+   */
+  private async remind(
+    e: { id: string; slug: string; title: string; startsAt: Date; doorsAt: Date | null; timezone: string; online: boolean; venue: { name: string } | null },
+    t: number,
+    tickets: Prisma.TicketWhereInput,
+    dateId: string | null,
+  ) {
+    const out = { day: 0, doors: 0 };
+    const start = wallClockToInstant(e.startsAt, e.timezone).getTime();
+    const doors = e.doorsAt ? wallClockToInstant(e.doorsAt, e.timezone).getTime() : start;
+    const untilStart = start - t;
+    const untilDoors = doors - t;
+    const day = untilStart > DAY_REMINDER_FROM_MS && untilStart <= DAY_REMINDER_TO_MS;
+    const soon = untilDoors > 0 && untilDoors <= DOORS_REMINDER_MS && untilStart > 0;
+    if (!day && !soon) return out;
+    const statuses = dateId ? (['ACTIVE', 'CHECKED_IN'] as const) : (['ACTIVE'] as const);
+    const rows = await this.prisma.ticket.findMany({ where: { eventId: e.id, status: { in: [...statuses] }, ownerId: { not: null }, ...tickets }, select: { id: true, ownerId: true }, orderBy: { id: 'asc' } });
+    const firstTicket = new Map<string, string>();
+    for (const x of rows) if (!firstTicket.has(x.ownerId!)) firstTicket.set(x.ownerId!, x.id);
+    if (!firstTicket.size) return out;
+    const where = e.online ? 'Online' : (e.venue?.name ?? '');
+    const kind = day ? 'reminder.day' : 'reminder.doors';
+    const messages: PushMessage[] = [...firstTicket].map(([userId, ticketId]) => ({
+      userId,
+      title: day ? `Tomorrow: ${e.title}` : `Doors open soon: ${e.title}`,
+      body: day
+        ? `${wallClockLabel(e.startsAt)}${where ? ` · ${where}` : ''}. Your ticket is in the app, and works offline.`
+        : `${e.online ? 'Starts' : 'Doors'} at ${wallClockLabel(e.doorsAt ?? e.startsAt, { hour: 'numeric', minute: '2-digit' })}${where ? ` · ${where}` : ''}. Have your ticket ready.`,
+      data: link(`/tickets/${ticketId}`, { type: kind, eventId: e.id, ticketId, ...(dateId ? { eventDateId: dateId } : {}) }),
+      // Per date for multiple dates and multi-day events, so each date gets its own reminder.
+      dedupeKey: dateId ? `${kind}:${e.id}:${dateId}:${userId}` : `${kind}:${e.id}:${userId}`,
+    }));
+    const r = await this.push.send(kind, 'reminders', messages);
+    if (day) out.day += r.sent + r.skipped + r.failed;
+    else out.doors += r.sent + r.skipped + r.failed;
+    return out;
   }
 }

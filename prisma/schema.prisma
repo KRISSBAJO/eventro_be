@@ -62,6 +62,20 @@ enum MemberStatus {
   INVITED
 }
 
+/// SINGLE: one date (the event's own startsAt/doorsAt/endsAt). DATES: a run of separate performances (each an EventDate
+/// with its own copy of every ticket type). DAYS: a multi-day event (each day an EventDate; ticket types are valid on
+/// one or more days).
+enum DateMode {
+  SINGLE
+  DATES
+  DAYS
+}
+
+enum EventDateStatus {
+  ACTIVE
+  CANCELLED
+}
+
 enum PayoutSchedule {
   DAILY
   WEEKLY
@@ -352,10 +366,14 @@ model Event {
   seatMap     Json?
   /// Photos and videos hosted on mediaEX, in display order: [{ id, kind: "image" | "video" }]. The first image is the cover.
   media       Json?
+  /// SINGLE (default), DATES or DAYS. For DATES and DAYS, startsAt/doorsAt/endsAt are a summary kept in sync with the
+  /// ACTIVE dates: the earliest date's start and doors, the latest date's end (or start).
+  dateMode    DateMode    @default(SINGLE)
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
 
   org         Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  dates       EventDate[]
   venue       Venue?       @relation(fields: [venueId], references: [id], onDelete: SetNull)
   ticketTypes TicketType[]
   holds       Hold[]
@@ -396,6 +414,30 @@ model Event {
   @@index([orgId])
 }
 
+/// One performance (DATES) or one day (DAYS) of an event. Times are the venue's wall clock stored as UTC, like event
+/// times. A cancelled date stays (its tickets were refunded and voided) so holders can see what happened.
+model EventDate {
+  id           String          @id @default(cuid())
+  eventId      String
+  startsAt     DateTime
+  doorsAt      DateTime?
+  endsAt       DateTime?
+  /// optional, e.g. "Matinee" or "Day 1: Afrobeats"
+  label        String?
+  sortOrder    Int             @default(0)
+  status       EventDateStatus @default(ACTIVE)
+  cancelledAt  DateTime?
+  cancelReason String?
+  createdAt    DateTime        @default(now())
+
+  event       Event           @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  ticketTypes TicketType[]
+  tickets     Ticket[]
+  checkIns    TicketCheckIn[]
+
+  @@index([eventId, startsAt])
+}
+
 model TicketType {
   id          String    @id @default(cuid())
   eventId     String
@@ -424,13 +466,21 @@ model TicketType {
   pwywQuickPicks     Int[]         @default([])
   salesStart  DateTime?
   salesEnd    DateTime?
+  /// DATES: the performance this copy of a tier is for. Every tier has one copy per date, linked by `tierKey`
+  /// (copies share name, price, perks and look; capacity is per date).
+  eventDateId  String?
+  tierKey      String?
+  /// DAYS: the days (EventDate ids) this ticket type admits on; never empty in DAYS.
+  validDateIds String[]  @default([])
 
-  event   Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  holds   Hold[]
-  orders  Order[]
-  tickets Ticket[]
+  event     Event      @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  eventDate EventDate? @relation(fields: [eventDateId], references: [id], onDelete: Cascade)
+  holds     Hold[]
+  orders    Order[]
+  tickets   Ticket[]
 
   @@index([eventId])
+  @@index([eventDateId])
 }
 
 model Hold {
@@ -541,18 +591,23 @@ model Ticket {
   /// Bought on Eventro fan resale: its Eventro Guarantee claims are paid by Eventro, not the organizer (stays so after
   /// a transfer). Every other ticket from a paid order is covered too, at the organizer's cost (see src/guarantee).
   resaleGuarantee Boolean   @default(false)
+  /// DATES: the performance (copied from its ticket type). `dateKey` is eventDateId or "" so seats are unique per date.
+  eventDateId  String?
+  dateKey      String       @default("")
   createdAt    DateTime     @default(now())
 
   order      Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)
   event      Event      @relation(fields: [eventId], references: [id])
   ticketType TicketType @relation(fields: [ticketTypeId], references: [id])
+  eventDate  EventDate? @relation(fields: [eventDateId], references: [id], onDelete: SetNull)
   owner      User?      @relation("TicketOwner", fields: [ownerId], references: [id], onDelete: SetNull)
   listings   ResaleListing[]
   scanAttempts   ScanAttempt[]
   guaranteeClaim GuaranteeClaim?
+  checkIns       TicketCheckIn[]
 
-  /// A reserved seat can only be sold once (GA tickets have no seat, so they don't collide).
-  @@unique([eventId, section, row, seat])
+  /// A reserved seat can only be sold once per date (GA tickets have no seat, so they don't collide).
+  @@unique([eventId, dateKey, section, row, seat])
   @@index([holderEmail])
   @@index([transferTo])
 }
@@ -884,6 +939,8 @@ enum ScanResult {
   ALREADY_USED
   VOID
   WRONG_EVENT
+  /// the ticket is for another date of the event (DATES), or not valid on that day (DAYS)
+  WRONG_DATE
   INVALID
   EXPIRED_CODE
   NOT_FOUND
@@ -918,6 +975,24 @@ model ScanAttempt {
 
   @@index([ticketId, at])
   @@index([eventId, at])
+}
+
+/// One entry through the door. Every mode records it; DAYS uses it to admit a ticket once per valid day. SINGLE rows
+/// have no eventDateId (Postgres treats NULLs as distinct, so the one-entry rule there is kept by Ticket.status).
+model TicketCheckIn {
+  id          String   @id @default(cuid())
+  ticketId    String
+  eventDateId String?
+  at          DateTime
+  byUserId    String?
+  deviceId    String?
+  createdAt   DateTime @default(now())
+
+  ticket    Ticket     @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  eventDate EventDate? @relation(fields: [eventDateId], references: [id], onDelete: Cascade)
+
+  @@unique([ticketId, eventDateId])
+  @@index([eventDateId])
 }
 
 /// A name on the event's guest list, without a ticket: the person and up to 10 plus-ones. `arrived` counts how many
@@ -984,6 +1059,8 @@ model GuaranteeClaim {
   ticketId     String               @unique
   orderId      String
   eventId      String
+  /// DAYS: the day the claim is about (DATES claims are about the ticket's own date)
+  eventDateId  String?
   /// the holder who claimed
   userId       String?
   /// DID_NOT_SCAN, TURNED_AWAY or OTHER

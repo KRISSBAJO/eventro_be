@@ -12,8 +12,10 @@ import { VenuesModule } from '../venues/venues.module';
 import { CompController, CompService } from './comps';
 import { GuestListController, GuestListService } from './guest-list';
 import { DonationController, DonationService } from './donations';
+import { EventDatesService } from './event-dates';
 import {
   AttachBookingDto,
+  CancelDateDto,
   CancelEventDto,
   ChangeVenueDto,
   CheckInDto,
@@ -156,6 +158,14 @@ export class OrganizerController {
   @Post('events/:id/cancel') @HttpCode(200) cancel(@Param('id') id: string, @CurrentUser() u: AuthUser, @Body() dto: CancelEventDto) {
     return this.svc.cancelEvent(id, u, dto.reason, dto.confirmTitle);
   }
+  /** Multiple dates: what cancelling one date would refund, and whether it's the last active date (that cancels the event). */
+  @Get('events/:id/dates/:dateId/cancel-preview') cancelDatePreview(@Param('id') id: string, @Param('dateId') dateId: string, @CurrentUser() u: AuthUser) {
+    return this.svc.cancelDatePreview(id, dateId, u);
+  }
+  /** Org admins: cancel one date of a multiple-dates event and refund its orders. Safe to call again (only failed refunds are retried). */
+  @Post('events/:id/dates/:dateId/cancel') @HttpCode(200) cancelDate(@Param('id') id: string, @Param('dateId') dateId: string, @CurrentUser() u: AuthUser, @Body() dto: CancelDateDto) {
+    return this.svc.cancelDate(id, dateId, u, dto.reason);
+  }
   @Post('events/:id/pause') @HttpCode(200) pause(@Param('id') id: string, @CurrentUser() u: AuthUser) {
     return this.svc.setPaused(id, u, true);
   }
@@ -184,8 +194,9 @@ export class OrganizerController {
   @ApiQuery({ name: 'q', required: false })
   @ApiQuery({ name: 'status', required: false, enum: ['checked-in', 'not-checked-in'] })
   @ApiQuery({ name: 'type', required: false, enum: ['paid', 'comp'] })
-  @Get('events/:id/attendees') attendees(@Param('id') id: string, @CurrentUser() u: AuthUser, @Query('q') q?: string, @Query('status') status?: string, @Query('type') type?: string) {
-    return this.svc.attendees(id, u, q, status, type);
+  @ApiQuery({ name: 'date', required: false, description: 'Multiple dates: one date’s tickets (DATES) or the tickets valid that day (DAYS)' })
+  @Get('events/:id/attendees') attendees(@Param('id') id: string, @CurrentUser() u: AuthUser, @Query('q') q?: string, @Query('status') status?: string, @Query('type') type?: string, @Query('date') date?: string) {
+    return this.svc.attendees(id, u, q, status, type, date);
   }
   @Get('events/:id/attendees.csv')
   @Header('Content-Type', 'text/csv; charset=utf-8')
@@ -194,7 +205,7 @@ export class OrganizerController {
     return this.svc.attendeesCsv(id, u);
   }
   @Post('events/:id/check-in') @HttpCode(200) checkIn(@Param('id') id: string, @CurrentUser() u: AuthUser, @Body() dto: CheckInDto) {
-    return this.svc.checkIn(id, u, dto.code, dto.deviceId);
+    return this.svc.checkIn(id, u, dto.code, dto.deviceId, dto.eventDateId);
   }
   /**
    * Offline door scanning: every non-void ticket with its QR seed, so a scanner can check codes without a
@@ -208,10 +219,11 @@ export class OrganizerController {
   }
   /** Uploads scans made offline (up to 500 per call); safe to send again. */
   @Post('events/:id/check-ins/sync') @HttpCode(200) syncCheckIns(@Param('id') id: string, @CurrentUser() u: AuthUser, @Body() dto: CheckInSyncDto) {
-    return this.svc.syncCheckIns(id, u, dto.deviceId, dto.scans);
+    return this.svc.syncCheckIns(id, u, dto.deviceId, dto.scans, dto.eventDateId);
   }
-  @Delete('events/:id/check-in/:ticketId') undo(@Param('id') id: string, @Param('ticketId') ticketId: string, @CurrentUser() u: AuthUser) {
-    return this.svc.undoCheckIn(id, ticketId, u);
+  @ApiQuery({ name: 'eventDateId', required: false, description: 'Multi-day events: the day to undo (default: the door’s date)' })
+  @Delete('events/:id/check-in/:ticketId') undo(@Param('id') id: string, @Param('ticketId') ticketId: string, @CurrentUser() u: AuthUser, @Query('eventDateId') eventDateId?: string) {
+    return this.svc.undoCheckIn(id, ticketId, u, eventDateId);
   }
 
   /* promos */
@@ -232,6 +244,6 @@ export class OrganizerController {
 @Module({
   imports: [CheckoutModule, AdminModule, VenuesModule],
   controllers: [OrganizerController, CompController, GuestListController, DonationController],
-  providers: [OrganizerService, PayoutAccounts, VenueChange, CompService, GuestListService, DonationService],
+  providers: [OrganizerService, PayoutAccounts, VenueChange, CompService, GuestListService, DonationService, EventDatesService],
 })
 export class OrganizerModule {}

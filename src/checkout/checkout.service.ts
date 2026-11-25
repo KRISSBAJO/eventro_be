@@ -19,6 +19,7 @@ import type { AuthUser } from '../common/auth';
 import { paystackCountryFor } from '../organizer/payout-accounts';
 import { NoticeService } from '../push/notices';
 import { PROMO_ON_PWYW, checkDonation, donationsView, isPwyw, pwywUnit, pwywView, type DonationSettings, type PwywTier } from '../domain/pwyw';
+import { seatTier, ticketDateFields, ticketDates, ticketTimes, whenText } from '../domain/event-dates';
 
 type Tx = Prisma.TransactionClient;
 
@@ -72,12 +73,15 @@ export class CheckoutService {
     const now = new Date();
     return this.prisma.$transaction(async (tx) => {
       await lockTicketType(tx, input.ticketTypeId);
-      const tt = await tx.ticketType.findUnique({ where: { id: input.ticketTypeId }, include: { event: true } });
+      const tt = await tx.ticketType.findUnique({ where: { id: input.ticketTypeId }, include: { event: { include: { dates: true } } } });
       if (!tt) throw new NotFoundException('Ticket type not found.');
       const ev = tt.event;
       if (ev.status !== 'PUBLISHED') throw new BadRequestException('This event is not on sale.');
       if (ev.salesPaused) throw new ConflictException('Sales are paused by the organizer.');
-      if (ev.startsAt <= now) throw new BadRequestException('This event has already started.');
+      // Multiple dates: a copy of a cancelled date isn't on sale, and each date (or a pass's first day) stops on its own.
+      const date = tt.eventDateId ? ev.dates.find((d) => d.id === tt.eventDateId) : null;
+      if (date && date.status === 'CANCELLED') throw new BadRequestException('This date was cancelled.');
+      if (ticketTimes(ev.dateMode, ev, tt, ev.dates).first.startsAt <= now) throw new BadRequestException(date ? 'This date has already started.' : 'This event has already started.');
       if ((tt.salesStart && tt.salesStart > now) || (tt.salesEnd && tt.salesEnd < now)) throw new BadRequestException('These tickets are not on sale right now.');
       if (input.quantity > tt.maxPerOrder) throw new BadRequestException(`You can buy up to ${tt.maxPerOrder} of these per order.`);
       // Pay what you want: the amount is checked here, and again at the quote and the order.
@@ -89,15 +93,15 @@ export class CheckoutService {
       if (input.sectionId) {
         const map = ev.seatMap as SeatMap | null;
         const section = map?.sections.find((s) => s.id === input.sectionId);
-        if (!section || section.ticketTypeId !== tt.id) throw new BadRequestException('That section isn’t sold with this ticket type.');
-        const sec = await this.inventory.availabilityForSections(tx, ev.id, { ...map!, sections: [section] }, now);
+        if (!section || section.ticketTypeId !== seatTier(tt)) throw new BadRequestException('That section isn’t sold with this ticket type.');
+        const sec = await this.inventory.availabilityForSections(tx, ev.id, { ...map!, sections: [section] }, now, tt.eventDateId);
         const n = sec.get(section.id) ?? 0;
         if (n < input.quantity) throw new ConflictException(n ? `Only ${n} left in ${section.label}.` : `${section.label} is sold out.`);
       }
 
       // On a seat map the hold reserves exact seats, so the group is guaranteed to sit together.
       const map = ev.seatMap as SeatMap | null;
-      const sections = (map?.sections ?? []).filter((s) => s.ticketTypeId === tt.id && (!input.sectionId || s.id === input.sectionId));
+      const sections = (map?.sections ?? []).filter((s) => s.ticketTypeId === seatTier(tt) && (!input.sectionId || s.id === input.sectionId));
       let seats: SeatPick[] | null = null;
       if (input.seats) {
         // The fan picked exact seats: one per ticket, all in the chosen reserved section, all free right now.
@@ -109,12 +113,12 @@ export class CheckoutService {
         const keys = input.seats.map((s) => `${s.row}:${s.seat}`);
         if (new Set(keys).size !== keys.length) throw new BadRequestException('Each seat can only be picked once.');
         if (input.seats.some((s) => !rows.has(s.row) || s.seat > (section.seatsPerRow ?? 0))) throw new BadRequestException('Some of those seats aren’t in this section.');
-        const used = (await this.inventory.seatsInUse(tx, ev.id, [section.id], now)).get(section.id);
+        const used = (await this.inventory.seatsInUse(tx, ev.id, [section.id], now, undefined, tt.eventDateId)).get(section.id);
         const gone = input.seats.filter((s) => used?.seats.has(`${s.row}:${s.seat}`));
         if (gone.length) throw new ConflictException(`${gone.map((s) => `${s.row}${s.seat}`).join(', ')} ${gone.length === 1 ? 'was' : 'were'} just taken. Pick other seats.`);
         seats = input.seats.map((s) => ({ section: section.id, row: s.row, seat: s.seat }));
       } else if (sections.length) {
-        const inUse = await this.inventory.seatsInUse(tx, ev.id, sections.map((s) => s.id), now);
+        const inUse = await this.inventory.seatsInUse(tx, ev.id, sections.map((s) => s.id), now, undefined, tt.eventDateId);
         seats = pickFromSections(sections, inUse, input.quantity);
         if (!seats) throw new ConflictException('Not enough seats together. Try fewer tickets or another section.');
       }
@@ -140,9 +144,11 @@ export class CheckoutService {
     const h = await this.prisma.hold.findUnique({
       where: { id },
       include: {
-        ticketType: { select: { id: true, description: true, priceCents: true, pricing: true, pwywMinCents: true, pwywSuggestedCents: true, pwywMaxCents: true, pwywQuickPicks: true, ...TIER_FIELDS } },
+        ticketType: { select: { id: true, description: true, priceCents: true, pricing: true, pwywMinCents: true, pwywSuggestedCents: true, pwywMaxCents: true, pwywQuickPicks: true, eventDateId: true, validDateIds: true, ...TIER_FIELDS } },
         event: {
           select: {
+            dateMode: true,
+            dates: true,
             slug: true,
             title: true,
             subtitle: true,
@@ -167,9 +173,9 @@ export class CheckoutService {
       },
     });
     if (!h) throw new NotFoundException('Hold not found.');
-    const { seatMap, donationsEnabled, donationCause, donationDescription, donationSuggestedCents, donationMinCents, ...event } = h.event;
+    const { seatMap, donationsEnabled, donationCause, donationDescription, donationSuggestedCents, donationMinCents, dates, ...event } = h.event;
     const section = (seatMap as SeatMap | null)?.sections.find((s) => s.id === h.sectionId);
-    const { pwywMinCents, pwywSuggestedCents, pwywMaxCents, pwywQuickPicks, ...tt } = h.ticketType;
+    const { pwywMinCents, pwywSuggestedCents, pwywMaxCents, pwywQuickPicks, eventDateId, validDateIds, ...tt } = h.ticketType;
     const pwyw = pwywView(h.ticketType, event.feeMode, config.organizerFeePermille);
     return {
       id: h.id,
@@ -183,7 +189,9 @@ export class CheckoutService {
       unitCents: pwyw && h.amountCents !== null ? buyerPrice(h.amountCents, event.feeMode, config.organizerFeePermille) : h.ticketType.priceCents,
       // The donation chosen before checkout moved here (PATCH /holds/:id); 0 = none. The quote and order use it by default.
       donationCents: h.donationCents,
-      ticketType: { ...withLook(tt), pwyw },
+      ticketType: { ...withLook(tt), pwyw, eventDateId, validDateIds },
+      // The date being bought (multiple dates) or the days the tickets cover (multi-day)
+      ...ticketDates(event.dateMode, h.ticketType, dates),
       event: { ...event, feePermille: config.organizerFeePermille, donations: donationsView({ donationsEnabled, donationCause, donationDescription, donationSuggestedCents, donationMinCents }) },
       order: h.order,
     };
@@ -271,14 +279,14 @@ export class CheckoutService {
     clientIp: string | null,
   ) {
     const now = new Date();
-    const hold = await this.prisma.hold.findUnique({ where: { id: input.holdId }, include: { ticketType: true, event: true, order: true } });
+    const hold = await this.prisma.hold.findUnique({ where: { id: input.holdId }, include: { ticketType: true, event: { include: { dates: true } }, order: true } });
     if (!hold) throw new NotFoundException('Hold not found.');
     if (hold.order) throw new ConflictException('An order already exists for these seats.');
     if (hold.status !== 'ACTIVE' || hold.expiresAt <= now) throw new ConflictException('Your seats were released. Please pick them again.');
 
     // The price is worked out again here (pay what you want and the donation are checked again, promos refused on PWYW).
     const { promo, q, amountCents, feeCents } = await this.price(hold, input);
-    const gift = input.gift ? this.gifts.validate(input.gift, input.email, hold.event.startsAt) : null;
+    const gift = input.gift ? this.gifts.validate(input.gift, input.email, ticketTimes(hold.event.dateMode, hold.event, hold.ticketType, hold.event.dates).first.startsAt) : null;
     const since = new Date(now.getTime() - 10 * 60_000);
     const [sameEmail, sameIp] = await Promise.all([
       this.prisma.order.count({ where: { email: input.email, createdAt: { gte: since } } }),
@@ -486,11 +494,13 @@ export class CheckoutService {
     const result = await this.prisma.$transaction(
       async (tx) => {
         await tx.$queryRaw`SELECT id FROM "Order" WHERE id = ${orderId} FOR UPDATE`;
-        const order = await tx.order.findUnique({ where: { id: orderId }, include: { hold: true, event: true, ticketType: true, gift: true } });
+        const order = await tx.order.findUnique({ where: { id: orderId }, include: { hold: true, event: { include: { dates: true } }, ticketType: true, gift: true } });
         if (!order) throw new NotFoundException('Order not found.');
         if (order.status !== 'PENDING') return { order, refund: false, fresh: false };
-        // Paid after the event was cancelled (the payment was already under way): refund it instead of issuing tickets.
-        if (order.event.status === 'CANCELLED') {
+        // Paid after the event (or, with multiple dates, its date) was cancelled (the payment was already under way):
+        // refund it instead of issuing tickets.
+        const dateCancelled = order.event.dates.some((d) => d.id === order.ticketType.eventDateId && d.status === 'CANCELLED');
+        if (order.event.status === 'CANCELLED' || dateCancelled) {
           await tx.order.update({ where: { id: order.id }, data: { status: 'CANCELLED' } });
           if (order.hold?.status === 'ACTIVE') await tx.hold.update({ where: { id: order.hold.id }, data: { status: 'RELEASED' } });
           return { order, refund: true, fresh: false, eventCancelled: true };
@@ -499,7 +509,7 @@ export class CheckoutService {
         if (order.resaleListingId) {
           // Fan resale: the seller's ticket is cancelled and the buyer gets a new ticket for the same seat.
           await tx.$queryRaw`SELECT id FROM "ResaleListing" WHERE id = ${order.resaleListingId} FOR UPDATE`;
-          const l = await tx.resaleListing.findUnique({ where: { id: order.resaleListingId }, include: { ticket: true } });
+          const l = await tx.resaleListing.findUnique({ where: { id: order.resaleListingId }, include: { ticket: { include: { ticketType: true } } } });
           if (!l || l.status !== 'HELD' || l.ticket.status !== 'LISTED') {
             await tx.order.update({ where: { id: order.id }, data: { status: 'CANCELLED' } });
             return { order, refund: true, fresh: false };
@@ -519,6 +529,8 @@ export class CheckoutService {
               section: old.section,
               row: old.row,
               seat: old.seat,
+              eventDateId: old.eventDateId,
+              dateKey: old.dateKey,
               // Bought on fan resale: covered by the resale scan guarantee (GuaranteeService), even after a transfer.
               resaleGuarantee: true,
             },
@@ -535,8 +547,9 @@ export class CheckoutService {
               royaltyCents: royalty,
               payoutCents: Math.max(0, l.priceCents - fee - royalty),
               payoutStatus: 'PENDING',
-              // a day after the event (event times are wall-clock UTC, so a day covers the time zone)
-              payoutAvailableAt: new Date(order.event.startsAt.getTime() + 86_400_000),
+              // a day after the event (event times are wall-clock UTC, so a day covers the time zone); with more than one
+              // date, a day after the ticket's date (DATES) or its last valid day (DAYS)
+              payoutAvailableAt: new Date(ticketTimes(order.event.dateMode, order.event, old.ticketType, order.event.dates).last.startsAt.getTime() + 86_400_000),
             },
           });
           const paid = await tx.order.update({ where: { id: order.id }, data: { status: 'PAID', paidAt: new Date(), buyerId: owner } });
@@ -558,7 +571,7 @@ export class CheckoutService {
         }
 
         const held = holdLive && order.hold!.expiresAt > now ? ((order.hold!.seats as SeatPick[] | null) ?? null) : null;
-        const seats = held?.length === order.quantity ? held : await this.pickSeats(tx, order.eventId, order.event.seatMap as SeatMap | null, order.ticketTypeId, order.hold?.sectionId ?? null, order.quantity, now);
+        const seats = held?.length === order.quantity ? held : await this.pickSeats(tx, order.eventId, order.event.seatMap as SeatMap | null, order.ticketType, order.hold?.sectionId ?? null, order.quantity, now);
         const owner = order.buyerId ?? (await tx.user.findUnique({ where: { email: order.email }, select: { id: true } }))?.id ?? null;
 
         await tx.ticket.createMany({
@@ -575,6 +588,7 @@ export class CheckoutService {
             section: s.section,
             row: s.row,
             seat: s.seat,
+            ...ticketDateFields(order.ticketType),
           })),
         });
         await tx.ticketType.update({ where: { id: order.ticketTypeId }, data: { sold: { increment: order.quantity } } });
@@ -613,8 +627,8 @@ export class CheckoutService {
     const o = await this.prisma.order.findUnique({
       where: { id: orderId },
       include: {
-        event: { select: { title: true, startsAt: true, online: true, venue: { select: { name: true, city: true } } } },
-        ticketType: { select: { name: true } },
+        event: { select: { title: true, startsAt: true, online: true, dateMode: true, dates: true, venue: { select: { name: true, city: true } } } },
+        ticketType: { select: { name: true, eventDateId: true, validDateIds: true } },
         tickets: { select: { section: true, row: true, seat: true }, orderBy: { id: 'asc' } },
         gift: true,
       },
@@ -625,7 +639,8 @@ export class CheckoutService {
           o.gift.sendAt > new Date() ? `We’ll deliver it on ${o.gift.sendAt.toUTCString().slice(0, 16)}.` : 'We’ve sent it to them.'
         } The tickets move to their account when they open it.`
       : null;
-    const when = new Intl.DateTimeFormat('en-US', { weekday: 'long', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'UTC' }).format(o.event.startsAt);
+    // The ticket's own date with multiple dates; its days for a multi-day pass.
+    const when = whenText(o.event.dateMode, o.event, o.ticketType, o.event.dates);
     const where = o.event.online ? 'Online' : o.event.venue ? `${o.event.venue.name}, ${o.event.venue.city}` : '';
     const seats = o.tickets.filter((t) => t.seat !== null).map((t) => `${t.section} · Row ${t.row} · Seat ${t.seat}`);
     const { html, text } = render({
@@ -651,11 +666,12 @@ export class CheckoutService {
   }
 
   /** Best-available seats for a paid order. GA sections and events without a map get no seat numbers. */
-  private async pickSeats(tx: Tx, eventId: string, map: SeatMap | null, ticketTypeId: string, sectionId: string | null, qty: number, now: Date): Promise<SeatPick[] | { section: null; row: null; seat: null }[]> {
-    let sections = (map?.sections ?? []).filter((s) => s.ticketTypeId === ticketTypeId && (!sectionId || s.id === sectionId));
-    if (!sections.length && sectionId) sections = (map?.sections ?? []).filter((s) => s.ticketTypeId === ticketTypeId);
+  private async pickSeats(tx: Tx, eventId: string, map: SeatMap | null, tt: { id: string; tierKey: string | null; eventDateId: string | null }, sectionId: string | null, qty: number, now: Date): Promise<SeatPick[] | { section: null; row: null; seat: null }[]> {
+    const tier = seatTier(tt);
+    let sections = (map?.sections ?? []).filter((s) => s.ticketTypeId === tier && (!sectionId || s.id === sectionId));
+    if (!sections.length && sectionId) sections = (map?.sections ?? []).filter((s) => s.ticketTypeId === tier);
     if (!sections.length) return Array.from({ length: qty }, () => ({ section: null, row: null, seat: null }));
-    const inUse = await this.inventory.seatsInUse(tx, eventId, sections.map((s) => s.id), now);
+    const inUse = await this.inventory.seatsInUse(tx, eventId, sections.map((s) => s.id), now, undefined, tt.eventDateId);
     const picked = pickFromSections(sections, inUse, qty);
     if (!picked) throw new ConflictException('Not enough seats together. Try fewer tickets or another section.');
     return picked;
@@ -665,8 +681,8 @@ export class CheckoutService {
     const o = await this.prisma.order.findUnique({
       where: { id: orderId },
       include: {
-        event: { select: { slug: true, title: true, startsAt: true, venue: { select: { name: true, city: true } } } },
-        ticketType: { select: TIER_FIELDS },
+        event: { select: { slug: true, title: true, startsAt: true, dateMode: true, dates: true, venue: { select: { name: true, city: true } } } },
+        ticketType: { select: { ...TIER_FIELDS, eventDateId: true, validDateIds: true } },
         tickets: { select: { id: true, section: true, row: true, seat: true, status: true, holderName: true }, orderBy: { id: 'asc' } },
         gift: { select: { id: true, recipientName: true, recipientEmail: true, message: true, sendAt: true, sentAt: true, claimedAt: true } },
       },
@@ -674,7 +690,8 @@ export class CheckoutService {
     if (!o) throw new NotFoundException('Order not found.');
     // A comp's note and issuer are the organizer's own.
     const { clientIp: _ip, paymentRef: _ref, compNote: _note, compIssuedById: _by, ...safe } = o;
-    return { ...safe, ticketType: withLook(safe.ticketType) };
+    const { dates, ...event } = safe.event;
+    return { ...safe, event, ticketType: withLook(safe.ticketType), ...ticketDates(event.dateMode, safe.ticketType, dates) };
   }
 
   async getOrder(orderId: string, user: AuthUser | null, email?: string) {
@@ -725,14 +742,21 @@ export class CheckoutService {
         createdAt: true,
         paidAt: true,
         resaleListingId: true,
-        event: { select: { slug: true, title: true, startsAt: true, timezone: true, imageUrl: true, status: true, venue: { select: { name: true, city: true } } } },
-        ticketType: { select: TIER_FIELDS },
+        event: { select: { slug: true, title: true, startsAt: true, timezone: true, imageUrl: true, status: true, dateMode: true, dates: true, venue: { select: { name: true, city: true } } } },
+        ticketType: { select: { ...TIER_FIELDS, eventDateId: true, validDateIds: true } },
         gift: { select: { recipientName: true, sendAt: true, sentAt: true, claimedAt: true } },
         refunds: { orderBy: { createdAt: 'desc' }, take: 1, select: { id: true, status: true, createdAt: true, decidedAt: true, amountCents: true } },
       },
     });
     return {
-      orders: rows.map(({ refunds, resaleListingId, ...o }) => ({ ...o, ticketType: withLook(o.ticketType), resale: !!resaleListingId, refundRequest: refunds[0] ?? null })),
+      orders: rows.map(({ refunds, resaleListingId, event: { dates, ...event }, ...o }) => ({
+        ...o,
+        event,
+        ticketType: withLook(o.ticketType),
+        ...ticketDates(event.dateMode, o.ticketType, dates),
+        resale: !!resaleListingId,
+        refundRequest: refunds[0] ?? null,
+      })),
     };
   }
 

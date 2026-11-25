@@ -54,6 +54,7 @@ import { organizerNet } from '../domain/money';
 import { ticketLeft, ticketTotal } from '../domain/pwyw';
 import { organizerPaidOut } from '../domain/paid-out';
 import { AdminService } from '../admin/admin.module';
+import { dateView, validDays, type DateRow } from '../domain/event-dates';
 
 const HOUR = 3600_000;
 const DAY = 24 * HOUR;
@@ -87,6 +88,34 @@ export function claimWindow(e: { startsAt: Date; endsAt: Date | null; timezone: 
 
 /** Inside the window, both ends included. */
 export const windowOpen = (w: { opensAt: Date; closesAt: Date }, now = Date.now()) => now >= w.opensAt.getTime() && now <= w.closesAt.getTime();
+
+/** What a ticket's claim windows depend on when the event has more than one date. */
+export type DatedTicket = { mode: string; dates: DateRow[]; tt: { eventDateId: string | null; validDateIds: string[] } };
+
+/**
+ * The claim windows of a ticket: one for the event (SINGLE), one for its own date (DATES), or one per valid day
+ * (DAYS: a claim is about one day). Each date's window runs from 3 hours before its start to 48 hours after its end.
+ */
+export function claimWindows(e: { startsAt: Date; endsAt: Date | null; timezone: string | null }, dated?: DatedTicket): { eventDateId: string | null; opensAt: Date; closesAt: Date }[] {
+  if (dated?.mode === 'DATES' && dated.tt.eventDateId) {
+    const d = dated.dates.find((x) => x.id === dated.tt.eventDateId);
+    if (d) return [{ eventDateId: d.id, ...claimWindow({ ...d, timezone: e.timezone }) }];
+  }
+  if (dated?.mode === 'DAYS') {
+    const days = validDays(dated.dates, dated.tt.validDateIds).filter((d) => d.status === 'ACTIVE');
+    if (days.length) return days.map((d) => ({ eventDateId: d.id, ...claimWindow({ ...d, timezone: e.timezone }) }));
+  }
+  return [{ eventDateId: null, ...claimWindow(e) }];
+}
+
+/**
+ * A multi-day pass's refund for one day: its share of the order split evenly over its valid days (the days' shares
+ * add up to the ticket's share), capped at what's still refundable of the order's tickets.
+ */
+export function dayShare(o: { totalCents: number; refundedCents: number; quantity: number; donationCents?: number; donationRefundedCents?: number }, ticketId: string, days: string[], dayId: string) {
+  const i = Math.max(0, days.indexOf(dayId));
+  return Math.max(0, Math.min(splitCents(ticketShare(o, ticketId), days.length, i), ticketLeft(o)));
+}
 
 /* ---------- coverage and amounts ---------- */
 
@@ -178,6 +207,7 @@ export function claimView(c: GuaranteeClaim) {
   return {
     id: c.id,
     ticketId: c.ticketId,
+    eventDateId: c.eventDateId,
     status: c.status,
     reason: c.reason,
     details: c.details,
@@ -203,9 +233,24 @@ export function guaranteeFor(
   o: { totalCents: number; refundedCents: number; quantity: number; status: OrderStatus; donationCents?: number; donationRefundedCents?: number; kind?: string },
   e: { startsAt: Date; endsAt: Date | null; timezone: string | null },
   now = Date.now(),
+  dated?: DatedTicket,
 ) {
   const cover = coverage(t, o);
-  const w = claimWindow(e);
+  const ws = claimWindows(e, dated);
+  const w = { opensAt: ws[0].opensAt, closesAt: ws[ws.length - 1].closesAt };
+  // Multi-day passes: a claim is about one day and refunds that day's share (one claim per ticket).
+  if (dated?.mode === 'DAYS' && ws[0].eventDateId) {
+    const ids = ws.map((x) => x.eventDateId!);
+    return {
+      ...cover,
+      refundCents: cover.covered ? (t.guaranteeClaim?.amountCents ?? dayShare(o, t.id, ids, ids[0])) : 0,
+      opensAt: w.opensAt,
+      closesAt: w.closesAt,
+      open: cover.covered && ws.some((x) => windowOpen(x, now)),
+      days: ws.map((x) => ({ eventDateId: x.eventDateId!, opensAt: x.opensAt, closesAt: x.closesAt, open: cover.covered && windowOpen(x, now), refundCents: cover.covered ? dayShare(o, t.id, ids, x.eventDateId!) : 0 })),
+      claim: t.guaranteeClaim ? claimView(t.guaranteeClaim) : null,
+    };
+  }
   return {
     ...cover,
     refundCents: cover.covered ? (t.guaranteeClaim?.amountCents ?? refundableShare(o, t.id)) : 0,
@@ -219,6 +264,7 @@ export function guaranteeFor(
 export class GuaranteeClaimDto {
   @ApiProperty({ enum: CLAIM_REASONS }) @IsIn(CLAIM_REASONS) reason: ClaimReason;
   @ApiPropertyOptional({ maxLength: 1000 }) @IsOptional() @IsString() @MaxLength(1000) details?: string;
+  @ApiPropertyOptional({ description: 'Multi-day passes (required there): the day the ticket didn’t work' }) @IsOptional() @IsString() @MaxLength(40) eventDateId?: string;
 }
 
 export class GuaranteeDecisionDto {
@@ -242,6 +288,8 @@ const ADMIN_INCLUDE = {
       endsAt: true,
       timezone: true,
       feeMode: true,
+      dateMode: true,
+      dates: true,
       venue: { select: { name: true, city: true } },
       org: { select: { id: true, name: true, payoutSchedule: true, payoutProvider: true, paystackSubaccount: true } },
     },
@@ -270,12 +318,13 @@ const ADMIN_INCLUDE = {
     },
   },
   ticket: {
-    select: { id: true, status: true, holderName: true, holderEmail: true, section: true, row: true, seat: true, checkedInAt: true, checkedInDevice: true, checkedInBy: true, ticketType: { select: { name: true } } },
+    select: { id: true, status: true, holderName: true, holderEmail: true, section: true, row: true, seat: true, checkedInAt: true, checkedInDevice: true, checkedInBy: true, eventDateId: true, ticketType: { select: { name: true, eventDateId: true, validDateIds: true } } },
   },
 } satisfies Prisma.GuaranteeClaimInclude;
 type AdminRow = Prisma.GuaranteeClaimGetPayload<{ include: typeof ADMIN_INCLUDE }>;
 
 const SCAN_LABEL: Record<string, string> = {
+  WRONG_DATE: 'wrong date',
   ALREADY_USED: 'already used',
   VOID: 'cancelled ticket',
   WRONG_EVENT: 'wrong event',
@@ -302,8 +351,9 @@ export class GuaranteeService {
     const t = await this.prisma.ticket.findUnique({
       where: { id },
       include: {
-        event: { select: { id: true, title: true, status: true, startsAt: true, endsAt: true, timezone: true } },
+        event: { select: { id: true, title: true, status: true, startsAt: true, endsAt: true, timezone: true, dateMode: true, dates: true } },
         order: { select: { id: true, status: true, quantity: true, totalCents: true, refundedCents: true, donationCents: true, donationRefundedCents: true, kind: true, currency: true, email: true } },
+        ticketType: { select: { eventDateId: true, validDateIds: true } },
         guaranteeClaim: true,
       },
     });
@@ -313,7 +363,7 @@ export class GuaranteeService {
 
   async status(id: string, user: AuthUser) {
     const t = await this.held(id, user);
-    return guaranteeFor(t, t.order, t.event);
+    return guaranteeFor(t, t.order, t.event, Date.now(), { mode: t.event.dateMode, dates: t.event.dates, tt: t.ticketType });
   }
 
   async create(id: string, user: AuthUser, dto: GuaranteeClaimDto) {
@@ -328,17 +378,38 @@ export class GuaranteeService {
     if (t.status === 'VOID') throw new BadRequestException('This ticket has been cancelled, so there’s nothing to claim.');
     if (t.status === 'TRANSFER_PENDING') throw new BadRequestException('This ticket is being transferred. Cancel the transfer to make a claim.');
     if (t.status === 'LISTED') throw new BadRequestException('This ticket is listed for resale. Remove the listing to make a claim.');
-    const amountCents = refundableShare(t.order, t.id);
+    // Multiple dates: the window is the ticket's own date's (DATES) or the claimed day's (DAYS, which must say which).
+    const dated = { mode: t.event.dateMode, dates: t.event.dates, tt: t.ticketType };
+    const windows = claimWindows(t.event, dated);
+    const days = t.event.dateMode === 'DAYS' ? windows.map((x) => x.eventDateId!).filter(Boolean) : [];
+    let dayId: string | null = null;
+    if (t.event.dateMode === 'DATES' && t.eventDateId && t.event.dates.some((d) => d.id === t.eventDateId && d.status === 'CANCELLED')) {
+      throw new BadRequestException('This date was cancelled, so your order is refunded in full automatically.');
+    }
+    if (days.length) {
+      if (!dto.eventDateId) throw new BadRequestException('Pick the day your ticket didn’t work (eventDateId).');
+      if (!days.includes(dto.eventDateId)) throw new BadRequestException('This ticket isn’t valid on that day.');
+      dayId = dto.eventDateId;
+    }
+    const amountCents = dayId ? dayShare(t.order, t.id, days, dayId) : refundableShare(t.order, t.id);
     if (amountCents <= 0) throw new BadRequestException('This order has already been refunded in full, so there’s nothing to claim.');
-    const w = claimWindow(t.event);
+    const w = windows.find((x) => x.eventDateId === dayId) ?? windows[0];
     const now = Date.now();
-    if (now < w.opensAt.getTime()) throw new BadRequestException(`Claims open 3 hours before the event starts: from ${venueTime(w.opensAt, t.event.timezone)}.`);
-    if (now > w.closesAt.getTime()) throw new BadRequestException(`The claim window closed at ${venueTime(w.closesAt, t.event.timezone)}. Claims are open until 48 hours after the event ends.`);
+    const what = dayId ? 'that day' : t.event.dateMode === 'DATES' ? 'your date' : 'the event';
+    if (now < w.opensAt.getTime()) throw new BadRequestException(`Claims open 3 hours before ${what} starts: from ${venueTime(w.opensAt, t.event.timezone)}.`);
+    if (now > w.closesAt.getTime()) throw new BadRequestException(`The claim window closed at ${venueTime(w.closesAt, t.event.timezone)}. Claims are open until 48 hours after ${what} ends.`);
 
     // The automatic decision, from the door's own records: only a check-in settles a claim on arrival (see the top).
+    // A multi-day pass: a check-in on the claimed day (other days don't count).
     let status: GuaranteeClaimStatus = 'PENDING';
     let decisionNote: string | null = null;
-    if (t.status === 'CHECKED_IN' || t.checkedInAt) {
+    if (dayId) {
+      const entry = await this.prisma.ticketCheckIn.findFirst({ where: { ticketId: t.id, eventDateId: dayId } });
+      if (entry) {
+        status = 'DECLINED';
+        decisionNote = `This ticket was scanned in at ${venueTime(entry.at, t.event.timezone)}.`;
+      }
+    } else if (t.status === 'CHECKED_IN' || t.checkedInAt) {
       status = 'DECLINED';
       decisionNote = `This ticket was scanned in at ${venueTime(t.checkedInAt ?? new Date(), t.event.timezone)}.`;
     }
@@ -350,6 +421,7 @@ export class GuaranteeService {
           ticketId: t.id,
           orderId: t.orderId,
           eventId: t.eventId,
+          eventDateId: dayId,
           userId: user.id,
           reason: dto.reason,
           details: dto.details?.trim() || null,
@@ -366,7 +438,7 @@ export class GuaranteeService {
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') throw new ConflictException('You’ve already made a claim for this ticket.');
       throw e;
     }
-    await this.audit.log(user.id, 'guarantee.claim', 'GuaranteeClaim', claim.id, { ticketId: t.id, orderId: t.orderId, reason: dto.reason, payer: claim.payer, amountCents });
+    await this.audit.log(user.id, 'guarantee.claim', 'GuaranteeClaim', claim.id, { ticketId: t.id, orderId: t.orderId, reason: dto.reason, payer: claim.payer, amountCents, ...(dayId ? { eventDateId: dayId } : {}) });
     if (decided) await this.audit.log(null, 'guarantee.auto_decline', 'GuaranteeClaim', claim.id, { ticketId: t.id, why: 'ticket was checked in' });
     this.notify(claim.id, decided ? 'declined' : 'received');
     return claimView(await this.prisma.guaranteeClaim.findUniqueOrThrow({ where: { id: claim.id } }));
@@ -383,8 +455,10 @@ export class GuaranteeService {
     if (!count) return;
     const c = await this.prisma.guaranteeClaim.findUniqueOrThrow({
       where: { id: claimId },
-      include: { order: true, event: { select: { feeMode: true, org: { select: { payoutSchedule: true, payoutProvider: true, paystackSubaccount: true } } } } },
+      include: { order: true, ticket: { select: { ticketType: { select: { validDateIds: true } } } }, event: { select: { feeMode: true, dateMode: true, org: { select: { payoutSchedule: true, payoutProvider: true, paystackSubaccount: true } } } } },
     });
+    // A multi-day pass refunded for one of several days keeps working on the others.
+    const keepTicket = c.event.dateMode === 'DAYS' && !!c.eventDateId && c.ticket.ticketType.validDateIds.length > 1;
     // Only the tickets: a donation on the order is never refunded by the guarantee.
     const left = ticketLeft(c.order);
     const amount = Math.min(c.amountCents, left);
@@ -395,7 +469,7 @@ export class GuaranteeService {
     const refundKey = `guarantee-${claimId}`;
     try {
       if (c.order.resaleListingId) await this.admin.refundOrder(c.orderId, amount, actor, why, { keepSellerPayout: true, refundKey });
-      else await this.admin.refundTicket(c.orderId, c.ticketId, amount, actor, why, { refundKey });
+      else await this.admin.refundTicket(c.orderId, c.ticketId, amount, actor, why, { refundKey, keepTicket });
       await this.prisma.guaranteeClaim.update({ where: { id: claimId }, data: { refundStatus: 'REFUNDED', refundedAt: new Date(), amountCents: amount, organizerCents, organizerOwedCents } });
       await this.audit.log(actor?.id ?? null, 'guarantee.refund', 'GuaranteeClaim', claimId, {
         orderId: c.orderId,
@@ -515,7 +589,11 @@ export class GuaranteeService {
     const who = new Map(people.map((p) => [p.id, p]));
     return rows.map((r) => {
       const { checkedInBy, ticketType, ...ticket } = r.ticket;
-      const { org, feeMode, ...event } = r.event;
+      const { org, feeMode, dates, ...event } = r.event;
+      // Multiple dates: the window of the ticket's date (DATES) or the claimed day (DAYS).
+      const windows = claimWindows(r.event, { mode: r.event.dateMode, dates, tt: ticketType });
+      const window = windows.find((x) => x.eventDateId === r.eventDateId) ?? windows[0];
+      const claimDate = dates.find((d) => d.id === (r.eventDateId ?? ticketType.eventDateId));
       const checker = checkedInBy ? (who.get(checkedInBy) ?? null) : null;
       const left = ticketLeft(r.order);
       const share = ticketShare(r.order, r.ticketId);
@@ -560,10 +638,13 @@ export class GuaranteeService {
             .map((s) => ({ id: s.id, status: s.status, resold: !!s.resoldAt, claim: s.guaranteeClaim, thisClaim: s.id === r.ticketId })),
         },
         ticket: { ...ticket, ticketType: ticketType.name, checkedInBy: checkedInBy ? { id: checkedInBy, name: checker?.name ?? null } : null },
+        // The date the claim is about (DATES: the ticket's; DAYS: the claimed day), else null
+        eventDateId: r.eventDateId,
+        date: claimDate ? dateView(claimDate) : null,
         scans: scans
           .filter((s) => s.ticketId === r.ticketId)
           .map((s) => ({ id: s.id, at: s.at, eventId: s.eventId, result: s.result, method: s.method, deviceId: s.deviceId, staff: s.userId ? { id: s.userId, name: who.get(s.userId)?.name ?? null } : null })),
-        window: claimWindow(r.event),
+        window: { opensAt: window.opensAt, closesAt: window.closesAt },
       };
     });
   }
@@ -623,7 +704,7 @@ export class GuaranteeService {
   private async send(claimId: string, kind: Notice) {
     const c = await this.prisma.guaranteeClaim.findUnique({
       where: { id: claimId },
-      include: { event: { select: { title: true } }, order: { select: { id: true, email: true, resaleListingId: true } }, ticket: { select: { holderEmail: true, holderName: true } } },
+      include: { event: { select: { title: true } }, order: { select: { id: true, email: true, resaleListingId: true } }, ticket: { select: { holderEmail: true, holderName: true, status: true } } },
     });
     if (!c) return;
     const amount = formatMoney(c.amountCents, c.currency);
@@ -648,7 +729,8 @@ export class GuaranteeService {
               `Your Eventro Guarantee claim for ${c.event.title} was approved${c.auto ? ': the door’s scan log shows your ticket was turned down' : ''}.`,
               `We’ve refunded ${amount}, ${what}. ${toCard}`,
               REFUND_TIMING,
-              `The ticket has been cancelled, so its QR code no longer works.${rest}`,
+              // A multi-day pass refunded for one day still works on its other days.
+              c.ticket.status !== 'VOID' ? 'This was a refund for that day: your pass still works on its other days.' : `The ticket has been cancelled, so its QR code no longer works.${rest}`,
             ],
             highlight: { label: 'Refunded', value: amount },
             push: `${c.event.title}: we’ve refunded ${amount}. ${REFUND_TIMING}`,
@@ -710,7 +792,7 @@ export class GuaranteeService {
       where: { id: claimId },
       include: {
         event: { select: { id: true, title: true, timezone: true, org: { select: { name: true, members: { where: { status: 'ACTIVE', role: 'ADMIN' }, select: { email: true } } } } } },
-        ticket: { select: { section: true, row: true, seat: true, checkedInAt: true, ticketType: { select: { name: true } } } },
+        ticket: { select: { section: true, row: true, seat: true, checkedInAt: true, status: true, ticketType: { select: { name: true } } } },
       },
     });
     if (!c || c.payer !== 'ORGANIZER' || c.refundStatus !== 'REFUNDED') return;
@@ -736,7 +818,7 @@ export class GuaranteeService {
       `Ticket ${c.ticketId}: ${c.ticket.ticketType.name}${seat ? `, ${seat}` : ''}.`,
       `What the fan told us: ${REASON_LABEL[c.reason] ?? c.reason}${c.details ? `. “${c.details}”` : '.'}${c.decisionNote ? ` Our reviewer’s note: “${c.decisionNote}”` : ''}`,
       `${evidence}${checkedIn}`,
-      `We refunded the fan ${money(c.amountCents)} for this ticket. Your payout is reduced by ${money(c.organizerCents)}, your share of the ticket${eventro > 0 ? `; Eventro covered the other ${money(eventro)} (its fee and any ticket protection)` : ''}. The ticket has been cancelled.`,
+      `We refunded the fan ${money(c.amountCents)} for this ticket. Your payout is reduced by ${money(c.organizerCents)}, your share of the ticket${eventro > 0 ? `; Eventro covered the other ${money(eventro)} (its fee and any ticket protection)` : ''}. ${c.ticket.status === 'VOID' ? 'The ticket has been cancelled.' : 'This was one day of a multi-day pass, which still works on its other days.'}`,
       ...(c.organizerOwedCents > 0
         ? [`You’d already been paid for this order, so ${money(c.organizerOwedCents)} is recorded as owed to Eventro. Our team will be in touch about it.`]
         : []),

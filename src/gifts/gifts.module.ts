@@ -36,6 +36,7 @@ import { CurrentUser, Public, type AuthUser } from '../common/auth';
 import { MailService, formatMoney, render } from '../mail/mail.module';
 import { sectionName, type SeatMap } from '../domain/seatmap';
 import { NoticeService } from '../push/notices';
+import { ticketDates, whenText, type DateRow } from '../domain/event-dates';
 
 export type GiftInput = { name: string; email: string; message?: string; sendAt?: string; hidePrice?: boolean };
 
@@ -95,7 +96,7 @@ export class GiftService implements OnModuleInit, OnModuleDestroy {
   async deliver(id: string) {
     const g = await this.prisma.gift.findUnique({
       where: { id },
-      include: { order: { include: { event: { include: { venue: true, org: { select: { name: true } } } }, ticketType: true, tickets: { select: { id: true, status: true } } } } },
+      include: { order: { include: { event: { include: { venue: true, dates: true, org: { select: { name: true } } } }, ticketType: true, tickets: { select: { id: true, status: true } } } } },
     });
     if (!g || g.claimedAt || g.order.status !== 'PAID') return false;
     if (g.order.kind === 'COMP') return this.deliverComp(g);
@@ -109,7 +110,8 @@ export class GiftService implements OnModuleInit, OnModuleDestroy {
     }
     await this.prisma.ticket.updateMany({ where: { orderId: g.orderId, status: 'TRANSFER_PENDING' }, data: { transferTo: g.recipientEmail } });
     const e = g.order.event;
-    const when = new Intl.DateTimeFormat('en-US', { weekday: 'long', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'UTC' }).format(e.startsAt);
+    // The tickets' own date (multiple dates) or days (multi-day).
+    const when = whenText(e.dateMode, e, g.order.ticketType, e.dates);
     const where = e.online ? 'Online' : e.venue ? `${e.venue.name}, ${e.venue.city}` : '';
     const link = `${config.webUrl}/gift/${g.token}`;
     const from = firstName(g.order.buyerName);
@@ -142,10 +144,10 @@ export class GiftService implements OnModuleInit, OnModuleDestroy {
     sentAt: Date | null;
     recipientName: string;
     recipientEmail: string;
-    order: { compGroup: string | null; quantity: number; ticketType: { name: string }; event: { title: string; startsAt: Date; online: boolean; venue: { name: string; city: string } | null; org: { name: string } } };
+    order: { compGroup: string | null; quantity: number; ticketType: { name: string; eventDateId: string | null; validDateIds: string[] }; event: { title: string; startsAt: Date; online: boolean; dateMode: string; dates: DateRow[]; venue: { name: string; city: string } | null; org: { name: string } } };
   }) {
     const e = g.order.event;
-    const when = new Intl.DateTimeFormat('en-US', { weekday: 'long', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'UTC' }).format(e.startsAt);
+    const when = whenText(e.dateMode, e, g.order.ticketType, e.dates);
     const where = e.online ? 'Online' : e.venue ? `${e.venue.name}, ${e.venue.city}` : '';
     const { html, text } = render({
       preheader: `${e.org.name} put you on the guest list for ${e.title}.`,
@@ -172,8 +174,8 @@ export class GiftService implements OnModuleInit, OnModuleDestroy {
       include: {
         order: {
           include: {
-            event: { select: { slug: true, title: true, subtitle: true, startsAt: true, imageUrl: true, online: true, timezone: true, seatMap: true, venue: { select: { name: true, city: true } }, org: { select: { name: true } } } },
-            ticketType: { select: TIER_FIELDS },
+            event: { select: { slug: true, title: true, subtitle: true, startsAt: true, imageUrl: true, online: true, timezone: true, seatMap: true, dateMode: true, dates: true, venue: { select: { name: true, city: true } }, org: { select: { name: true } } } },
+            ticketType: { select: { ...TIER_FIELDS, eventDateId: true, validDateIds: true } },
             tickets: { select: { id: true, section: true, row: true, seat: true, status: true } },
           },
         },
@@ -196,8 +198,10 @@ export class GiftService implements OnModuleInit, OnModuleDestroy {
       ...(opened
         ? {
             message: g.message,
-            event: (({ seatMap: _map, org: _org, ...ev }) => ev)(g.order.event),
+            event: (({ seatMap: _map, org: _org, dates: _dates, ...ev }) => ev)(g.order.event),
             ticketType: withLook(g.order.ticketType),
+            // The tickets' date (DATES) or days (DAYS)
+            ...ticketDates(g.order.event.dateMode, g.order.ticketType, g.order.event.dates),
             quantity: g.order.quantity,
             seats: g.order.tickets
               .filter((x) => x.seat !== null)

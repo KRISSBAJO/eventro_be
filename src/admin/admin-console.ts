@@ -20,6 +20,9 @@ import { CheckoutModule } from '../checkout/checkout.module';
 import { VenuesModule } from '../venues/venues.module';
 import { AdminController, AdminService } from './admin.module';
 import { EventCancellation } from './cancel-event';
+// Capacity and sales shown leave out the tier copies of a cancelled date (LIVE_TYPE).
+import { LIVE_TYPE, dateRangeWhere, dateView } from '../domain/event-dates';
+import { CancelDateDto } from '../organizer/organizer.dto';
 import { AdminGuaranteeController, GuaranteeController, GuaranteeService, OrganizerGuaranteeController } from '../guarantee/guarantee';
 
 const PAGE = 25;
@@ -123,7 +126,7 @@ export class AdminConsoleService {
         this.prisma.organization.count({ where: { verifiedAt: { not: null } } }),
         this.prisma.organization.count({ where: { suspendedAt: { not: null } } }),
         this.prisma.event.groupBy({ by: ['status'], _count: { _all: true } }),
-        this.prisma.event.count({ where: { status: 'PUBLISHED', startsAt: { gte: new Date() } } }),
+        this.prisma.event.count({ where: { status: 'PUBLISHED', ...dateRangeWhere(new Date()) } }),
         this.prisma.subscriber.count({ where: { unsubscribedAt: null } }),
         this.prisma.priceWatch.count({ where: { stoppedAt: null } }),
         this.prisma.refundRequest.count({ where: { status: 'OPEN' } }),
@@ -156,7 +159,7 @@ export class AdminConsoleService {
 
     const top = await this.prisma.event.findMany({
       where: { status: 'PUBLISHED' },
-      select: { id: true, slug: true, title: true, currency: true, ticketTypes: { select: { sold: true, capacity: true, priceCents: true } } },
+      select: { id: true, slug: true, title: true, currency: true, ticketTypes: { where: LIVE_TYPE, select: { sold: true, capacity: true, priceCents: true } } },
     });
     const topEvents = top
       .map((e) => ({
@@ -375,7 +378,7 @@ export class AdminConsoleService {
             salesPaused: true,
             online: true,
             venue: { select: { name: true, city: true } },
-            ticketTypes: { select: { sold: true, capacity: true, priceCents: true } },
+            ticketTypes: { where: LIVE_TYPE, select: { sold: true, capacity: true, priceCents: true } },
           },
         },
       },
@@ -461,7 +464,8 @@ export class AdminConsoleService {
         include: {
           org: { select: { id: true, name: true, verifiedAt: true, suspendedAt: true } },
           venue: { select: { name: true, city: true } },
-          ticketTypes: { select: { sold: true, capacity: true, priceCents: true } },
+          ticketTypes: { where: LIVE_TYPE, select: { sold: true, capacity: true, priceCents: true } },
+          dates: { orderBy: { startsAt: 'asc' } },
           _count: { select: { priceWatches: true, priceDrops: true } },
         },
       }),
@@ -483,6 +487,8 @@ export class AdminConsoleService {
         reviewNote: e.reviewNote,
         cancelledAt: e.cancelledAt,
         cancelReason: e.cancelReason,
+        dateMode: e.dateMode,
+        dates: e.dates.map(dateView),
         online: e.online,
         org: { id: e.org.id, name: e.org.name, verified: !!e.org.verifiedAt, suspended: !!e.org.suspendedAt },
         venue: e.venue,
@@ -790,6 +796,14 @@ export class AdminConsoleController {
   /** Cancels the event and refunds every paid order. Safe to call again: it only retries refunds that failed. */
   @Post('events/:id/cancel') @HttpCode(200) cancel(@Param('id') id: string, @CurrentUser() u: AuthUser, @Body() dto: AdminCancelEventDto) {
     return this.cancellation.cancel(id, u, dto.reason, 'admin');
+  }
+  /** Multiple dates: what cancelling one date would refund. */
+  @Get('events/:id/dates/:dateId/cancel-preview') cancelDatePreview(@Param('id') id: string, @Param('dateId') dateId: string) {
+    return this.cancellation.previewDate(id, dateId);
+  }
+  /** Cancels one date of a multiple-dates event and refunds its orders (the last active date cancels the event). Safe to call again. */
+  @Post('events/:id/dates/:dateId/cancel') @HttpCode(200) cancelDate(@Param('id') id: string, @Param('dateId') dateId: string, @CurrentUser() u: AuthUser, @Body() dto: CancelDateDto) {
+    return this.cancellation.cancelDate(id, dateId, u, dto.reason, 'admin');
   }
   @Post('events/:id/sales') @HttpCode(200) sales(@Param('id') id: string, @CurrentUser() u: AuthUser, @Body() dto: SalesDto) {
     return this.svc.setSales(id, u, dto.paused);

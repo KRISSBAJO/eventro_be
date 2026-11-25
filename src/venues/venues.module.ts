@@ -45,6 +45,7 @@ import { sectionCapacity, validateSeatMap, type SeatMap } from '../domain/seatma
 import { randomSuffix, slugify } from '../domain/codes';
 import { placeTimezone } from '../geo/geo.module';
 import { PushService } from '../push/push.service';
+import { LIVE_TYPE, dateRangeWhere, nextDateView } from '../domain/event-dates';
 import { OrganizerBookingsController, VenueBookingPublicController, VenueBookingService, VenueManagerBookingsController, publicListing } from './venue-bookings';
 
 const PAGE = 25;
@@ -189,9 +190,9 @@ export class VenuesService {
       where: { slug },
       include: {
         events: {
-          where: { status: 'PUBLISHED', visibility: 'PUBLIC', startsAt: { gte: new Date() } },
+          where: { status: 'PUBLISHED', visibility: 'PUBLIC', ...dateRangeWhere(new Date()) },
           orderBy: { startsAt: 'asc' },
-          select: { slug: true, title: true, subtitle: true, startsAt: true, imageUrl: true, category: true, currency: true, ticketTypes: { select: { priceCents: true } } },
+          select: { slug: true, title: true, subtitle: true, startsAt: true, imageUrl: true, category: true, currency: true, dateMode: true, dates: { where: { status: 'ACTIVE' }, orderBy: { startsAt: 'asc' } }, ticketTypes: { where: LIVE_TYPE, select: { priceCents: true } } },
         },
         _count: { select: { claims: { where: { status: 'APPROVED' } }, events: true } },
         listing: true,
@@ -207,7 +208,16 @@ export class VenuesService {
       managed: _count.claims > 0,
       eventsHosted: _count.events,
       layout: this.layoutInfo({ layout }),
-      events: events.map(({ ticketTypes, ...e }) => ({ ...e, fromCents: ticketTypes.length ? Math.min(...ticketTypes.map((t) => t.priceCents)) : 0 })),
+      // Multiple dates: the next date and how many are still to come ("+N more dates"), like event list items.
+      events: events.map(({ ticketTypes, dates, ...e }) => {
+        const now = new Date();
+        return {
+          ...e,
+          fromCents: ticketTypes.length ? Math.min(...ticketTypes.map((t) => t.priceCents)) : 0,
+          nextDate: nextDateView(e.dateMode, dates, now),
+          dateCount: e.dateMode === 'SINGLE' ? 0 : dates.filter((d) => d.startsAt >= now).length,
+        };
+      }),
     };
   }
 

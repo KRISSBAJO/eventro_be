@@ -31,6 +31,7 @@ import { CurrentUser, OptionalAuth, Public, Roles, type AuthUser } from '../comm
 import { RATE_RULES, RateLimit } from '../common/rate-limit';
 import { MailService, formatMoney, render } from '../mail/mail.module';
 import { sectionName, type SeatMap } from '../domain/seatmap';
+import { ticketDates, ticketTimes } from '../domain/event-dates';
 
 const HOLD_MINUTES = 10;
 const PAGE = 25;
@@ -69,19 +70,21 @@ export class ResaleService {
 
   async forEvent(slug: string) {
     await this.tidy();
-    const e = await this.prisma.event.findUnique({ where: { slug }, select: { id: true, status: true, resaleEnabled: true, seatMap: true, currency: true } });
+    const e = await this.prisma.event.findUnique({ where: { slug }, select: { id: true, status: true, resaleEnabled: true, seatMap: true, currency: true, startsAt: true, doorsAt: true, endsAt: true, transferCutoffMinutes: true, dateMode: true, dates: true } });
     if (!e || e.status !== 'PUBLISHED') throw new NotFoundException('Event not found.');
     if (!e.resaleEnabled) return { enabled: false, listings: [] };
     const rows = await this.prisma.resaleListing.findMany({
       where: { eventId: e.id, status: 'ACTIVE' },
       orderBy: { priceCents: 'asc' },
-      include: { ticket: { select: { section: true, row: true, seat: true, ticketType: { select: { id: true, ...TIER_FIELDS } } } } },
+      include: { ticket: { select: { section: true, row: true, seat: true, ticketType: { select: { id: true, eventDateId: true, validDateIds: true, ...TIER_FIELDS } } } } },
       take: 200,
     });
     const map = e.seatMap as SeatMap | null;
+    // Multiple dates: each listing shows its date (DATES) or days (DAYS); ones past their own cutoff aren't buyable.
+    const open = (l: (typeof rows)[number]) => e.dateMode === 'SINGLE' || !pastCutoff({ ...e, startsAt: ticketTimes(e.dateMode, e, l.ticket.ticketType, e.dates).first.startsAt });
     return {
       enabled: true,
-      listings: rows.map((l) => {
+      listings: rows.filter(open).map((l) => {
         const sec = map?.sections.find((s) => s.id === l.ticket.section);
         return {
           id: l.id,
@@ -89,6 +92,7 @@ export class ResaleService {
           faceCents: l.faceCents,
           currency: l.currency,
           ticketType: withLook(l.ticket.ticketType),
+          ...ticketDates(e.dateMode, l.ticket.ticketType, e.dates),
           section: l.ticket.section,
           sectionName: sec ? sectionName(sec) : l.ticket.section,
           row: l.ticket.row,
@@ -102,10 +106,11 @@ export class ResaleService {
   /** Holds a listing for one buyer for 10 minutes. The returned key is needed to create the order. */
   async hold(id: string, user: AuthUser | null) {
     await this.tidy();
-    const l = await this.prisma.resaleListing.findUnique({ where: { id }, include: { event: true } });
+    const l = await this.prisma.resaleListing.findUnique({ where: { id }, include: { event: { include: { dates: true } }, ticket: { select: { ticketType: { select: { eventDateId: true, validDateIds: true } } } } } });
     if (!l || l.event.status !== 'PUBLISHED' || !l.event.resaleEnabled) throw new NotFoundException('That listing isn’t available.');
     if (user && user.id === l.sellerId) throw new BadRequestException('That’s your own listing.');
-    if (pastCutoff(l.event)) throw new BadRequestException('Resale has closed for this event.');
+    // The ticket's own date (DATES) or first valid day (DAYS) sets the cutoff.
+    if (pastCutoff({ ...l.event, startsAt: ticketTimes(l.event.dateMode, l.event, l.ticket.ticketType, l.event.dates).first.startsAt })) throw new BadRequestException('Resale has closed for this event.');
     const key = randomBytes(16).toString('base64url');
     const heldUntil = new Date(Date.now() + HOLD_MINUTES * 60_000);
     const { count } = await this.prisma.resaleListing.updateMany({ where: { id, status: 'ACTIVE' }, data: { status: 'HELD', heldUntil, heldBy: key } });
@@ -118,15 +123,15 @@ export class ResaleService {
     const rows = await this.prisma.resaleListing.findMany({
       where: { sellerId: user.id },
       orderBy: { createdAt: 'desc' },
-      include: { event: { select: { slug: true, title: true, startsAt: true, seatMap: true } }, ticket: { select: { id: true, section: true, row: true, seat: true, ticketType: { select: TIER_FIELDS } } } },
+      include: { event: { select: { slug: true, title: true, startsAt: true, seatMap: true, dateMode: true, dates: true } }, ticket: { select: { id: true, section: true, row: true, seat: true, ticketType: { select: { ...TIER_FIELDS, eventDateId: true, validDateIds: true } } } } },
       take: 100,
     });
     const pending = rows.filter((r) => r.payoutStatus === 'PENDING' || r.payoutStatus === 'AVAILABLE' || r.payoutStatus === 'HELD');
     return {
       // Section names come from the event's seat map ("Lower Level 104"), like GET /me/tickets; the map stays out.
-      listings: rows.map(({ heldBy: _k, event: { seatMap, ...event }, ticket, ...r }) => {
+      listings: rows.map(({ heldBy: _k, event: { seatMap, dates, ...event }, ticket, ...r }) => {
         const sec = (seatMap as SeatMap | null)?.sections.find((s) => s.id === ticket.section);
-        return { ...r, event, ticket: { ...ticket, ticketType: withLook(ticket.ticketType), sectionName: sec ? sectionName(sec) : null } };
+        return { ...r, event, ticket: { ...ticket, ticketType: withLook(ticket.ticketType), sectionName: sec ? sectionName(sec) : null, ...ticketDates(event.dateMode, ticket.ticketType, dates) } };
       }),
       totals: { owedCents: pending.reduce((n, r) => n + (r.payoutCents ?? 0), 0), paidCents: rows.filter((r) => r.payoutStatus === 'PAID').reduce((n, r) => n + (r.payoutCents ?? 0), 0) },
     };

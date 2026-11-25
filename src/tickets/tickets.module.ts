@@ -15,6 +15,7 @@ import { pastCutoff } from '../resale/resale.module';
 import { NoticeService } from '../push/notices';
 import { GiftService } from '../gifts/gifts.module';
 import { guaranteeFor } from '../guarantee/guarantee';
+import { byStart, dateView, ticketDates, ticketTimes } from '../domain/event-dates';
 
 /** How the phone turns a seed into door codes (also in the README). */
 export const QR_SEED_SPEC = {
@@ -53,9 +54,15 @@ export class TicketsService {
   }
 
   private async owned(id: string, user: AuthUser) {
-    const t = await this.prisma.ticket.findUnique({ where: { id }, include: { ticketType: true, event: true } });
+    const t = await this.prisma.ticket.findUnique({ where: { id }, include: { ticketType: true, event: { include: { dates: true } } } });
     if (!t || (t.ownerId !== user.id && t.holderEmail !== user.email)) throw new NotFoundException('Ticket not found.');
-    return t;
+    // Multiple dates: transfer and resale cut-offs run from the ticket's own date (DATES) or first valid day (DAYS).
+    return { ...t, cutoffEvent: { ...t.event, startsAt: ticketTimes(t.event.dateMode, t.event, t.ticketType, t.event.dates).first.startsAt } };
+  }
+
+  /** A multi-day pass used on one day still scans on its other days. */
+  private scannable(t: { status: string; event: { dateMode: string } }) {
+    return t.status === 'ACTIVE' || (t.status === 'CHECKED_IN' && t.event.dateMode === 'DAYS');
   }
 
   async mine(user: AuthUser) {
@@ -66,13 +73,14 @@ export class TicketsService {
       where: {
         AND: [
           { OR: [{ ownerId: user.id }, { holderEmail: user.email }] },
-          { OR: [{ status: { not: 'VOID' } }, { event: { status: 'CANCELLED' }, resoldAt: null }, { guaranteeClaim: { isNot: null }, resoldAt: null }] },
+          // A ticket for one cancelled date of a multiple-dates event shows like one for a cancelled event.
+          { OR: [{ status: { not: 'VOID' } }, { event: { status: 'CANCELLED' }, resoldAt: null }, { eventDate: { status: 'CANCELLED' }, resoldAt: null }, { guaranteeClaim: { isNot: null }, resoldAt: null }] },
           // Tickets waiting for this account (a comp sent to this email) are listed under incoming, not here.
           { OR: [{ status: { not: 'TRANSFER_PENDING' } }, { transferTo: null }, { transferTo: { not: user.email } }] },
         ],
       },
       include: {
-        ticketType: { select: { priceCents: true, ...TIER_FIELDS } },
+        ticketType: { select: { priceCents: true, eventDateId: true, validDateIds: true, ...TIER_FIELDS } },
         order: {
           select: {
             id: true,
@@ -90,20 +98,23 @@ export class TicketsService {
           },
         },
         guaranteeClaim: true,
-        event: { select: { slug: true, title: true, subtitle: true, currency: true, status: true, cancelledAt: true, cancelReason: true, startsAt: true, doorsAt: true, endsAt: true, imageUrl: true, seatMap: true, online: true, streamUrl: true, timezone: true, resaleEnabled: true, resaleCapPercent: true, resaleRoyaltyPermille: true, transfersEnabled: true, transferCutoffMinutes: true, venue: { select: { name: true, address: true, city: true } } } },
+        event: { select: { slug: true, title: true, subtitle: true, currency: true, status: true, cancelledAt: true, cancelReason: true, startsAt: true, doorsAt: true, endsAt: true, imageUrl: true, seatMap: true, online: true, streamUrl: true, timezone: true, resaleEnabled: true, resaleCapPercent: true, resaleRoyaltyPermille: true, transfersEnabled: true, transferCutoffMinutes: true, dateMode: true, dates: true, venue: { select: { name: true, address: true, city: true } } } },
       },
       orderBy: [{ event: { startsAt: 'asc' } }, { id: 'asc' }],
     });
     // Section names come from the event's seat map ("Lower Level 104"); the map itself stays out of the response.
     // Online events: the stream link goes only with tickets the holder still has (not ones being sold or transferred).
     // Paid tickets carry the Eventro Guarantee: cover, who pays, the claim window and any claim (see src/guarantee).
-    const tickets = rows.map(({ event: { seatMap, streamUrl, ...event }, guaranteeClaim, ...t }) => {
+    const tickets = rows.map(({ event: { seatMap, streamUrl, dates, ...event }, guaranteeClaim, ...t }) => {
       const s = (seatMap as SeatMap | null)?.sections.find((x) => x.id === t.section);
       const watch = event.online && (t.status === 'ACTIVE' || t.status === 'CHECKED_IN') ? streamUrl : null;
       // Usable tickets carry their QR seed, so the app can show the door code offline (see GET /tickets/:id/qr-seed).
-      const seed = t.status === 'ACTIVE' ? { qrSeed: seedFor(t) } : {};
-      const guarantee = guaranteeFor({ id: t.id, resaleGuarantee: t.resaleGuarantee, guaranteeClaim }, t.order, event);
-      return { ...t, ticketType: withLook(t.ticketType), ...seed, event: { ...event, streamUrl: watch }, sectionName: s ? sectionName(s) : null, guarantee };
+      const seed = this.scannable({ status: t.status, event }) ? { qrSeed: seedFor(t) } : {};
+      const dated = { mode: event.dateMode, dates, tt: t.ticketType };
+      const guarantee = guaranteeFor({ id: t.id, resaleGuarantee: t.resaleGuarantee, guaranteeClaim }, t.order, event, Date.now(), dated);
+      // Multiple dates: the ticket's own date (DATES) or the days it admits on (DAYS); the event's dates for context.
+      const when = ticketDates(event.dateMode, t.ticketType, dates);
+      return { ...t, ticketType: withLook(t.ticketType), ...seed, event: { ...event, streamUrl: watch, dates: dates.sort(byStart).map(dateView) }, ...when, sectionName: s ? sectionName(s) : null, guarantee };
     });
     const incoming = await this.prisma.ticket.findMany({
       where: { transferTo: user.email, status: 'TRANSFER_PENDING' },
@@ -111,17 +122,19 @@ export class TicketsService {
         id: true,
         holderName: true,
         transferExpiresAt: true,
-        event: { select: { title: true, startsAt: true } },
-        ticketType: { select: TIER_FIELDS },
+        event: { select: { title: true, startsAt: true, dateMode: true, dates: true } },
+        ticketType: { select: { ...TIER_FIELDS, eventDateId: true, validDateIds: true } },
         order: { select: { buyerName: true, kind: true, compGroup: true, event: { select: { org: { select: { name: true } } } }, gift: { select: { id: true, message: true, claimedAt: true } } } },
       },
     });
     // Gifts are labelled ("A gift from Ada", with the note), so apps don't show them as a plain transfer. Comps come
     // from the organizer.
-    const incomingTransfers = incoming.map(({ order, ...t }) => {
+    const incomingTransfers = incoming.map(({ order, event: { dates, ...event }, ...t }) => {
       const comp = order.kind === 'COMP';
       return {
         ...t,
+        event,
+        ...ticketDates(event.dateMode, t.ticketType, dates),
         ticketType: withLook(t.ticketType),
         gift: order.gift && !order.gift.claimedAt ? { id: order.gift.id, from: comp ? order.event.org.name : order.buyerName, message: order.gift.message || null, comp, group: comp ? order.compGroup : null } : null,
       };
@@ -132,14 +145,14 @@ export class TicketsService {
 
   async qr(id: string, user: AuthUser) {
     const t = await this.owned(id, user);
-    if (t.status !== 'ACTIVE') throw new BadRequestException(t.status === 'CHECKED_IN' ? 'This ticket has already been used.' : 'This ticket can’t be scanned right now.');
+    if (!this.scannable(t)) throw new BadRequestException(t.status === 'CHECKED_IN' ? 'This ticket has already been used.' : 'This ticket can’t be scanned right now.');
     return qrToken(config.qrSecret, t.id, Date.now(), t.qrVersion);
   }
 
   /** The seed the phone uses to make door codes offline. Only for usable (ACTIVE) tickets of this account. */
   async qrSeed(id: string, user: AuthUser) {
     const t = await this.owned(id, user);
-    if (t.status !== 'ACTIVE') throw new BadRequestException(t.status === 'CHECKED_IN' ? 'This ticket has already been used.' : 'This ticket can’t be scanned right now.');
+    if (!this.scannable(t)) throw new BadRequestException(t.status === 'CHECKED_IN' ? 'This ticket has already been used.' : 'This ticket can’t be scanned right now.');
     return { ticketId: t.id, seed: seedFor(t), version: t.qrVersion, ...QR_SEED_SPEC };
   }
 
@@ -148,8 +161,8 @@ export class TicketsService {
     if (email === user.email) throw new BadRequestException('That’s your own email.');
     if (t.status !== 'ACTIVE') throw new BadRequestException('Only active tickets can be transferred.');
     if (!t.event.transfersEnabled) throw new BadRequestException('The organizer doesn’t allow transfers for this event.');
-    if (pastCutoff(t.event)) throw new BadRequestException('Transfers have closed for this event.');
-    const cutoff = t.event.startsAt.getTime() - t.event.transferCutoffMinutes * 60_000;
+    if (pastCutoff(t.cutoffEvent)) throw new BadRequestException('Transfers have closed for this event.');
+    const cutoff = t.cutoffEvent.startsAt.getTime() - t.event.transferCutoffMinutes * 60_000;
     const expires = new Date(Math.min(Date.now() + TRANSFER_DAYS * 86_400_000, cutoff));
     const out = await this.prisma.ticket.update({ where: { id }, data: { status: 'TRANSFER_PENDING', transferTo: email, transferExpiresAt: expires } });
     await this.audit.log(user.id, 'ticket.transfer', 'Ticket', id, { to: email });
@@ -203,7 +216,7 @@ export class TicketsService {
     if (t.ownerId !== user.id) throw new BadRequestException('Accept this ticket into your account before selling it.');
     if (t.status !== 'ACTIVE') throw new BadRequestException('Only active tickets can be listed.');
     if (!t.event.resaleEnabled) throw new BadRequestException('The organizer doesn’t allow resale for this event.');
-    if (pastCutoff(t.event)) throw new BadRequestException('Resale has closed for this event.');
+    if (pastCutoff(t.cutoffEvent)) throw new BadRequestException('Resale has closed for this event.');
     const order = await this.prisma.order.findUniqueOrThrow({ where: { id: t.orderId }, select: { kind: true, unitCents: true, resaleListing: { select: { faceCents: true } } } });
     if (order.kind === 'COMP') throw new BadRequestException('Complimentary tickets can’t be resold.');
     // Pay what you want: face value is what the ticket was first bought for (all-in), not the tier's minimum.

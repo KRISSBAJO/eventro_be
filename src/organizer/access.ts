@@ -10,7 +10,7 @@ export const DOOR_ROLES: MemberRole[] = ['ADMIN', 'MANAGER', 'DOOR'];
 
 /** The event, if this account is an active member of its organization with one of `roles` (same rules as OrganizerService). */
 export async function eventForRole(prisma: PrismaService, id: string, user: AuthUser, roles: MemberRole[]) {
-  const ev = await prisma.event.findUnique({ where: { id }, include: { ticketTypes: { orderBy: { sortOrder: 'asc' } }, org: { select: { name: true } } } });
+  const ev = await prisma.event.findUnique({ where: { id }, include: { ticketTypes: { orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }] }, dates: { orderBy: { startsAt: 'asc' } }, org: { select: { name: true } } } });
   if (!ev) throw new NotFoundException('Event not found.');
   const m = await prisma.organizationMember.findFirst({ where: { orgId: ev.orgId, userId: user.id, status: 'ACTIVE' }, select: { role: true } });
   if (!m) throw new NotFoundException('Organization not found.');

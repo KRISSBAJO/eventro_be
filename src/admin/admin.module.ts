@@ -11,6 +11,7 @@ import { config } from '../config';
 import { CurrentUser, Roles, type AuthUser } from '../common/auth';
 import { donationLeft, ticketLeft, ticketTotal } from '../domain/pwyw';
 import { organizerPaidOut } from '../domain/paid-out';
+import { LIVE_TYPE, dateView } from '../domain/event-dates';
 
 export class RejectDto {
   @ApiProperty() @IsString() @MinLength(5) @MaxLength(500) note: string;
@@ -47,13 +48,14 @@ export class AdminService {
   async reviews(status = 'IN_REVIEW') {
     const events = await this.prisma.event.findMany({
       where: { status: status as 'IN_REVIEW' | 'PUBLISHED' | 'REJECTED' },
-      include: { ticketTypes: true, venue: true, org: { select: { id: true, name: true, supportEmail: true, _count: { select: { events: true } } } } },
+      // Multiple dates: the dates, and only the tier copies of dates still on (as on every event payload).
+      include: { ticketTypes: { where: LIVE_TYPE }, dates: { orderBy: { startsAt: 'asc' } }, venue: true, org: { select: { id: true, name: true, supportEmail: true, _count: { select: { events: true } } } } },
       orderBy: { updatedAt: 'asc' },
       take: 200,
     });
     const published = await this.prisma.event.groupBy({ by: ['orgId'], where: { status: 'PUBLISHED' }, _count: { _all: true } });
     const pub = new Map(published.map((p) => [p.orgId, p._count._all]));
-    return events.map((e) => ({ ...e, previewToken: previewToken(e.slug, e.status), flags: this.flags(e, pub.get(e.orgId) ?? 0) }));
+    return events.map((e) => ({ ...e, dates: e.dates.map(dateView), previewToken: previewToken(e.slug, e.status), flags: this.flags(e, pub.get(e.orgId) ?? 0) }));
   }
 
   /**
@@ -184,9 +186,10 @@ export class AdminService {
    * Refunds one ticket of an order (the Eventro Guarantee on a normal order): `amountCents` back through the payment
    * provider, and only that ticket voided and returned to sale. The order becomes REFUNDED once none of its tickets
    * is left and its whole total has been refunded; until then it is PARTIALLY_REFUNDED. Not for resale orders, whose
-   * seller payout rules live in `refundOrder`.
+   * seller payout rules live in `refundOrder`. With `keepTicket` (a multi-day pass refunded for one of its days) the
+   * money goes back but the ticket stays valid for its other days.
    */
-  async refundTicket(orderId: string, ticketId: string, amountCents: number, admin: Pick<AuthUser, 'id'> | null, reason: string, opts: { refundKey?: string } = {}) {
+  async refundTicket(orderId: string, ticketId: string, amountCents: number, admin: Pick<AuthUser, 'id'> | null, reason: string, opts: { refundKey?: string; keepTicket?: boolean } = {}) {
     const o = await this.prisma.order.findUnique({ where: { id: orderId } });
     if (!o) throw new NotFoundException('Order not found.');
     if (o.resaleListingId) throw new BadRequestException('Resale orders are refunded as a whole.');
@@ -197,14 +200,14 @@ export class AdminService {
     if (amountCents > remaining) throw new BadRequestException(`At most ${remaining} cents can still be refunded.`);
     if (o.paymentRef && amountCents > 0) await this.payments.byName(o.provider).refund(o.paymentRef, amountCents, opts.refundKey);
     const status = await this.prisma.$transaction(async (tx) => {
-      const { count } = await tx.ticket.updateMany({ where: { id: ticketId, status: { not: 'VOID' } }, data: { status: 'VOID', listCents: null, transferTo: null } });
+      const { count } = opts.keepTicket ? { count: 0 } : await tx.ticket.updateMany({ where: { id: ticketId, status: { not: 'VOID' } }, data: { status: 'VOID', listCents: null, transferTo: null } });
       if (count) await tx.ticketType.update({ where: { id: t.ticketTypeId }, data: { sold: { decrement: count } } });
       const live = await tx.ticket.count({ where: { orderId, status: { not: 'VOID' } } });
       const next = live === 0 && amountCents === remaining ? 'REFUNDED' : 'PARTIALLY_REFUNDED';
       await tx.order.update({ where: { id: orderId }, data: { refundedCents: { increment: amountCents }, status: next } });
       return next;
     });
-    await this.audit.log(admin?.id ?? null, status === 'REFUNDED' ? 'order.refund' : 'order.partial_refund', 'Order', orderId, { amountCents, currency: o.currency, reason, ticketId });
+    await this.audit.log(admin?.id ?? null, status === 'REFUNDED' ? 'order.refund' : 'order.partial_refund', 'Order', orderId, { amountCents, currency: o.currency, reason, ticketId, ...(opts.keepTicket ? { ticketKept: true } : {}) });
     return status;
   }
 

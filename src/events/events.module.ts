@@ -15,6 +15,10 @@ import { resolveLook } from '../domain/tier-look';
 import { pastCutoff } from '../resale/resale.module';
 import { donationsView, pwywView } from '../domain/pwyw';
 import { config } from '../config';
+import { LIVE_TYPE, dateRangeWhere, dateView, liveType, nextActive, nextDateView, ticketTimes, type DateRow } from '../domain/event-dates';
+
+/** The date asked for (DATES), else the next one on sale, else the first. */
+const pickDate = <T extends DateRow>(dates: T[], id?: string) => dates.find((d) => d.id === id) ?? nextActive(dates) ?? dates[0] ?? null;
 
 /** "Trending" counts paid tickets from this many days back. */
 const TRENDING_DAYS = 14;
@@ -81,6 +85,9 @@ export class EventCardDto {
   @ApiProperty({ description: 'Fan-resale listings on sale now (0 when resale is off or has closed for the event)' }) resaleCount: number;
   @ApiPropertyOptional({ description: 'With currency: fromCents converted to that currency (approximate, for display)', example: { currency: 'USD', cents: 1613 } })
   fromCentsIn?: { currency: string; cents: number };
+  @ApiProperty({ enum: ['SINGLE', 'DATES', 'DAYS'] }) dateMode: string;
+  @ApiProperty({ nullable: true, description: 'DATES/DAYS: the first upcoming active date ({ id, startsAt }); null for SINGLE' }) nextDate: { id: string; startsAt: Date } | null;
+  @ApiProperty({ description: 'Active dates (DATES) or days (DAYS) still to come, for "+N more dates" / "3 days"; 0 for SINGLE' }) dateCount: number;
 }
 
 @Injectable()
@@ -107,8 +114,9 @@ export class EventsService {
    * organizer's cutoff count 0, since nobody could buy from them (as GET /events/:slug/resale and the hold say).
    * Held listings don't count; a hold that ran out counts again once the resale module tidies it.
    */
-  private async resaleListed(events: { id: string; resaleEnabled: boolean; startsAt: Date; transferCutoffMinutes: number }[]) {
-    const open = events.filter((e) => e.resaleEnabled && !pastCutoff(e)).map((e) => e.id);
+  private async resaleListed(events: { id: string; resaleEnabled: boolean; startsAt: Date; transferCutoffMinutes: number }[], lastStart: Map<string, Date>) {
+    // With more than one date, resale stays open while the last date's cutoff hasn't passed.
+    const open = events.filter((e) => e.resaleEnabled && !pastCutoff({ ...e, startsAt: lastStart.get(e.id) ?? e.startsAt })).map((e) => e.id);
     if (!open.length) return new Map<string, number>();
     const rows = await this.prisma.resaleListing.groupBy({ by: ['eventId'], where: { eventId: { in: open }, status: 'ACTIVE' }, _count: { _all: true } });
     return new Map(rows.map((r) => [r.eventId, r._count._all]));
@@ -116,7 +124,14 @@ export class EventsService {
 
   /** Event cards (the GET /events item shape) for events loaded with their venue and ticket prices, in the same order. */
   async cards(rows: (Prisma.EventGetPayload<{ include: { venue: true } }> & { ticketTypes: { priceCents: number }[] })[]): Promise<EventCardDto[]> {
-    const [recent, resale] = await Promise.all([this.soldRecently(rows.map((e) => e.id)), this.resaleListed(rows)]);
+    // Multiple dates and multi-day events: their active dates, for nextDate, dateCount and resale.
+    const multi = rows.filter((e) => e.dateMode !== 'SINGLE').map((e) => e.id);
+    const dateRows = multi.length ? await this.prisma.eventDate.findMany({ where: { eventId: { in: multi }, status: 'ACTIVE' }, orderBy: { startsAt: 'asc' } }) : [];
+    const datesOf = new Map<string, typeof dateRows>();
+    for (const d of dateRows) datesOf.set(d.eventId, [...(datesOf.get(d.eventId) ?? []), d]);
+    const lastStart = new Map([...datesOf].map(([id, ds]) => [id, ds[ds.length - 1].startsAt]));
+    const now = new Date();
+    const [recent, resale] = await Promise.all([this.soldRecently(rows.map((e) => e.id)), this.resaleListed(rows, lastStart)]);
     return rows.map((e) => ({
       slug: e.slug,
       title: e.title,
@@ -133,6 +148,9 @@ export class EventsService {
       fromCents: e.ticketTypes.length ? Math.min(...e.ticketTypes.map((t) => t.priceCents)) : 0,
       soldRecent: recent.get(e.id) ?? 0,
       resaleCount: resale.get(e.id) ?? 0,
+      dateMode: e.dateMode,
+      nextDate: nextDateView(e.dateMode, datesOf.get(e.id) ?? [], now),
+      dateCount: (datesOf.get(e.id) ?? []).filter((d) => d.startsAt >= now).length,
     }));
   }
 
@@ -140,7 +158,8 @@ export class EventsService {
     const where: Prisma.EventWhereInput = {
       status: 'PUBLISHED',
       visibility: 'PUBLIC',
-      startsAt: { gte: q.from ? new Date(q.from) : new Date(), ...(q.to ? { lte: new Date(`${q.to.slice(0, 10)}T23:59:59Z`) } : {}) },
+      // A date in the range: the event's own (SINGLE), or any active date of a multi-date or multi-day event.
+      AND: [dateRangeWhere(q.from ? new Date(q.from) : new Date(), q.to ? new Date(`${q.to.slice(0, 10)}T23:59:59Z`) : undefined)],
       ...(q.category ? { category: q.category } : {}),
       ...(q.city || q.country
         ? { venue: { ...(q.city ? { city: { equals: q.city, mode: 'insensitive' as const } } : {}), ...(q.country ? { country: q.country.toUpperCase() } : {}) } }
@@ -158,11 +177,14 @@ export class EventsService {
     };
     const rows = await this.prisma.event.findMany({
       where,
-      include: { venue: true, ticketTypes: { select: { priceCents: true } } },
+      include: { venue: true, ticketTypes: { where: LIVE_TYPE, select: { priceCents: true } } },
       orderBy: { startsAt: 'asc' },
       take: 1000,
     });
     let cards = await this.cards(rows.filter((e) => e.ticketTypes.length));
+    // Soonest first by the date fans can still go to (a run whose first show passed sorts by its next one).
+    const when = (c: EventCardDto) => (c.nextDate?.startsAt ?? c.startsAt).getTime();
+    if (cards.some((c) => c.nextDate)) cards.sort((a, b) => when(a) - when(b));
     // In the visitor's currency: an approximate converted price on every card, and maxPrice compared against it.
     const cur = q.currency;
     if (cur) cards = cards.map((c) => ({ ...c, fromCentsIn: { currency: cur, cents: this.fx.convert(c.fromCents, c.currency, cur) } }));
@@ -188,17 +210,31 @@ export class EventsService {
    * an old link learn what happened; it has nothing on sale); or, with a valid preview token, one that isn't
    * published yet (flagged `preview`).
    */
-  async detail(slug: string, preview?: string) {
+  async detail(slug: string, preview?: string, dateId?: string) {
     const e = await this.prisma.event.findUnique({
       where: { slug },
-      include: { venue: true, org: { select: { name: true } }, ticketTypes: { orderBy: { sortOrder: 'asc' } } },
+      include: { venue: true, org: { select: { name: true } }, ticketTypes: { orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }] }, dates: { orderBy: { startsAt: 'asc' } } },
     });
     const cancelled = e?.status === 'CANCELLED';
     if (!e || (e.status !== 'PUBLISHED' && !cancelled && !previewOk(e.slug, preview))) throw new NotFoundException('Event not found.');
     const avail = await this.inventory.availabilityForEvent(e.id);
     const map = e.seatMap as SeatMap | null;
-    const sectionAvail = map ? await this.inventory.availabilityForSections(this.prisma, e.id, map) : null;
-    const lowest = e.ticketTypes.length ? Math.min(...e.ticketTypes.map((t) => t.priceCents)) : 0;
+    // Multiple dates: section numbers are for one date (?date=, else the next one on sale).
+    const seatDate = e.dateMode === 'DATES' ? (e.dates.find((d) => d.id === dateId) ?? nextActive(e.dates) ?? e.dates[0] ?? null) : null;
+    const sectionAvail = map ? await this.inventory.availabilityForSections(this.prisma, e.id, map, new Date(), seatDate?.id) : null;
+    // From-price: a cancelled date's copies don't count (unless nothing else is left).
+    const live = e.ticketTypes.filter((t) => liveType(t, e.dates));
+    const priced = live.length ? live : e.ticketTypes;
+    const lowest = priced.length ? Math.min(...priced.map((t) => t.priceCents)) : 0;
+    // Nothing on sale for a cancelled date, or (with more than one date) a date or pass that has started.
+    const now = new Date();
+    const onSale = (t: (typeof e.ticketTypes)[number]) => {
+      if (e.dateMode === 'SINGLE') return true;
+      const d = e.dates.find((x) => x.id === t.eventDateId);
+      if (d && d.status === 'CANCELLED') return false;
+      return ticketTimes(e.dateMode, e, t, e.dates).first.startsAt > now;
+    };
+    const left = (t: (typeof e.ticketTypes)[number]) => (cancelled || !onSale(t) ? 0 : (avail.get(t.id) ?? 0));
     return {
       id: e.id,
       slug: e.slug,
@@ -212,6 +248,15 @@ export class EventsService {
       doorsAt: e.doorsAt,
       endsAt: e.endsAt,
       timezone: e.timezone,
+      dateMode: e.dateMode,
+      // DATES: tickets left on each date (its copies together); [] for SINGLE.
+      dates: e.dates.map((d) => {
+        if (e.dateMode !== 'DATES') return dateView(d);
+        const copies = e.ticketTypes.filter((t) => t.eventDateId === d.id);
+        const available = copies.reduce((s, t) => s + left(t), 0);
+        return { ...dateView(d), available, soldOut: d.status === 'ACTIVE' && d.startsAt > now && available === 0 };
+      }),
+      nextDate: nextDateView(e.dateMode, e.dates, now),
       online: e.online,
       currency: e.currency,
       // Pay what you want: the fee rate, so the page can show what an amount costs all-in.
@@ -235,13 +280,18 @@ export class EventsService {
         look: resolveLook(t.name, t.style),
         pricing: t.pricing,
         pwyw: pwywView(t, e.feeMode, config.organizerFeePermille),
-        available: cancelled ? 0 : (avail.get(t.id) ?? 0),
+        available: left(t),
+        eventDateId: t.eventDateId,
+        tierKey: t.tierKey,
+        validDateIds: t.validDateIds,
       })),
       media: ((e.media as MediaItem[] | null) ?? []).map(mediaUrls),
       seatMap: map && {
         ...map,
         sections: map.sections.map((s) => ({ ...s, available: sectionAvail?.get(s.id) ?? 0 })),
       },
+      // DATES: the date the seat map's `available` numbers are for
+      seatMapDateId: seatDate?.id ?? null,
     };
   }
 }
@@ -261,21 +311,26 @@ export class EventsController {
    */
   @Public()
   @Get(':slug/availability')
-  async availability(@Param('slug') slug: string, @Query('qty') qtyRaw?: string) {
+  async availability(@Param('slug') slug: string, @Query('qty') qtyRaw?: string, @Query('date') dateId?: string) {
     const qty = Math.min(20, Math.max(1, Number(qtyRaw) || 1));
-    const e = await this.prisma.event.findUnique({ where: { slug }, select: { id: true, status: true, seatMap: true } });
+    const e = await this.prisma.event.findUnique({ where: { slug }, select: { id: true, status: true, seatMap: true, dateMode: true, dates: { orderBy: { startsAt: 'asc' } }, ticketTypes: { select: { id: true, tierKey: true, eventDateId: true } } } });
     if (!e || e.status !== 'PUBLISHED') throw new NotFoundException('Event not found.');
     const map = e.seatMap as SeatMap | null;
-    if (!map) return { qty, sections: [] };
+    // Multiple dates: seats for one date (?date=, else the next one on sale); sections point at tiers, so each
+    // section's ticket type is that tier's copy on the date.
+    const date = e.dateMode === 'DATES' ? pickDate(e.dates, dateId) : null;
+    if (!map) return { qty, sections: [], ...(date ? { dateId: date.id } : {}) };
+    const typeOf = (tier: string) => (date ? (e.ticketTypes.find((t) => t.tierKey === tier && t.eventDateId === date.id)?.id ?? tier) : tier);
     const [inUse, typeLeft] = await Promise.all([
-      this.inventory.seatsInUse(this.prisma, e.id, map.sections.map((s) => s.id)),
+      this.inventory.seatsInUse(this.prisma, e.id, map.sections.map((s) => s.id), new Date(), undefined, date?.id),
       this.inventory.availabilityForEvent(e.id),
     ]);
     return {
       qty,
+      ...(date ? { dateId: date.id } : {}),
       sections: map.sections.map((s) => {
         const used = inUse.get(s.id)!;
-        const available = Math.max(0, Math.min(sectionCapacity(s) - used.count, typeLeft.get(s.ticketTypeId) ?? 0));
+        const available = date?.status === 'CANCELLED' ? 0 : Math.max(0, Math.min(sectionCapacity(s) - used.count, typeLeft.get(typeOf(s.ticketTypeId)) ?? 0));
         const seats = s.seating === 'reserved' && available >= qty ? assignSeats(s, used.seats, qty) : null;
         const fits = s.seating === 'ga' ? available >= qty : !!seats;
         // Only side-by-side blocks count as a fit for reserved seating.
@@ -288,12 +343,14 @@ export class EventsController {
   /** Which seats in a section are sold or held, so fans can see their exact seats before holding. */
   @Public()
   @Get(':slug/sections/:sectionId/seats')
-  async seats(@Param('slug') slug: string, @Param('sectionId') sectionId: string) {
-    const e = await this.prisma.event.findUnique({ where: { slug }, select: { id: true, status: true, seatMap: true } });
+  async seats(@Param('slug') slug: string, @Param('sectionId') sectionId: string, @Query('date') dateId?: string) {
+    const e = await this.prisma.event.findUnique({ where: { slug }, select: { id: true, status: true, seatMap: true, dateMode: true, dates: { orderBy: { startsAt: 'asc' } } } });
     const s = (e?.seatMap as SeatMap | null)?.sections.find((x) => x.id === sectionId);
     if (!e || e.status !== 'PUBLISHED' || !s) throw new NotFoundException('Section not found.');
-    const used = (await this.inventory.seatsInUse(this.prisma, e.id, [s.id])).get(s.id)!;
-    return { section: s.id, seating: s.seating, capacity: sectionCapacity(s), inUse: used.count, taken: [...used.seats] };
+    // Multiple dates: taken seats on one date (?date=, else the next one on sale).
+    const date = e.dateMode === 'DATES' ? pickDate(e.dates, dateId) : null;
+    const used = (await this.inventory.seatsInUse(this.prisma, e.id, [s.id], new Date(), undefined, date?.id)).get(s.id)!;
+    return { section: s.id, seating: s.seating, capacity: sectionCapacity(s), inUse: used.count, taken: [...used.seats], ...(date ? { dateId: date.id } : {}) };
   }
 
   @Public()
@@ -304,8 +361,8 @@ export class EventsController {
 
   @OptionalAuth()
   @Get(':slug')
-  detail(@Param('slug') slug: string, @Query('preview') preview?: string) {
-    return this.events.detail(slug, preview);
+  detail(@Param('slug') slug: string, @Query('preview') preview?: string, @Query('date') date?: string) {
+    return this.events.detail(slug, preview, date);
   }
 }
 

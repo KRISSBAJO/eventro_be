@@ -15,6 +15,7 @@ import { ApiBearerAuth, ApiProperty, ApiTags } from '@nestjs/swagger';
 import { ArrayMaxSize, IsArray, IsString, MaxLength } from 'class-validator';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma.service';
+import { LIVE_TYPE, dateRangeWhere } from '../domain/event-dates';
 import { CurrentUser, type AuthUser } from '../common/auth';
 import { EventsModule, EventsService } from '../events/events.module';
 
@@ -50,10 +51,11 @@ export class SavedService {
 
   async list(user: AuthUser) {
     const rows = await this.prisma.savedEvent.findMany({
-      where: { userId: user.id, event: { ...VISIBLE, startsAt: { gte: new Date() } } },
+      // Upcoming: the event's own date, or (multiple dates, multi-day) any active date still to come.
+      where: { userId: user.id, event: { ...VISIBLE, ...dateRangeWhere(new Date()) } },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: SAVED_MAX,
-      include: { event: { include: { venue: true, ticketTypes: { select: { priceCents: true } } } } },
+      include: { event: { include: { venue: true, ticketTypes: { where: LIVE_TYPE, select: { priceCents: true } } } } },
     });
     const events = rows.map((r) => r.event);
     return { ids: events.map((e) => e.id), slugs: events.map((e) => e.slug), items: await this.events.cards(events) };

@@ -549,6 +549,8 @@ export class VenueBookingService implements OnModuleInit, OnModuleDestroy {
     const ev = await this.prisma.event.findUnique({ where: { id: eventId }, include: { venueBooking: true } });
     if (!ev || ev.orgId !== orgId) throw new NotFoundException('Event not found.');
     if (ev.online) throw new BadRequestException('This is an online event, so it doesn’t need a venue.');
+    // v1: only one-date events are booked through Eventro (multiple dates and multi-day events pick a venue instead).
+    if (ev.dateMode !== 'SINGLE') throw new BadRequestException('Venue bookings on Eventro are for single-date events for now. Pick the venue for this event instead.');
     if (ev.status !== 'DRAFT' && ev.status !== 'REJECTED') throw new BadRequestException('Only draft events can wait for a venue. Request the booking on its own, then attach it to the event once the venue confirms.');
     if (ev.venueBooking && isLive(ev.venueBooking)) throw new ConflictException({ statusCode: 409, code: 'EVENT_ALREADY_BOOKED', message: `This event already has a venue booking (${ev.venueBooking.code}). Cancel it first.` });
     assertFits({ startsAt, endsAt }, ev);

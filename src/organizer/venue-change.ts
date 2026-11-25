@@ -224,7 +224,8 @@ export class VenueChange {
         paragraphs: [
           `Hi ${first(h.name)}, ${orgName} has moved ${ev.title} to a new venue${old ? ` (it was at ${old.name}, ${old.city})` : ''}.`,
           `New venue: ${venue.name}, ${where}.`,
-          `Same date and time: ${when}${abbr ? ` ${abbr}` : ''}.${z.changed ? ` That’s local time at the new venue, which is in ${z.toName}.` : ''}`,
+          // Multiple dates and multi-day events keep every date: no single "when" to show.
+          `${ev.dateMode === 'SINGLE' ? `Same date and time: ${when}${abbr ? ` ${abbr}` : ''}` : 'Same dates and times as before'}.${z.changed ? ` That’s local time at the new venue, which is in ${z.toName}.` : ''}`,
           `Your ${h.count === 1 ? 'ticket stays' : `${h.count} tickets stay`} valid, with the same QR ${h.count === 1 ? 'code' : 'codes'} at the door. There’s nothing you need to do.`,
         ],
         highlight: { label: 'New venue', value: venue.name },

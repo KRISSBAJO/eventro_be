@@ -1,6 +1,6 @@
 import { previewToken } from '../events/preview';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { MemberRole, Prisma, type ScanResult } from '@prisma/client';
+import { MemberRole, Prisma, type EventDate, type ScanResult, type TicketCheckIn } from '@prisma/client';
 import { PrismaService } from '../prisma.service';
 import { AuditService } from '../common/audit.service';
 import { ScanLog } from '../common/scan-log';
@@ -23,6 +23,8 @@ import { EventCancellation } from '../admin/cancel-event';
 import { VenueChange } from './venue-change';
 import { VenueBookingService, assertFits } from '../venues/venue-bookings';
 import { isLive } from '../venues/booking-rules';
+import { EventDatesService, planDates, capacitiesFor, daysFor, resolveRef, type TierInput } from './event-dates';
+import { liveType, dateName, dateRangeWhere, dateView, daysList, doorDate, isActive, nextActive, nextDateView, seatTier, ticketDates, ticketTimes, validDays, type DateMode } from '../domain/event-dates';
 import type {
   AttachBookingDto,
   ChangeVenueDto,
@@ -44,6 +46,9 @@ const ADMIN_ONLY: MemberRole[] = ['ADMIN'];
 
 const DAY = 86_400_000;
 
+/** v1: venue bookings on Eventro are for one-date events. */
+const MULTI_DATE_BOOKING = 'Venue bookings on Eventro are for single-date events for now. Pick the venue for this event instead.';
+
 /** Offline sync answers as door scan log results. */
 const SYNC_SCAN_RESULT: Record<string, ScanResult> = {
   unknown: 'NOT_FOUND',
@@ -52,11 +57,19 @@ const SYNC_SCAN_RESULT: Record<string, ScanResult> = {
   'expired-code': 'EXPIRED_CODE',
   void: 'VOID',
   'transfer-pending': 'TRANSFER_PENDING',
+  'wrong-date': 'WRONG_DATE',
 };
 const dayKey = (d: Date) => d.toISOString().slice(0, 10);
 
 /** What the door needs about a ticket, comps included ("Comp · Press"). */
-const DOOR_TICKET = { ticketType: { select: { name: true } }, order: { select: { kind: true, compGroup: true } } } as const;
+const DOOR_TICKET = { ticketType: { select: { name: true, validDateIds: true } }, order: { select: { kind: true, compGroup: true } } } as const;
+type DoorTicket = Prisma.TicketGetPayload<{ include: typeof DOOR_TICKET }>;
+/** What doorView needs about a ticket. */
+type DoorViewTicket = { id: string; holderName: string; section: string | null; row: string | null; seat: number | null; eventDateId?: string | null; ticketType: { name: string; validDateIds?: string[] }; order?: { kind: string; compGroup: string | null } };
+/** What the door needs about the event (its dates, for DATES and DAYS). */
+type DoorEvent = { dateMode: string; timezone: string; dates: EventDate[] };
+/** DAYS: the ticket stopped being usable while it was being let in. */
+class DoorRefused extends Error {}
 
 /** Trimmed, de-duplicated perks (case-insensitive), at most 8. */
 function cleanPerks(perks: string[] | undefined) {
@@ -103,6 +116,7 @@ export class OrganizerService {
     private readonly bookings: VenueBookingService,
     private readonly scans: ScanLog,
     private readonly guests: GuestListService,
+    private readonly dates: EventDatesService,
   ) {}
 
   /* ---------- access ---------- */
@@ -115,7 +129,7 @@ export class OrganizerService {
   }
 
   private async eventFor(id: string, user: AuthUser, roles: MemberRole[]) {
-    const ev = await this.prisma.event.findUnique({ where: { id }, include: { ticketTypes: { orderBy: { sortOrder: 'asc' } } } });
+    const ev = await this.prisma.event.findUnique({ where: { id }, include: { ticketTypes: { orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }] }, dates: { orderBy: { startsAt: 'asc' } } } });
     if (!ev) throw new NotFoundException('Event not found.');
     await this.member(ev.orgId, user, roles);
     return ev;
@@ -225,6 +239,15 @@ export class OrganizerService {
     if (dto.timezone && !isTimeZone(dto.timezone)) throw new BadRequestException(`Unknown time zone "${dto.timezone}". Use an IANA name such as Africa/Lagos.`);
     const feeMode: FeeMode = dto.feeMode ?? 'BUYER';
     const donations = rule(() => cleanDonationSettings({ donationsEnabled: false, donationCause: null, donationDescription: null, donationSuggestedCents: [], donationMinCents: null }, dto));
+    // Multiple dates or a multi-day event: the dates are checked first; the event's times are their summary.
+    const mode: DateMode = dto.dateMode ?? 'SINGLE';
+    const planned = mode === 'SINGLE' ? null : planDates(mode, dto.dates);
+    if (mode === 'SINGLE') {
+      if (dto.dates?.length) throw new BadRequestException('Set dateMode to DATES or DAYS to give this event more than one date.');
+      const extra = dto.ticketTypes.find((t) => t.capacityByDate || t.validDates);
+      if (extra) throw new BadRequestException(`${extra.name.trim()}: capacityByDate and validDates are for events with more than one date.`);
+    }
+    if (planned && dto.venueBookingId) throw new BadRequestException(MULTI_DATE_BOOKING);
     let venueId = dto.venueId ?? null;
     let timezone = dto.timezone ?? 'UTC';
     // A venue booked on Eventro: the event is held there, in the venue's zone, within the booking's times.
@@ -258,9 +281,11 @@ export class OrganizerService {
       description: dto.description?.trim() ?? '',
       category: dto.category,
       imageUrl: dto.imageUrl,
-      startsAt: new Date(dto.startsAt),
-      doorsAt: dto.doorsAt ? new Date(dto.doorsAt) : null,
-      endsAt: dto.endsAt ? new Date(dto.endsAt) : null,
+      // DATES/DAYS: a placeholder until the dates are in (EventDatesService.syncSummary sets the summary).
+      startsAt: planned ? planned[0].startsAt : new Date(dto.startsAt),
+      doorsAt: planned ? null : dto.doorsAt ? new Date(dto.doorsAt) : null,
+      endsAt: planned ? null : dto.endsAt ? new Date(dto.endsAt) : null,
+      dateMode: mode,
       timezone,
       currency: dto.currency ?? 'USD',
       online: !!dto.online,
@@ -269,11 +294,24 @@ export class OrganizerService {
       visibility: dto.visibility ?? 'PUBLIC',
       ...donations,
       compLimit: dto.compLimit ?? null,
-      ticketTypes: { create: dto.ticketTypes.map((t, i) => this.ticketTypeData(t, feeMode, i)) },
+      ticketTypes: { create: planned ? [] : dto.ticketTypes.map((t, i) => this.ticketTypeData(t, feeMode, i)) },
     } satisfies Prisma.EventUncheckedCreateInput;
+    if (planned) {
+      const tiers: TierInput[] = dto.ticketTypes.map((t, i) => ({ data: this.ticketTypeData(t, feeMode, i), capacityByDate: t.capacityByDate, validDates: t.validDates }));
+      const id = await this.prisma.$transaction(
+        async (tx) => {
+          const e = await tx.event.create({ data });
+          await this.dates.create(tx, e.id, mode, planned, tiers);
+          return e.id;
+        },
+        { timeout: 30_000 },
+      );
+      const created = await this.prisma.event.findUniqueOrThrow({ where: { id }, include: { ticketTypes: { orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }] }, dates: { orderBy: { startsAt: 'asc' } } } });
+      return { ...created, ticketTypes: created.ticketTypes.map(withLook), dates: created.dates.map(dateView) };
+    }
     if (!booking) {
       const created = await this.prisma.event.create({ data, include: { ticketTypes: true } });
-      return { ...created, ticketTypes: created.ticketTypes.map(withLook) };
+      return { ...created, ticketTypes: created.ticketTypes.map(withLook), dates: [] };
     }
     const ev = await this.prisma.$transaction(async (tx) => {
       const e = await tx.event.create({ data, include: { ticketTypes: true } });
@@ -290,7 +328,7 @@ export class OrganizerService {
     await this.member(orgId, user, DOOR);
     const events = await this.prisma.event.findMany({
       where: { orgId },
-      include: { ticketTypes: { orderBy: { sortOrder: 'asc' } }, venue: { select: { name: true, city: true, address: true, country: true, region: true } }, venueBooking: true },
+      include: { ticketTypes: { orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }] }, dates: { orderBy: { startsAt: 'asc' } }, venue: { select: { name: true, city: true, address: true, country: true, region: true } }, venueBooking: true },
       orderBy: { startsAt: 'asc' },
     });
     const days = 60;
@@ -326,6 +364,9 @@ export class OrganizerService {
       currency: e.currency,
       timezone: e.timezone,
       startsAt: e.startsAt,
+      dateMode: e.dateMode,
+      dates: e.dates.map(dateView),
+      nextDate: nextDateView(e.dateMode, e.dates),
       venue: e.venue,
       online: e.online,
       imageUrl: e.imageUrl,
@@ -351,11 +392,15 @@ export class OrganizerService {
           pwywSuggestedCents: t.pwywSuggestedCents,
           pwywMaxCents: t.pwywMaxCents,
           pwywQuickPicks: t.pwywQuickPicks,
+          eventDateId: t.eventDateId,
+          tierKey: t.tierKey,
+          validDateIds: t.validDateIds,
         }),
       ),
       sold: e.ticketTypes.reduce((s, t) => s + t.sold, 0) - (money.comps.get(e.id) ?? 0),
       comps: money.comps.get(e.id) ?? 0,
-      capacity: e.ticketTypes.reduce((s, t) => s + t.capacity, 0),
+      // a cancelled date's tier copies no longer count
+      capacity: e.ticketTypes.filter((t) => liveType(t, e.dates)).reduce((s, t) => s + t.capacity, 0),
       // face value of the live sold tickets (what each was bought for; comps excluded), and donations apart
       grossCents: money.gross.get(e.id) ?? 0,
       donationsCents: money.donations.get(e.id) ?? 0,
@@ -373,8 +418,9 @@ export class OrganizerService {
     const net = new Map<string, number>();
     const comps = new Map<string, number>();
     const compsByType = new Map<string, number>();
+    const grossByType = new Map<string, number>();
     const donations = new Map<string, number>();
-    if (!eventIds.length) return { gross, net, comps, compsByType, donations };
+    if (!eventIds.length) return { gross, net, comps, compsByType, grossByType, donations };
     const rows = await this.prisma.$queryRaw<{ eventId: string; ticketTypeId: string; kind: string; unitCents: number; feeMode: FeeMode; n: bigint }[]>`
       SELECT t."eventId", t."ticketTypeId", o."kind"::text AS kind, o."unitCents", e."feeMode"::text AS "feeMode", COUNT(*) AS n
       FROM "Ticket" t JOIN "Order" o ON o.id = t."orderId" JOIN "Event" e ON e.id = t."eventId"
@@ -388,6 +434,7 @@ export class OrganizerService {
         continue;
       }
       gross.set(r.eventId, (gross.get(r.eventId) ?? 0) + r.unitCents * n);
+      grossByType.set(r.ticketTypeId, (grossByType.get(r.ticketTypeId) ?? 0) + r.unitCents * n);
       net.set(r.eventId, (net.get(r.eventId) ?? 0) + organizerNet(r.unitCents, r.feeMode, config.organizerFeePermille) * n);
     }
     const d = await this.prisma.order.groupBy({
@@ -396,7 +443,7 @@ export class OrganizerService {
       _sum: { donationCents: true, donationRefundedCents: true },
     });
     for (const x of d) donations.set(x.eventId, (x._sum.donationCents ?? 0) - (x._sum.donationRefundedCents ?? 0));
-    return { gross, net, comps, compsByType, donations };
+    return { gross, net, comps, compsByType, grossByType, donations };
   }
 
   /**
@@ -407,8 +454,9 @@ export class OrganizerService {
     await this.member(orgId, user, DOOR);
     const now = Date.now();
     const events = await this.prisma.event.findMany({
-      where: { orgId, status: { not: 'DRAFT' }, startsAt: { gte: new Date(now - 2 * DAY), lte: new Date(now + 60 * DAY) } },
-      select: { id: true, slug: true, title: true, startsAt: true, doorsAt: true, timezone: true, online: true, status: true, venue: { select: { name: true, city: true } } },
+      // DATES/DAYS: any active date in the window (a run whose first show has passed is still at the door).
+      where: { orgId, status: { not: 'DRAFT' }, ...dateRangeWhere(new Date(now - 2 * DAY), new Date(now + 60 * DAY)) },
+      select: { id: true, slug: true, title: true, startsAt: true, doorsAt: true, timezone: true, online: true, status: true, dateMode: true, dates: { orderBy: { startsAt: 'asc' } }, venue: { select: { name: true, city: true } } },
       orderBy: { startsAt: 'asc' },
     });
     const ids = events.map((e) => e.id);
@@ -421,7 +469,20 @@ export class OrganizerService {
       issued.set(c.eventId, (issued.get(c.eventId) ?? 0) + c._count._all);
       if (c.status === 'CHECKED_IN') inside.set(c.eventId, (inside.get(c.eventId) ?? 0) + c._count._all);
     }
-    return events.map((e) => ({ ...e, ticketsIssued: issued.get(e.id) ?? 0, checkedIn: inside.get(e.id) ?? 0 }));
+    // Per date: entries through the door that date (TicketCheckIn), so the picker can show "312 in" for today.
+    const dateIds = events.flatMap((e) => e.dates.map((d) => d.id));
+    const perDate = dateIds.length ? await this.prisma.ticketCheckIn.groupBy({ by: ['eventDateId'], where: { eventDateId: { in: dateIds } }, _count: { _all: true } }) : [];
+    const inOn = new Map(perDate.map((c) => [c.eventDateId, c._count._all]));
+    return events.map(({ dates, dateMode, ...e }) => ({
+      ...e,
+      ticketsIssued: issued.get(e.id) ?? 0,
+      checkedIn: inside.get(e.id) ?? 0,
+      // Multiple dates and multi-day events only (one-date events keep today's shape): the dates with entries on each,
+      // and the date the door works on by default (today's at the venue, else the next).
+      ...(dateMode === 'SINGLE'
+        ? {}
+        : { dateMode, dates: dates.map((d) => ({ ...dateView(d), checkedIn: inOn.get(d.id) ?? 0 })), currentDateId: doorDate(dates, e.timezone)?.id ?? null }),
+    }));
   }
 
   /** Latest paid orders across the organization's events. */
@@ -443,6 +504,7 @@ export class OrganizerService {
     return {
       ...ev,
       ticketTypes: ev.ticketTypes.map(withLook),
+      dates: ev.dates.map(dateView),
       venue,
       promos,
       media: ((ev.media as MediaItem[] | null) ?? []).map(mediaUrls),
@@ -454,6 +516,18 @@ export class OrganizerService {
 
   async updateEvent(id: string, user: AuthUser, dto: UpdateEventDto) {
     const ev = await this.eventFor(id, user, EDIT);
+    const mode = dto.dateMode ?? ev.dateMode;
+    if (mode !== 'SINGLE' && (dto.dateMode !== undefined || dto.dates !== undefined)) {
+      if (ev.status === 'CANCELLED') throw new BadRequestException('This event was cancelled.');
+      const booking = await this.prisma.venueBooking.findUnique({ where: { eventId: id } });
+      if (booking && isLive(booking)) throw new BadRequestException(MULTI_DATE_BOOKING.replace('Pick the venue for this event instead.', 'Detach the venue booking first.'));
+    }
+    // DATES/DAYS: the event's times come from its dates (sent times are ignored).
+    if (mode !== 'SINGLE') {
+      dto.startsAt = undefined;
+      dto.doorsAt = undefined;
+      dto.endsAt = undefined;
+    }
     if (dto.startsAt || dto.doorsAt || dto.endsAt) {
       // Held at a booked venue: the new times still have to sit within the booking.
       const booking = await this.prisma.venueBooking.findUnique({ where: { eventId: id } });
@@ -486,7 +560,14 @@ export class OrganizerService {
       Object.assign(data, rule(() => cleanDonationSettings(ev, dto)));
       await this.audit.log(user.id, 'event.donations', 'Event', id, Object.fromEntries(donationKeys.map((k) => [k, (data as Record<string, unknown>)[k]])) as Prisma.InputJsonValue);
     }
-    return this.prisma.event.update({ where: { id }, data });
+    if (dto.dateMode !== undefined || dto.dates !== undefined) {
+      const before = ev.dates.map(dateView);
+      const dates = await this.prisma.$transaction((tx) => this.dates.update(tx, ev, dto.dateMode, dto.dates), { timeout: 30_000 });
+      if (dto.dateMode !== undefined && dto.dateMode !== ev.dateMode) await this.audit.log(user.id, 'event.date_mode', 'Event', id, { from: ev.dateMode, to: dto.dateMode });
+      else await this.audit.log(user.id, 'event.dates', 'Event', id, { before: before.map((d) => ({ id: d.id, startsAt: d.startsAt.toISOString(), label: d.label })), after: dates.map((d) => ({ id: d.id, startsAt: d.startsAt.toISOString(), label: d.label })) });
+    }
+    const updated = await this.prisma.event.update({ where: { id }, data, include: { dates: { orderBy: { startsAt: 'asc' } } } });
+    return { ...updated, dates: updated.dates.map(dateView) };
   }
 
   /** Moves an in-person event to another venue; see VenueChange. Admins and managers, like editing. */
@@ -511,6 +592,7 @@ export class OrganizerService {
     const ev = await this.eventFor(id, user, EDIT);
     if (ev.status === 'CANCELLED') throw new BadRequestException('This event was cancelled.');
     if (ev.online) throw new BadRequestException('This is an online event, so it doesn’t need a venue booking.');
+    if (ev.dateMode !== 'SINGLE') throw new BadRequestException(MULTI_DATE_BOOKING);
     const current = await this.prisma.venueBooking.findUnique({ where: { eventId: id } });
     if (current && current.id !== dto.bookingId && isLive(current)) {
       throw new ConflictException({ statusCode: 409, code: 'EVENT_ALREADY_BOOKED', message: `This event already has a venue booking (${current.code}). Cancel or detach it first.` });
@@ -548,15 +630,44 @@ export class OrganizerService {
 
   async addTicketType(id: string, user: AuthUser, dto: TicketTypeInputDto) {
     const ev = await this.eventFor(id, user, EDIT);
-    return withLook(await this.prisma.ticketType.create({ data: { eventId: id, ...this.ticketTypeData(dto, ev.feeMode, ev.ticketTypes.length) } }));
+    if (ev.dateMode === 'SINGLE') {
+      if (dto.capacityByDate || dto.validDates) throw new BadRequestException('capacityByDate and validDates are for events with more than one date.');
+      return withLook(await this.prisma.ticketType.create({ data: { eventId: id, ...this.ticketTypeData(dto, ev.feeMode, ev.ticketTypes.length) } }));
+    }
+    // DATES: one copy per active date (returned as `copies`, the first one being the answer itself); DAYS: one type.
+    const tiers = new Set(ev.ticketTypes.map((t) => seatTier(t))).size;
+    const made = await this.prisma.$transaction((tx) => this.dates.addTier(tx, ev, { data: this.ticketTypeData(dto, ev.feeMode, tiers), capacityByDate: dto.capacityByDate, validDates: dto.validDates }));
+    if (!made.length) throw new BadRequestException('This event has no active dates to sell on.');
+    return { ...withLook(made[0]), copies: made.map(withLook) };
   }
 
   async updateTicketType(id: string, ttId: string, user: AuthUser, dto: UpdateTicketTypeDto) {
     const ev = await this.eventFor(id, user, EDIT);
     const tt = ev.ticketTypes.find((t) => t.id === ttId);
     if (!tt) throw new NotFoundException('Ticket type not found.');
-    if (dto.capacity !== undefined && dto.capacity < tt.sold) throw new BadRequestException(`Capacity can’t be below the ${tt.sold} already sold.`);
-    if (dto.capacity !== undefined && ev.seatMap && (ev.seatMap as SeatMap).sections.some((s) => s.ticketTypeId === ttId)) {
+    // DATES: the edit goes to every copy of the tier (one per date); capacity is per copy.
+    const copies = ev.dateMode === 'DATES' && tt.tierKey ? ev.ticketTypes.filter((t) => t.tierKey === tt.tierKey) : [tt];
+    if (ev.dateMode !== 'DATES' && dto.capacityByDate) throw new BadRequestException('capacityByDate is for events with multiple dates.');
+    if (ev.dateMode !== 'DAYS' && dto.validDates) throw new BadRequestException('validDates is for multi-day events.');
+    const caps = new Map<string, number>();
+    if (dto.capacity !== undefined) for (const c of copies) caps.set(c.id, dto.capacity);
+    if (dto.capacityByDate) {
+      const byDate = capacitiesFor(tt.name, -1, dto.capacityByDate, ev.dates);
+      for (const c of copies) if ((byDate.get(c.eventDateId ?? '') ?? -1) >= 0) caps.set(c.id, byDate.get(c.eventDateId!)!);
+    }
+    for (const c of copies) {
+      const n = caps.get(c.id);
+      if (n !== undefined && n < c.sold) {
+        const d = ev.dates.find((x) => x.id === c.eventDateId);
+        throw new BadRequestException(`Capacity can’t be below the ${c.sold} already sold${d ? ` for ${dateName(d)}` : ''}.`);
+      }
+    }
+    let validDateIds: string[] | undefined;
+    if (dto.validDates) {
+      validDateIds = daysFor(tt.name, dto.validDates, ev.dates);
+      if (tt.sold > 0 && tt.validDateIds.some((d) => !validDateIds!.includes(d))) throw new BadRequestException('Tickets of this type have been sold, so its days can only be added to, not taken away.');
+    }
+    if (caps.size && ev.seatMap && (ev.seatMap as SeatMap).sections.some((s) => s.ticketTypeId === seatTier(tt))) {
       throw new BadRequestException('This ticket type’s capacity comes from the seat map. Change the sections instead.');
     }
     // Pricing: switching to (or changing) pay what you want, or back to a fixed price.
@@ -578,20 +689,22 @@ export class OrganizerService {
     } else if (pricing === 'PWYW' && dto.basePriceCents !== undefined) {
       throw new BadRequestException('This ticket type is pay what you want: change its minimum (pwywMinCents) instead of the price.');
     }
-    const updated = await this.prisma.ticketType.update({
-      where: { id: ttId },
-      data: {
+    const shared: Prisma.TicketTypeUpdateManyMutationInput = {
         ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
         ...(dto.description !== undefined ? { description: dto.description.trim() } : {}),
         ...(dto.basePriceCents !== undefined && pricing === 'FIXED' ? { priceCents: buyerPrice(dto.basePriceCents, ev.feeMode, config.organizerFeePermille) } : {}),
-        ...pricingData,
-        ...(dto.capacity !== undefined ? { capacity: dto.capacity } : {}),
+        ...(pricingData as Prisma.TicketTypeUpdateManyMutationInput),
         ...(dto.maxPerOrder !== undefined ? { maxPerOrder: dto.maxPerOrder } : {}),
         ...(dto.perks !== undefined ? { perks: cleanPerks(dto.perks) } : {}),
         ...(dto.badge !== undefined ? { badge: dto.badge.trim() || null } : {}),
         // null or "auto" goes back to the look from the name.
         ...(dto.style !== undefined ? { style: styleInput(dto.style) } : {}),
-      },
+        ...(validDateIds ? { validDateIds } : {}),
+    };
+    const updated = await this.prisma.$transaction(async (tx) => {
+      if (Object.keys(shared).length) await tx.ticketType.updateMany({ where: { id: { in: copies.map((c) => c.id) } }, data: shared });
+      for (const [cid, capacity] of caps) await tx.ticketType.update({ where: { id: cid }, data: { capacity } });
+      return tx.ticketType.findUniqueOrThrow({ where: { id: ttId } });
     });
     let priceDrop: Awaited<ReturnType<PriceDropService['record']>> = null;
     if (updated.priceCents !== tt.priceCents || pwywTouched) {
@@ -599,8 +712,13 @@ export class OrganizerService {
       // A pay-what-you-want minimum isn't a price fans pay, so a lower one isn't announced as a price drop.
       if (updated.priceCents !== tt.priceCents && updated.pricing === 'FIXED' && tt.pricing === 'FIXED') {
         const venue = ev.venueId ? await this.prisma.venue.findUnique({ where: { id: ev.venueId }, select: { name: true, city: true } }) : null;
-        priceDrop = await this.priceDrops.record({ ...ev, venue }, updated, tt.priceCents, updated.priceCents, user.id);
+        // Multiple dates: the drop is about the edited copy's date (or the pass's first day), not the event's first date.
+        priceDrop = await this.priceDrops.record({ ...ev, venue, startsAt: ticketTimes(ev.dateMode, ev, updated, ev.dates).first.startsAt }, updated, tt.priceCents, updated.priceCents, user.id);
       }
+    }
+    if (copies.length > 1) {
+      const all = await this.prisma.ticketType.findMany({ where: { id: { in: copies.map((c) => c.id) } } });
+      return { ...withLook(updated), copies: all.map(withLook), priceDrop };
     }
     return { ...withLook(updated), priceDrop };
   }
@@ -608,13 +726,19 @@ export class OrganizerService {
   /** Puts the event's ticket types in a new order, top tier first (it's the order fans see them in). */
   async orderTicketTypes(id: string, user: AuthUser, ids: string[]) {
     const ev = await this.eventFor(id, user, EDIT);
-    const known = new Set(ev.ticketTypes.map((t) => t.id));
-    if (ids.length !== known.size || new Set(ids).size !== ids.length || ids.some((x) => !known.has(x))) {
-      throw new BadRequestException('Send every ticket type of this event exactly once.');
+    // DATES: one id per tier (any of its copies, or its tierKey); every copy moves with it.
+    const tierOf = (x: string) => {
+      const t = ev.ticketTypes.find((y) => y.id === x || (ev.dateMode === 'DATES' && y.tierKey === x));
+      return t ? seatTier(t) : null;
+    };
+    const known = new Set(ev.ticketTypes.map((t) => seatTier(t)));
+    const tiers = ids.map(tierOf);
+    if (ids.length !== known.size || new Set(tiers).size !== ids.length || tiers.some((x) => !x)) {
+      throw new BadRequestException(ev.dateMode === 'DATES' ? 'Send every ticket tier of this event exactly once.' : 'Send every ticket type of this event exactly once.');
     }
-    await this.prisma.$transaction(ids.map((tt, i) => this.prisma.ticketType.update({ where: { id: tt }, data: { sortOrder: i } })));
+    await this.prisma.$transaction(tiers.map((k, i) => this.prisma.ticketType.updateMany({ where: { eventId: id, OR: [{ id: k! }, { tierKey: k! }] }, data: { sortOrder: i } })));
     await this.audit.log(user.id, 'ticket_type.order', 'Event', id, { ids });
-    return (await this.prisma.ticketType.findMany({ where: { eventId: id }, orderBy: { sortOrder: 'asc' } })).map(withLook);
+    return (await this.prisma.ticketType.findMany({ where: { eventId: id }, orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }] })).map(withLook);
   }
 
   /** How many people a price drop on this event would reach right now (for the organizer's price screen). */
@@ -631,10 +755,12 @@ export class OrganizerService {
     const ev = await this.eventFor(id, user, EDIT);
     const tt = ev.ticketTypes.find((t) => t.id === ttId);
     if (!tt) throw new NotFoundException('Ticket type not found.');
-    if (tt.sold > 0) throw new BadRequestException('Tickets of this type have been sold, so it can’t be deleted.');
-    if (ev.ticketTypes.length === 1) throw new BadRequestException('An event needs at least one ticket type.');
-    if (ev.seatMap && (ev.seatMap as SeatMap).sections.some((s) => s.ticketTypeId === ttId)) throw new BadRequestException('Remove this ticket type from the seat map first.');
-    await this.prisma.ticketType.delete({ where: { id: ttId } });
+    // DATES: the whole tier goes (every date’s copy).
+    const copies = ev.dateMode === 'DATES' && tt.tierKey ? ev.ticketTypes.filter((t) => t.tierKey === tt.tierKey) : [tt];
+    if (copies.some((c) => c.sold > 0)) throw new BadRequestException('Tickets of this type have been sold, so it can’t be deleted.');
+    if (new Set(ev.ticketTypes.map((t) => seatTier(t))).size === 1) throw new BadRequestException('An event needs at least one ticket type.');
+    if (ev.seatMap && (ev.seatMap as SeatMap).sections.some((s) => s.ticketTypeId === seatTier(tt))) throw new BadRequestException('Remove this ticket type from the seat map first.');
+    await this.prisma.ticketType.deleteMany({ where: { id: { in: copies.map((c) => c.id) } } });
     return { deleted: true };
   }
 
@@ -648,7 +774,7 @@ export class OrganizerService {
     const ev = await this.eventFor(id, user, EDIT);
     await this.notSuspended(ev.orgId);
     if (ev.status !== 'DRAFT' && ev.status !== 'REJECTED') throw new BadRequestException('Only drafts and rejected events can be submitted.');
-    if (ev.startsAt <= new Date()) throw new BadRequestException('The event date is in the past.');
+    if (ev.dateMode === 'SINGLE' ? ev.startsAt <= new Date() : !nextActive(ev.dates)) throw new BadRequestException(ev.dateMode === 'SINGLE' ? 'The event date is in the past.' : 'Every date of this event is in the past.');
     // Held at a venue booked on Eventro: only once the venue has confirmed.
     const held = await this.bookings.submitBlock(id);
     if (held) throw new ConflictException(held);
@@ -668,6 +794,18 @@ export class OrganizerService {
     return this.cancellation.cancel(id, user, reason, 'organizer');
   }
 
+  /** What cancelling one date (DATES) would refund. Org admins only, like cancelling. */
+  async cancelDatePreview(id: string, dateId: string, user: AuthUser) {
+    await this.eventFor(id, user, ADMIN_ONLY);
+    return this.cancellation.previewDate(id, dateId);
+  }
+
+  /** Cancels one date of a multiple-dates event and refunds its orders (see EventCancellation.cancelDate). Org admins only. */
+  async cancelDate(id: string, dateId: string, user: AuthUser, reason: string | undefined) {
+    await this.eventFor(id, user, ADMIN_ONLY);
+    return this.cancellation.cancelDate(id, dateId, user, reason, 'organizer');
+  }
+
   async setPaused(id: string, user: AuthUser, paused: boolean) {
     const ev = await this.eventFor(id, user, EDIT);
     if (ev.status === 'CANCELLED') throw new BadRequestException('This event was cancelled.');
@@ -680,13 +818,21 @@ export class OrganizerService {
 
   async saveSeatMap(id: string, user: AuthUser, input: unknown) {
     const ev = await this.eventFor(id, user, EDIT);
-    const result = validateSeatMap(input, new Set(ev.ticketTypes.map((t) => t.id)));
+    // DATES: one seat map for every date. Sections point at tiers (tierKey); any copy's id is accepted and stored as
+    // its tier. Seats are sold per date, so each copy's capacity is the tier's places on the map.
+    const tierIds = new Map(ev.ticketTypes.flatMap((t) => (t.tierKey ? [[t.id, t.tierKey], [t.tierKey, t.tierKey]] : [[t.id, t.id]])) as [string, string][]);
+    const result = validateSeatMap(input, new Set(tierIds.keys()));
     if (!result.ok) throw new BadRequestException({ message: 'The seat map has problems.', errors: result.errors });
-    const caps = capacityByTicketType(result.map);
+    result.map.sections = result.map.sections.map((s) => ({ ...s, ticketTypeId: tierIds.get(s.ticketTypeId) ?? s.ticketTypeId }));
+    const tierCaps = capacityByTicketType(result.map);
+    const caps = new Map<string, number>();
     for (const t of ev.ticketTypes) {
-      const cap = caps.get(t.id);
-      if (cap !== undefined && cap < t.sold) {
-        throw new BadRequestException(`${t.name}: the seat map has ${cap} places but ${t.sold} are already sold.`);
+      const cap = tierCaps.get(seatTier(t));
+      if (cap === undefined) continue;
+      caps.set(t.id, cap);
+      if (cap < t.sold) {
+        const d = ev.dates.find((x) => x.id === t.eventDateId);
+        throw new BadRequestException(`${t.name}${d ? ` (${dateName(d)})` : ''}: the seat map has ${cap} places but ${t.sold} are already sold.`);
       }
     }
     // Every sold seat must still exist in the new layout: its section, and for reserved seating its row and seat
@@ -712,7 +858,7 @@ export class OrganizerService {
       this.prisma.event.update({ where: { id }, data: { seatMap: result.map as unknown as Prisma.InputJsonValue } }),
       ...[...caps.entries()].map(([ttId, capacity]) => this.prisma.ticketType.update({ where: { id: ttId }, data: { capacity } })),
     ]);
-    return { seatMap: result.map, capacities: Object.fromEntries(caps) };
+    return { seatMap: result.map, capacities: Object.fromEntries(ev.dateMode === 'DATES' ? tierCaps : caps) };
   }
 
   async applyTemplate(id: string, user: AuthUser, dto: TemplateDto) {
@@ -754,7 +900,7 @@ export class OrganizerService {
     return {
       // tickets sold (comps are counted apart; both count against capacity)
       sold: ev.ticketTypes.reduce((s, t) => s + t.sold, 0) - comps,
-      capacity: ev.ticketTypes.reduce((s, t) => s + t.capacity, 0),
+      capacity: ev.ticketTypes.filter((t) => liveType(t, ev.dates)).reduce((s, t) => s + t.capacity, 0),
       // ticket revenue only: face value of live sold tickets (pay what you want at what was paid), no comps, no donations
       grossCents: money.gross.get(id) ?? 0,
       netCents: money.net.get(id) ?? 0,
@@ -767,6 +913,9 @@ export class OrganizerService {
         capacity: t.capacity,
         priceCents: t.priceCents,
         pricing: t.pricing,
+        eventDateId: t.eventDateId,
+        tierKey: t.tierKey,
+        validDateIds: t.validDateIds,
       })),
       daily: [...byDay.entries()].map(([date, v]) => ({ date, ...v })),
       comps: {
@@ -777,6 +926,8 @@ export class OrganizerService {
         limit: ev.compLimit,
       },
       guestList,
+      // Multiple dates and multi-day events: sold / capacity / in per date (see byDate)
+      byDate: await this.byDate(ev, money),
       donations: {
         orders: donation._count._all,
         cents: (donation._sum.donationCents ?? 0) - (donation._sum.donationRefundedCents ?? 0),
@@ -786,32 +937,96 @@ export class OrganizerService {
     };
   }
 
-  async attendees(id: string, user: AuthUser, q?: string, status?: string, type?: string) {
-    await this.eventFor(id, user, DOOR);
+  /**
+   * Per date (DATES/DAYS; [] for one-date events): tickets sold (comps apart), capacity, entries through the door that
+   * date, and ticket revenue. DATES: the date's tier copies. DAYS: every type valid that day, a pass's revenue split
+   * evenly over its days.
+   */
+  private async byDate(ev: { id: string; dateMode: string; dates: EventDate[]; ticketTypes: { id: string; sold: number; capacity: number; eventDateId: string | null; validDateIds: string[] }[] }, money: { compsByType: Map<string, number>; grossByType: Map<string, number> }) {
+    if (ev.dateMode === 'SINGLE' || !ev.dates.length) return [];
+    const entries = await this.prisma.ticketCheckIn.groupBy({ by: ['eventDateId'], where: { eventDateId: { in: ev.dates.map((d) => d.id) } }, _count: { _all: true } });
+    const inOn = new Map(entries.map((e) => [e.eventDateId, e._count._all]));
+    return ev.dates.map((d) => {
+      const types = ev.ticketTypes.filter((t) => (ev.dateMode === 'DATES' ? t.eventDateId === d.id : t.validDateIds.includes(d.id)));
+      const comps = types.reduce((s, t) => s + (money.compsByType.get(t.id) ?? 0), 0);
+      const gross = types.reduce((s, t) => s + (ev.dateMode === 'DAYS' ? Math.round((money.grossByType.get(t.id) ?? 0) / Math.max(1, t.validDateIds.length)) : (money.grossByType.get(t.id) ?? 0)), 0);
+      return {
+        dateId: d.id,
+        startsAt: d.startsAt,
+        label: d.label,
+        status: d.status,
+        sold: types.reduce((s, t) => s + t.sold, 0) - comps,
+        comps,
+        capacity: types.reduce((s, t) => s + t.capacity, 0),
+        checkedIn: inOn.get(d.id) ?? 0,
+        grossCents: gross,
+      };
+    });
+  }
+
+  async attendees(id: string, user: AuthUser, q?: string, status?: string, type?: string, dateId?: string) {
+    const ev = await this.eventFor(id, user, DOOR);
     const s = q?.trim();
+    // Multiple dates: ?date= keeps that date's tickets (DATES) or the tickets valid that day (DAYS); "checked in" is
+    // then about that date.
+    const day = dateId && ev.dateMode !== 'SINGLE' ? ev.dates.find((d) => d.id === dateId) : null;
+    if (dateId && ev.dateMode !== 'SINGLE' && !day) throw new BadRequestException('That date isn’t part of this event.');
+    const onDay: Prisma.TicketWhereInput = !day ? {} : ev.dateMode === 'DATES' ? { eventDateId: day.id } : { ticketType: { validDateIds: { has: day.id } } };
+    const inThatDay = day && ev.dateMode === 'DAYS';
     const rows = await this.prisma.ticket.findMany({
       where: {
         eventId: id,
-        status: status === 'checked-in' ? 'CHECKED_IN' : status === 'not-checked-in' ? { in: ['ACTIVE', 'TRANSFER_PENDING', 'LISTED'] } : { not: 'VOID' },
+        ...onDay,
+        ...(inThatDay && status === 'checked-in' ? { checkIns: { some: { eventDateId: day.id } } } : {}),
+        ...(inThatDay && status === 'not-checked-in' ? { checkIns: { none: { eventDateId: day.id } } } : {}),
+        status: inThatDay ? { not: 'VOID' } : status === 'checked-in' ? 'CHECKED_IN' : status === 'not-checked-in' ? { in: ['ACTIVE', 'TRANSFER_PENDING', 'LISTED'] } : { not: 'VOID' },
         ...(type === 'comp' ? { order: { kind: 'COMP' } } : type === 'paid' ? { order: { kind: 'SALE' } } : {}),
         ...(s
           ? { OR: [{ holderName: { contains: s, mode: 'insensitive' } }, { holderEmail: { contains: s, mode: 'insensitive' } }, { id: { contains: s.toUpperCase() } }] }
           : {}),
       },
-      select: { id: true, holderName: true, holderEmail: true, section: true, row: true, seat: true, status: true, checkedInAt: true, ticketType: { select: { name: true } }, order: { select: { kind: true, compGroup: true } } },
+      select: {
+        id: true,
+        holderName: true,
+        holderEmail: true,
+        section: true,
+        row: true,
+        seat: true,
+        status: true,
+        checkedInAt: true,
+        eventDateId: true,
+        ticketType: { select: { name: true } },
+        order: { select: { kind: true, compGroup: true } },
+        checkIns: { select: { eventDateId: true }, orderBy: { at: 'asc' } },
+      },
       orderBy: { id: 'asc' },
       take: 5000,
     });
     // Paid = sold at checkout (free registrations included); Comp = complimentary, issued by the organizer.
-    return rows.map(({ order, ...r }) => ({ ...r, type: order.kind === 'COMP' ? ('COMP' as const) : ('PAID' as const), compGroup: order.compGroup }));
+    // Multiple dates add the ticket's date (DATES) and the dates it has been checked in on (`checkedInDates`).
+    const multi = ev.dateMode !== 'SINGLE';
+    return rows.map(({ order, checkIns, eventDateId, ...r }) => ({
+      ...r,
+      type: order.kind === 'COMP' ? ('COMP' as const) : ('PAID' as const),
+      compGroup: order.compGroup,
+      ...(multi ? { eventDateId, checkedInDates: checkIns.map((c) => c.eventDateId).filter((x): x is string => !!x) } : {}),
+    }));
   }
 
   async attendeesCsv(id: string, user: AuthUser) {
     const rows = await this.attendees(id, user);
+    // Multiple dates: a last column with the ticket's date (DATES) or the days it was checked in on (DAYS).
+    const ev = await this.prisma.event.findUniqueOrThrow({ where: { id }, select: { dateMode: true, dates: true } });
+    const name = (dateId: string | null | undefined) => {
+      const d = ev.dates.find((x) => x.id === dateId);
+      return d ? dateName(d) : '';
+    };
+    const dateCol = (r: (typeof rows)[number]) =>
+      ev.dateMode === 'SINGLE' ? [] : [ev.dateMode === 'DATES' ? name(r.eventDateId) : (r.checkedInDates ?? []).map(name).join('; ')];
     const guests = await this.prisma.guestListEntry.findMany({ where: { eventId: id }, orderBy: { name: 'asc' }, take: 5000 });
     const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-    const head = ['Ticket', 'Name', 'Email', 'Ticket type', 'Section', 'Row', 'Seat', 'Status', 'Checked in at', 'Type', 'Group'];
-    const tickets = rows.map((r) => [r.id, r.holderName, r.holderEmail, r.ticketType.name, r.section, r.row, r.seat, r.status, r.checkedInAt?.toISOString(), r.type === 'COMP' ? 'Comp' : 'Paid', r.compGroup]);
+    const head = ['Ticket', 'Name', 'Email', 'Ticket type', 'Section', 'Row', 'Seat', 'Status', 'Checked in at', 'Type', 'Group', ...(ev.dateMode === 'DATES' ? ['Date'] : ev.dateMode === 'DAYS' ? ['Checked in on'] : [])];
+    const tickets = rows.map((r) => [r.id, r.holderName, r.holderEmail, r.ticketType.name, r.section, r.row, r.seat, r.status, r.checkedInAt?.toISOString(), r.type === 'COMP' ? 'Comp' : 'Paid', r.compGroup, ...dateCol(r)]);
     const list = guests.map((g) => [
       '',
       g.plusOnes ? `${g.name} +${g.plusOnes}` : g.name,
@@ -832,19 +1047,78 @@ export class OrganizerService {
 
   /* ---------- door check-in ---------- */
 
-  async checkIn(id: string, user: AuthUser, code: string, deviceId?: string) {
-    await this.eventFor(id, user, DOOR);
+  /**
+   * The date the door works on (DATES/DAYS): the one asked for, else the date running today at the venue, else the
+   * next one. Null for one-date events.
+   */
+  private doorDay(ev: DoorEvent, eventDateId?: string | null, at = new Date()) {
+    if (ev.dateMode === 'SINGLE') return null;
+    if (eventDateId) {
+      const d = ev.dates.find((x) => x.id === eventDateId);
+      if (!d) throw new BadRequestException('That date isn’t part of this event.');
+      return d;
+    }
+    return doorDate(ev.dates, ev.timezone, at);
+  }
+
+  /** Why a ticket can't come in on `day` (DATES: it's for another date; DAYS: not valid that day), or null. */
+  private wrongDate(ev: DoorEvent, t: DoorViewTicket & { eventDateId: string | null; ticketType: { validDateIds: string[] } }, day: EventDate | null) {
+    if (!day) return null;
+    if (ev.dateMode === 'DATES') {
+      if (t.eventDateId === day.id) return null;
+      const own = ev.dates.find((d) => d.id === t.eventDateId);
+      return { result: 'wrong-date', message: own ? `This ticket is for ${dateName(own)}.` : 'This ticket is for another date.', ticket: this.doorView(t, ev) };
+    }
+    if (t.ticketType.validDateIds.includes(day.id)) return null;
+    const days = validDays(ev.dates, t.ticketType.validDateIds);
+    return { result: 'wrong-date', message: days.length ? `Not valid today. Valid ${daysList(days)}.` : 'This ticket isn’t valid on this day.', ticket: this.doorView(t, ev) };
+  }
+
+  /** One entry through the door (TicketCheckIn). For one-date and DATES tickets it never breaks a check-in. */
+  private async recordEntry(ticketId: string, eventDateId: string | null, at: Date, userId: string, deviceId: string | null) {
+    try {
+      await this.prisma.ticketCheckIn.create({ data: { ticketId, eventDateId, at, byUserId: userId, deviceId } });
+    } catch {
+      /* the ticket's own status is the record that counts here */
+    }
+  }
+
+  /**
+   * DAYS: lets a ticket in on one day. The first entry ever also marks the ticket CHECKED_IN (it keeps today's meaning
+   * for resale, transfers and stats); entries on other valid days are re-entries. Two scanners can't admit it twice
+   * on one day: the (ticket, day) row is unique.
+   */
+  private async admitDay(ticketId: string, dayId: string, at: Date, userId: string, deviceId: string | null): Promise<{ admitted: true } | { admitted: false; prior: TicketCheckIn | null; status: string | null }> {
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        await tx.ticketCheckIn.create({ data: { ticketId, eventDateId: dayId, at, byUserId: userId, deviceId } });
+        const first = await tx.ticket.updateMany({ where: { id: ticketId, status: { in: ['ACTIVE', 'LISTED'] } }, data: { status: 'CHECKED_IN', checkedInAt: at, checkedInBy: userId, checkedInDevice: deviceId, listCents: null } });
+        if (!first.count && !(await tx.ticket.count({ where: { id: ticketId, status: 'CHECKED_IN' } }))) throw new DoorRefused();
+      });
+      return { admitted: true };
+    } catch (e) {
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        return { admitted: false, prior: await this.prisma.ticketCheckIn.findFirst({ where: { ticketId, eventDateId: dayId } }), status: 'CHECKED_IN' };
+      }
+      if (e instanceof DoorRefused) return { admitted: false, prior: null, status: (await this.prisma.ticket.findUnique({ where: { id: ticketId }, select: { status: true } }))?.status ?? null };
+      throw e;
+    }
+  }
+
+  async checkIn(id: string, user: AuthUser, code: string, deviceId?: string, eventDateId?: string) {
+    const ev = await this.eventFor(id, user, DOOR);
     const device = deviceId?.trim() || null;
+    const day = this.doorDay(ev, eventDateId);
     // A signed QR from the camera, or a ticket code typed in by the door staff (manual check-in).
     const method = code.includes('.') ? 'QR' : 'MANUAL';
     // Every answer goes into the door scan log too (what the resale guarantee checks claims against).
     const logged = async <T>(result: ScanResult, ticketId: string | null, answer: T) => {
       await this.scans.record({ eventId: id, ticketId, result, method, deviceId: device, userId: user.id, at: new Date() });
-      return answer;
+      return day ? { ...answer, date: dateView(day) } : answer;
     };
     let ticketId = code.trim().toUpperCase();
     const invalidCode = { result: 'invalid', message: 'Not a valid Eventro code.' };
-    let t: Prisma.TicketGetPayload<{ include: typeof DOOR_TICKET }> | null = null;
+    let t: DoorTicket | null = null;
     if (code.includes('.')) {
       // Codes are signed with the ticket's own seed (its qrVersion), so find the ticket first, then check.
       const p = parseQr(code);
@@ -865,15 +1139,29 @@ export class OrganizerService {
     }
     if (!t) return logged('NOT_FOUND', null, { result: 'invalid', message: 'Ticket not found.' });
     if (t.eventId !== id) return logged('WRONG_EVENT', t.id, { result: 'wrong-event', message: 'This ticket is for a different event.' });
-    if (t.status === 'CHECKED_IN') return logged('ALREADY_USED', t.id, await this.duplicate(t));
     if (t.status === 'VOID') return logged('VOID', t.id, { result: 'invalid', message: 'This ticket was refunded or cancelled.' });
     if (t.status === 'TRANSFER_PENDING') {
       return logged('TRANSFER_PENDING', t.id, { result: 'invalid', message: t.order.kind === 'COMP' && t.transferTo === t.holderEmail ? 'This complimentary ticket hasn’t been claimed yet.' : 'This ticket is being transferred.' });
     }
+    // Another date (DATES) or a day the pass doesn't cover (DAYS).
+    const wrong = this.wrongDate(ev, t, day);
+    if (wrong) return logged('WRONG_DATE', t.id, wrong);
+
+    if (ev.dateMode === 'DAYS' && day) {
+      // Once per valid day: in on another day is fine (re-entry), in today already is a duplicate.
+      const now = new Date();
+      const r = await this.admitDay(t.id, day.id, now, user.id, device);
+      if (r.admitted) return logged('ADMITTED', t.id, { result: 'ok', message: 'Valid: let them in.', ticket: this.doorView(t, ev) });
+      if (r.prior) return logged('ALREADY_USED', t.id, await this.duplicate({ ...t, checkedInAt: r.prior.at, checkedInBy: r.prior.byUserId, checkedInDevice: r.prior.deviceId }, ev));
+      return logged(r.status === 'VOID' ? 'VOID' : 'TRANSFER_PENDING', t.id, { result: 'invalid', message: r.status === 'VOID' ? 'This ticket was refunded or cancelled.' : 'This ticket is being transferred.' });
+    }
+
+    if (t.status === 'CHECKED_IN') return logged('ALREADY_USED', t.id, await this.duplicate(t, ev));
     // Conditional update so two scanners can't admit the same ticket twice.
+    const at = new Date();
     const { count } = await this.prisma.ticket.updateMany({
       where: { id: t.id, status: { in: ['ACTIVE', 'LISTED'] } },
-      data: { status: 'CHECKED_IN', checkedInAt: new Date(), checkedInBy: user.id, checkedInDevice: device, listCents: null },
+      data: { status: 'CHECKED_IN', checkedInAt: at, checkedInBy: user.id, checkedInDevice: device, listCents: null },
     });
     if (!count) {
       // Another scanner got there a moment ago: report theirs.
@@ -881,18 +1169,19 @@ export class OrganizerService {
       if (fresh.status !== 'CHECKED_IN') {
         return logged(fresh.status === 'VOID' ? 'VOID' : 'TRANSFER_PENDING', t.id, { result: 'invalid', message: fresh.status === 'VOID' ? 'This ticket was refunded or cancelled.' : 'This ticket is being transferred.' });
       }
-      return logged('ALREADY_USED', t.id, await this.duplicate({ ...t, ...fresh }));
+      return logged('ALREADY_USED', t.id, await this.duplicate({ ...t, ...fresh }, ev));
     }
-    return logged('ADMITTED', t.id, { result: 'ok', message: 'Valid: let them in.', ticket: this.doorView(t) });
+    await this.recordEntry(t.id, t.eventDateId, at, user.id, device);
+    return logged('ADMITTED', t.id, { result: 'ok', message: 'Valid: let them in.', ticket: this.doorView(t, ev) });
   }
 
   /** "Already checked in", with when, by whom and on which scanner (like the offline sync's `already`). */
-  private async duplicate(t: Parameters<OrganizerService['doorView']>[0] & { checkedInAt: Date | null; checkedInBy: string | null; checkedInDevice: string | null }) {
+  private async duplicate(t: DoorViewTicket & { checkedInAt: Date | null; checkedInBy: string | null; checkedInDevice: string | null }, ev: DoorEvent) {
     const by = t.checkedInBy ? await this.prisma.user.findUnique({ where: { id: t.checkedInBy }, select: { id: true, name: true } }) : null;
     return {
       result: 'duplicate',
-      message: 'Already checked in.',
-      ticket: this.doorView(t),
+      message: ev.dateMode === 'DAYS' ? 'Already checked in today.' : 'Already checked in.',
+      ticket: this.doorView(t, ev),
       checkedInAt: t.checkedInAt,
       checkedInBy: t.checkedInBy ? { id: t.checkedInBy, name: by?.name ?? null } : null,
       checkedInDevice: t.checkedInDevice,
@@ -901,24 +1190,46 @@ export class OrganizerService {
 
   /* ---------- offline door scanning ---------- */
 
-  /** Every non-void ticket with its QR seed, for scanners that work without a connection. Audited. */
+  /**
+   * Every non-void ticket with its QR seed, for scanners that work without a connection. Audited. Multiple dates and
+   * multi-day events also get the dates, the door's default date, and per ticket its date (`eventDateId`, DATES),
+   * the days it's valid (`validDateIds`, DAYS) and its entries so far (`checkIns`, one per day for DAYS).
+   */
   async doorPack(id: string, user: AuthUser) {
     const ev = await this.eventFor(id, user, DOOR);
     const rows = await this.prisma.ticket.findMany({
       where: { eventId: id, status: { not: 'VOID' } },
-      select: { id: true, qrVersion: true, status: true, checkedInAt: true, checkedInDevice: true, holderName: true, section: true, row: true, seat: true, ticketType: { select: { name: true } }, order: { select: { kind: true, compGroup: true } } },
+      select: {
+        id: true,
+        qrVersion: true,
+        status: true,
+        checkedInAt: true,
+        checkedInDevice: true,
+        holderName: true,
+        section: true,
+        row: true,
+        seat: true,
+        eventDateId: true,
+        ticketType: { select: { name: true, validDateIds: true } },
+        order: { select: { kind: true, compGroup: true } },
+        checkIns: { select: { eventDateId: true, at: true, deviceId: true }, orderBy: { at: 'asc' } },
+      },
       orderBy: { id: 'asc' },
     });
     const guestList = await this.guests.packEntries(id);
     const map = ev.seatMap as SeatMap | null;
     const names = new Map((map?.sections ?? []).map((s) => [s.id, sectionName(s)]));
     await this.audit.log(user.id, 'door_pack.download', 'Event', id, { tickets: rows.length });
+    const multi = ev.dateMode !== 'SINGLE';
     return {
       eventId: id,
       title: ev.title,
       startsAt: ev.startsAt,
       doorsAt: ev.doorsAt,
       timezone: ev.timezone,
+      dateMode: ev.dateMode,
+      dates: ev.dates.map(dateView),
+      currentDateId: multi ? (doorDate(ev.dates, ev.timezone)?.id ?? null) : null,
       generatedAt: new Date(),
       ...QR_SEED_SPEC,
       tickets: rows.map((t) => ({
@@ -936,6 +1247,7 @@ export class OrganizerService {
         seat: t.seat,
         comp: t.order.kind === 'COMP',
         compGroup: t.order.kind === 'COMP' ? t.order.compGroup : null,
+        ...(multi ? { eventDateId: t.eventDateId, validDateIds: t.ticketType.validDateIds, checkIns: t.checkIns } : {}),
       })),
       // The guest list (no tickets), so guests can be found and checked in offline (see GuestListService.sync).
       guestList,
@@ -943,22 +1255,25 @@ export class OrganizerService {
   }
 
   /**
-   * Applies scans a door scanner made offline, oldest first. Each ticket is admitted once: the first scan wins and
-   * later ones come back `already` (with when, by whom and on which scanner). Sending the same batch again gives
-   * the same answers. With `code`, the scanned QR must match the ticket's current seed (a code from before a
-   * transfer is refused) and be within 2 minutes of `scannedAt` (scanner clocks drift).
+   * Applies scans a door scanner made offline, oldest first. Each ticket is admitted once (DAYS: once per valid day):
+   * the first scan wins and later ones come back `already` (with when, by whom and on which scanner). Sending the same
+   * batch again gives the same answers. With `code`, the scanned QR must match the ticket's current seed (a code from
+   * before a transfer is refused) and be within 2 minutes of `scannedAt` (scanner clocks drift). Multiple dates and
+   * multi-day events: each scan is for its `eventDateId` (else the batch's, else the date of `scannedAt` at the venue);
+   * a ticket for another date, or a day it isn't valid, comes back invalid with reason `wrong-date`.
    */
-  async syncCheckIns(id: string, user: AuthUser, deviceIdRaw: string, scans: { ticketId: string; scannedAt: string; code?: string }[]) {
-    await this.eventFor(id, user, DOOR);
+  async syncCheckIns(id: string, user: AuthUser, deviceIdRaw: string, scans: { ticketId: string; scannedAt: string; code?: string; eventDateId?: string }[], batchDateId?: string) {
+    const ev = await this.eventFor(id, user, DOOR);
+    if (batchDateId) this.doorDay(ev, batchDateId);
     const deviceId = deviceIdRaw.trim();
     const now = Date.now();
     // A scan can't be in the future; the scanner's clock is ahead, so it counts as now.
     const ordered = scans
-      .map((s, index) => ({ index, ticketId: s.ticketId.trim().toUpperCase(), code: s.code?.trim() || null, at: new Date(Math.min(new Date(s.scannedAt).getTime(), now)) }))
+      .map((s, index) => ({ index, ticketId: s.ticketId.trim().toUpperCase(), code: s.code?.trim() || null, at: new Date(Math.min(new Date(s.scannedAt).getTime(), now)), dateId: s.eventDateId?.trim() || batchDateId || null }))
       .sort((a, b) => a.at.getTime() - b.at.getTime() || a.index - b.index);
     const tickets = await this.prisma.ticket.findMany({
       where: { id: { in: [...new Set(ordered.map((s) => s.ticketId))] } },
-      select: { id: true, eventId: true, status: true, qrVersion: true, checkedInAt: true, checkedInBy: true, checkedInDevice: true, holderName: true, section: true, row: true, seat: true, ticketType: { select: { name: true } }, order: { select: { kind: true, compGroup: true } } },
+      select: { id: true, eventId: true, status: true, qrVersion: true, checkedInAt: true, checkedInBy: true, checkedInDevice: true, holderName: true, section: true, row: true, seat: true, eventDateId: true, ticketType: { select: { name: true, validDateIds: true } }, order: { select: { kind: true, compGroup: true } } },
     });
     const byId = new Map(tickets.map((t) => [t.id, t]));
     const SKEW_WINDOWS = 8;
@@ -967,6 +1282,7 @@ export class OrganizerService {
       index: number;
       ticketId: string;
       scannedAt: Date;
+      eventDateId?: string | null;
       result: 'checked_in' | 'already' | 'invalid';
       reason?: string;
       replay?: boolean;
@@ -978,7 +1294,9 @@ export class OrganizerService {
     const results: Result[] = [];
     const checkerIds = new Set<string>();
     for (const s of ordered) {
-      const base = { index: s.index, ticketId: s.ticketId, scannedAt: s.at };
+      // The date this scan was for (DATES/DAYS): an unknown one can't be applied.
+      const day = ev.dateMode === 'SINGLE' ? null : s.dateId ? (ev.dates.find((d) => d.id === s.dateId) ?? null) : doorDate(ev.dates, ev.timezone, s.at);
+      const base = { index: s.index, ticketId: s.ticketId, scannedAt: s.at, ...(ev.dateMode === 'SINGLE' ? {} : { eventDateId: day?.id ?? s.dateId }) };
       const t = byId.get(s.ticketId);
       if (!t) {
         results.push({ ...base, result: 'invalid', reason: 'unknown' });
@@ -1009,6 +1327,36 @@ export class OrganizerService {
         results.push({ ...base, result: 'invalid', reason: 'transfer-pending' });
         continue;
       }
+      if (ev.dateMode !== 'SINGLE' && (!day || this.wrongDate(ev, t, day))) {
+        results.push({ ...base, result: 'invalid', reason: 'wrong-date', ticket: this.doorView(t, ev) });
+        continue;
+      }
+      if (ev.dateMode === 'DAYS' && day) {
+        const r = await this.admitDay(t.id, day.id, s.at, user.id, deviceId);
+        if (r.admitted) {
+          Object.assign(t, t.checkedInAt ? {} : { status: 'CHECKED_IN', checkedInAt: s.at, checkedInBy: user.id, checkedInDevice: deviceId });
+          checkerIds.add(user.id);
+          results.push({ ...base, result: 'checked_in', checkedInAt: s.at, checkedInBy: { id: user.id, name: null }, checkedInDevice: deviceId, ticket: this.doorView(t, ev) });
+          continue;
+        }
+        if (!r.prior) {
+          results.push({ ...base, result: 'invalid', reason: r.status === 'VOID' ? 'void' : 'transfer-pending' });
+          continue;
+        }
+        // In already that day. The same scan sent again (same scanner, same time) is reported as it was the first time.
+        const replay = r.prior.deviceId === deviceId && r.prior.at.getTime() === s.at.getTime();
+        if (r.prior.byUserId) checkerIds.add(r.prior.byUserId);
+        results.push({
+          ...base,
+          result: replay ? 'checked_in' : 'already',
+          ...(replay ? { replay: true } : {}),
+          checkedInAt: r.prior.at,
+          checkedInBy: r.prior.byUserId ? { id: r.prior.byUserId, name: null } : null,
+          checkedInDevice: r.prior.deviceId,
+          ticket: this.doorView(t, ev),
+        });
+        continue;
+      }
       if (t.status !== 'CHECKED_IN') {
         const { count } = await this.prisma.ticket.updateMany({
           where: { id: t.id, status: { in: ['ACTIVE', 'LISTED'] } },
@@ -1016,8 +1364,9 @@ export class OrganizerService {
         });
         if (count) {
           Object.assign(t, { status: 'CHECKED_IN', checkedInAt: s.at, checkedInBy: user.id, checkedInDevice: deviceId });
+          await this.recordEntry(t.id, t.eventDateId, s.at, user.id, deviceId);
           checkerIds.add(user.id);
-          results.push({ ...base, result: 'checked_in', checkedInAt: s.at, checkedInBy: { id: user.id, name: null }, checkedInDevice: deviceId, ticket: this.doorView(t) });
+          results.push({ ...base, result: 'checked_in', checkedInAt: s.at, checkedInBy: { id: user.id, name: null }, checkedInDevice: deviceId, ticket: this.doorView(t, ev) });
           continue;
         }
         // Someone else admitted it a moment ago: report theirs.
@@ -1038,7 +1387,7 @@ export class OrganizerService {
         checkedInAt: t.checkedInAt,
         checkedInBy: t.checkedInBy ? { id: t.checkedInBy, name: null } : null,
         checkedInDevice: t.checkedInDevice,
-        ticket: this.doorView(t),
+        ticket: this.doorView(t, ev),
       });
     }
     const people = checkerIds.size ? await this.prisma.user.findMany({ where: { id: { in: [...checkerIds] } }, select: { id: true, name: true } }) : [];
@@ -1063,18 +1412,36 @@ export class OrganizerService {
     return { eventId: id, deviceId, summary, results };
   }
 
-  private doorView(t: { id: string; holderName: string; section: string | null; row: string | null; seat: number | null; ticketType: { name: string }; order?: { kind: string; compGroup: string | null } }) {
+  /** What the door shows about a ticket; multiple dates add its date (DATES) or the days it's valid (DAYS). */
+  private doorView(t: DoorViewTicket, ev?: DoorEvent) {
     const comp = t.order?.kind === 'COMP';
-    return { id: t.id, holderName: t.holderName, ticketType: t.ticketType.name, section: t.section, row: t.row, seat: t.seat, comp, compGroup: comp ? (t.order?.compGroup ?? null) : null };
+    const base = { id: t.id, holderName: t.holderName, ticketType: t.ticketType.name, section: t.section, row: t.row, seat: t.seat, comp, compGroup: comp ? (t.order?.compGroup ?? null) : null };
+    if (!ev || ev.dateMode === 'SINGLE') return base;
+    return { ...base, ...ticketDates(ev.dateMode, { eventDateId: t.eventDateId ?? null, validDateIds: t.ticketType.validDateIds ?? [] }, ev.dates) };
   }
 
-  async undoCheckIn(id: string, ticketId: string, user: AuthUser) {
-    await this.eventFor(id, user, DOOR);
+  /** Undoes a check-in. DAYS: that day's entry (`eventDateId`, default the door's date); the ticket is ACTIVE again once it has none. */
+  async undoCheckIn(id: string, ticketId: string, user: AuthUser, eventDateId?: string) {
+    const ev = await this.eventFor(id, user, DOOR);
+    if (ev.dateMode === 'DAYS') {
+      const day = this.doorDay(ev, eventDateId);
+      const t = await this.prisma.ticket.findFirst({ where: { id: ticketId, eventId: id, status: 'CHECKED_IN' }, select: { id: true } });
+      const { count } = t && day ? await this.prisma.ticketCheckIn.deleteMany({ where: { ticketId, eventDateId: day.id } }) : { count: 0 };
+      if (!count) throw new NotFoundException('Checked-in ticket not found.');
+      const left = await this.prisma.ticketCheckIn.findFirst({ where: { ticketId }, orderBy: { at: 'asc' } });
+      await this.prisma.ticket.updateMany({
+        where: { id: ticketId, status: 'CHECKED_IN' },
+        data: left ? { checkedInAt: left.at, checkedInBy: left.byUserId, checkedInDevice: left.deviceId } : { status: 'ACTIVE', checkedInAt: null, checkedInBy: null, checkedInDevice: null },
+      });
+      await this.audit.log(user.id, 'checkin.undo', 'Ticket', ticketId, { eventDateId: day!.id });
+      return { undone: true };
+    }
     const { count } = await this.prisma.ticket.updateMany({
       where: { id: ticketId, eventId: id, status: 'CHECKED_IN' },
       data: { status: 'ACTIVE', checkedInAt: null, checkedInBy: null, checkedInDevice: null },
     });
     if (!count) throw new NotFoundException('Checked-in ticket not found.');
+    await this.prisma.ticketCheckIn.deleteMany({ where: { ticketId } });
     await this.audit.log(user.id, 'checkin.undo', 'Ticket', ticketId);
     return { undone: true };
   }

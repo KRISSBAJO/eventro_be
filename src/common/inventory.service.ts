@@ -5,6 +5,10 @@ import { sectionCapacity, type InUse, type SeatMap, type SeatPick } from '../dom
 
 type Tx = Prisma.TransactionClient | PrismaService;
 
+/** Filters for one date of a DATES event (no filter otherwise): its tickets, and holds on its tier copies. */
+const onDate = (eventDateId?: string | null) => (eventDateId ? { eventDateId } : {});
+const holdOnDate = (eventDateId?: string | null) => (eventDateId ? { ticketType: { eventDateId } } : {});
+
 /** Live availability: capacity minus sold minus unexpired holds. */
 @Injectable()
 export class InventoryService {
@@ -33,12 +37,15 @@ export class InventoryService {
     return new Map(types.map((t) => [t.id, Math.max(0, t.capacity - t.sold - (held.get(t.id) ?? 0))]));
   }
 
-  /** Sold and held seats per section (held = unexpired active holds, minus one to ignore). */
-  async seatsInUse(tx: Tx, eventId: string, sectionIds: string[], now = new Date(), exceptHoldId?: string): Promise<InUse> {
+  /**
+   * Sold and held seats per section (held = unexpired active holds, minus one to ignore). Multiple dates (DATES):
+   * pass the date, since every date sells the same seat map.
+   */
+  async seatsInUse(tx: Tx, eventId: string, sectionIds: string[], now = new Date(), exceptHoldId?: string, eventDateId?: string | null): Promise<InUse> {
     const [tickets, holds] = await Promise.all([
-      tx.ticket.findMany({ where: { eventId, section: { in: sectionIds }, status: { not: 'VOID' } }, select: { section: true, row: true, seat: true } }),
+      tx.ticket.findMany({ where: { eventId, section: { in: sectionIds }, status: { not: 'VOID' }, ...onDate(eventDateId) }, select: { section: true, row: true, seat: true } }),
       tx.hold.findMany({
-        where: { eventId, status: 'ACTIVE', expiresAt: { gt: now }, sectionId: { in: sectionIds }, ...(exceptHoldId ? { id: { not: exceptHoldId } } : {}) },
+        where: { eventId, status: 'ACTIVE', expiresAt: { gt: now }, sectionId: { in: sectionIds }, ...(exceptHoldId ? { id: { not: exceptHoldId } } : {}), ...holdOnDate(eventDateId) },
         select: { sectionId: true, quantity: true, seats: true },
       }),
     ]);
@@ -56,13 +63,13 @@ export class InventoryService {
     return out;
   }
 
-  /** Remaining places per seat-map section. */
-  async availabilityForSections(tx: Tx, eventId: string, map: SeatMap, now = new Date()) {
+  /** Remaining places per seat-map section (DATES: on one date). */
+  async availabilityForSections(tx: Tx, eventId: string, map: SeatMap, now = new Date(), eventDateId?: string | null) {
     const [sold, holds] = await Promise.all([
-      tx.ticket.groupBy({ by: ['section'], where: { eventId, status: { not: 'VOID' }, section: { not: null } }, _count: { _all: true } }),
+      tx.ticket.groupBy({ by: ['section'], where: { eventId, status: { not: 'VOID' }, section: { not: null }, ...onDate(eventDateId) }, _count: { _all: true } }),
       tx.hold.groupBy({
         by: ['sectionId'],
-        where: { eventId, status: 'ACTIVE', expiresAt: { gt: now }, sectionId: { not: null } },
+        where: { eventId, status: 'ACTIVE', expiresAt: { gt: now }, sectionId: { not: null }, ...holdOnDate(eventDateId) },
         _sum: { quantity: true },
       }),
     ]);

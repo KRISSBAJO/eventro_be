@@ -27,6 +27,7 @@ import { MailService, render } from '../mail/mail.module';
 import { config } from '../config';
 import { orderCode, ticketCode } from '../domain/codes';
 import { pickFromSections, type SeatMap, type SeatPick } from '../domain/seatmap';
+import { seatTier, ticketDateFields } from '../domain/event-dates';
 import { DOOR_ROLES, EDIT_ROLES, EMAIL, eventForRole, lines } from './access';
 import { IssueCompsDto, RevokeCompDto } from './organizer.dto';
 
@@ -34,7 +35,7 @@ export const MAX_COMPS_PER_BATCH = 200;
 const DAY = 86_400_000;
 
 const COMP_INCLUDE = {
-  ticketType: { select: { id: true, name: true } },
+  ticketType: { select: { id: true, name: true, eventDateId: true } },
   tickets: { select: { id: true, status: true, section: true, row: true, seat: true, checkedInAt: true, holderEmail: true, holderName: true } },
   gift: { select: { id: true, recipientName: true, recipientEmail: true, claimedAt: true, sentAt: true } },
 } satisfies Prisma.OrderInclude;
@@ -140,6 +141,10 @@ export class CompService {
     if ((ev.endsAt ?? ev.startsAt).getTime() + DAY < Date.now()) throw new BadRequestException('This event is over.');
     const tt = ev.ticketTypes.find((t) => t.id === dto.ticketTypeId);
     if (!tt) throw new NotFoundException('Ticket type not found.');
+    // Multiple dates: a comp is for the date of its tier copy, which has to be on and not over.
+    const date = tt.eventDateId ? ev.dates.find((d) => d.id === tt.eventDateId) : null;
+    if (date?.status === 'CANCELLED') throw new BadRequestException('That date was cancelled.');
+    if (date && (date.endsAt ?? date.startsAt).getTime() + DAY < Date.now()) throw new BadRequestException('That date is over.');
 
     const parsed = dto.text ? parseCompLines(dto.text) : { recipients: [], errors: [] };
     const recipients = [...(dto.recipients ?? []).map((r, i) => ({ name: r.name.replace(/\s+/g, ' ').trim(), email: r.email.trim().toLowerCase(), line: i + 1 })), ...parsed.recipients];
@@ -159,7 +164,7 @@ export class CompService {
     const note = dto.note?.trim() || null;
     const now = new Date();
     const map = ev.seatMap as SeatMap | null;
-    const sections = (map?.sections ?? []).filter((s) => s.ticketTypeId === tt.id);
+    const sections = (map?.sections ?? []).filter((s) => s.ticketTypeId === seatTier(tt));
     const ids = await this.prisma.$transaction(
       async (tx) => {
         // The same row lock as checkout, so comps and sales can't both take the last places.
@@ -176,7 +181,7 @@ export class CompService {
         // Reserved or standing places from the tier's seat map, one per guest (best available first).
         let seats: (SeatPick | { section: null; row: null; seat: null })[] = recipients.map(() => ({ section: null, row: null, seat: null }));
         if (sections.length) {
-          const inUse = await this.inventory.seatsInUse(tx, eventId, sections.map((s) => s.id), now);
+          const inUse = await this.inventory.seatsInUse(tx, eventId, sections.map((s) => s.id), now, undefined, tt.eventDateId);
           seats = recipients.map(() => {
             const pick = pickFromSections(sections, inUse, 1)?.[0];
             if (!pick) throw new ConflictException(`There are no places left on the seat map for ${tt.name}.`);
@@ -224,6 +229,7 @@ export class CompService {
                   section: seats[i].section,
                   row: seats[i].row,
                   seat: seats[i].seat,
+                  ...ticketDateFields(tt),
                 },
               },
             },
