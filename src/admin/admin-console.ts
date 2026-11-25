@@ -254,7 +254,7 @@ export class AdminConsoleService {
       select: { id: true, email: true, name: true, roles: true, createdAt: true, suspendedAt: true, suspendReason: true, _count: { select: { orders: true, tickets: true, memberships: true } } },
     });
     if (!u) throw new NotFoundException('User not found.');
-    const [orders, tickets, memberships, spend, history, activeAdmins] = await Promise.all([
+    const [orders, tickets, memberships, spend, history, activeAdmins, consent] = await Promise.all([
       this.prisma.order.findMany({
         where: { buyerId: id },
         orderBy: { createdAt: 'desc' },
@@ -270,6 +270,12 @@ export class AdminConsoleService {
       this.prisma.order.groupBy({ by: ['currency'], where: { buyerId: id, status: { in: PAID_STATUSES } }, _sum: { totalCents: true, refundedCents: true }, _count: { _all: true } }),
       this.history({ entity: 'User', entityId: id }),
       this.prisma.user.count({ where: { roles: { has: 'ADMIN' }, suspendedAt: null } }),
+      // the latest cookie choice made while signed in (full history: GET /admin/consents?userId=)
+      this.prisma.consentRecord.findFirst({
+        where: { userId: id },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        select: { consentId: true, policyVersion: true, analytics: true, marketing: true, gpc: true, method: true, createdAt: true },
+      }),
     ]);
     const { _count, ...rest } = u;
     const spent = spend.map((s) => ({ currency: s.currency, orders: s._count._all, netCents: (s._sum.totalCents ?? 0) - (s._sum.refundedCents ?? 0) }));
@@ -283,6 +289,7 @@ export class AdminConsoleService {
       memberships: memberships.map((m) => ({ role: m.role, status: m.status, since: m.createdAt, org: { id: m.org.id, name: m.org.name, verified: !!m.org.verifiedAt, suspended: !!m.org.suspendedAt } })),
       activeAdmins,
       history,
+      consent,
     };
   }
 

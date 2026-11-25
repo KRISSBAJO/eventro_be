@@ -34,6 +34,8 @@ export const RATE_RULES = {
   signup: { bucket: 'signup:ip', env: 'SIGNUPS_PER_IP_PER_HOUR', limit: 20, windowMs: HOUR, by: 'ip' },
   newsletter: { bucket: 'newsletter:ip', env: 'SIGNUPS_PER_IP_PER_HOUR', limit: 20, windowMs: HOUR, by: 'ip' },
   priceWatch: { bucket: 'price-watch:ip', env: 'SIGNUPS_PER_IP_PER_HOUR', limit: 20, windowMs: HOUR, by: 'ip' },
+  /** cookie consent records from the website (one per choice; many visitors can share an IP) */
+  consent: { bucket: 'consent:ip', env: 'RATE_CONSENT_PER_IP', limit: 60, windowMs: HOUR, by: 'ip' },
   forgotPassword: { bucket: 'forgot:ip', env: 'RATE_FORGOT_PER_IP', limit: 5, windowMs: HOUR, by: 'ip' },
   /** resetting (and checking a reset link) and changing a password */
   password: { bucket: 'password:ip', env: 'RATE_PASSWORD_PER_IP', limit: 10, windowMs: HOUR, by: 'ip' },

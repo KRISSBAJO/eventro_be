@@ -26,6 +26,7 @@ import { ResaleModule } from './resale/resale.module';
 import { PushModule } from './push/push.module';
 import { SavedModule } from './saved/saved.module';
 import { ScheduleModule } from './schedule/schedule.module';
+import { ConsentModule } from './consent/consent.module';
 import { Payments } from './checkout/payments';
 
 @ApiTags('health')
@@ -71,6 +72,7 @@ class CoreModule {}
     ResaleModule,
     SavedModule,
     ScheduleModule,
+    ConsentModule,
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_GUARD, useClass: AuthGuard }],

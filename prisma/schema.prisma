@@ -155,6 +155,7 @@ model User {
   savedEvents    SavedEvent[]
   /// Push notification choices, e.g. { "priceDrops": false }. Missing keys mean on.
   notifyPrefs    Json?
+  consents       ConsentRecord[]
 }
 
 /// Long-lived sign-ins for the mobile app: a refresh token (only its SHA-256 hash is stored) per device.
@@ -695,6 +696,31 @@ model Subscriber {
   unsubscribedAt DateTime?
 
   @@index([clientIp, createdAt])
+}
+
+/// Proof of a website visitor's cookie choice. Every choice (and every change) appends a row; nothing is overwritten.
+/// `consentId` is the random ID kept in the visitor's `eventro_consent` cookie. No IP address is stored.
+model ConsentRecord {
+  id            String   @id @default(cuid())
+  consentId     String
+  /// the cookie policy version the visitor saw, e.g. "2026-11-25"
+  policyVersion String
+  analytics     Boolean
+  marketing     Boolean
+  /// the browser sent Global Privacy Control (marketing is then always off)
+  gpc           Boolean  @default(false)
+  /// banner, settings or gpc
+  method        String
+  /// set when the visitor was signed in
+  userId        String?
+  /// truncated to 200 characters
+  userAgent     String?
+  createdAt     DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([consentId, createdAt])
+  @@index([userId, createdAt])
 }
 
 /// A ticket type got cheaper on a published event. Fans watching the event (and matching newsletter subscribers) hear about it.
