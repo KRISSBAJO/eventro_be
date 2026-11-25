@@ -20,6 +20,7 @@ import { paystackCountryFor } from '../organizer/payout-accounts';
 import { NoticeService } from '../push/notices';
 import { PROMO_ON_PWYW, checkDonation, donationsView, isPwyw, pwywUnit, pwywView, type DonationSettings, type PwywTier } from '../domain/pwyw';
 import { seatTier, ticketDateFields, ticketDates, ticketTimes, whenText } from '../domain/event-dates';
+import { releaseReservations } from '../schedule/release';
 
 type Tx = Prisma.TransactionClient;
 
@@ -517,6 +518,8 @@ export class CheckoutService {
           const old = l.ticket;
           const owner = order.buyerId ?? (await tx.user.findUnique({ where: { email: order.email }, select: { id: true } }))?.id ?? null;
           await tx.ticket.update({ where: { id: old.id }, data: { status: 'VOID', listCents: null, resoldAt: new Date(), section: null, row: null, seat: null } });
+          // The seller's session bookings don't pass to the buyer's new ticket: the places go back.
+          await releaseReservations(tx, { id: old.id });
           await tx.ticket.create({
             data: {
               id: ticketCode(order.id, 0),

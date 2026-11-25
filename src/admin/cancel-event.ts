@@ -20,6 +20,7 @@ import { AdminService } from './admin.module';
 import { NoticeService } from '../push/notices';
 import { VenueBookingService } from '../venues/venue-bookings';
 import { dateName, dateView, summaryTimes, type DateRow } from '../domain/event-dates';
+import { releaseReservations } from '../schedule/release';
 
 const REFUNDABLE = ['PAID', 'PARTIALLY_REFUNDED'] as const;
 
@@ -146,6 +147,8 @@ export class EventCancellation {
 
     // 3. No ticket for a cancelled event can be used, listed or transferred, refunded or not.
     await this.prisma.ticket.updateMany({ where: { eventId, status: { not: 'VOID' } }, data: { status: 'VOID', listCents: null, transferTo: null, transferExpiresAt: null } });
+    // Session places booked with them go back too.
+    await releaseReservations(this.prisma, { eventId });
 
     const totalRefundedCents: Record<string, number> = {};
     for (const r of refunded) totalRefundedCents[r.currency] = (totalRefundedCents[r.currency] ?? 0) + r.cents;
@@ -304,6 +307,7 @@ export class EventCancellation {
 
     // 3. No ticket for the date can be used, listed or transferred, refunded or not.
     await this.prisma.ticket.updateMany({ where: { eventDateId: d.id, status: { not: 'VOID' } }, data: { status: 'VOID', listCents: null, transferTo: null, transferExpiresAt: null } });
+    await releaseReservations(this.prisma, { eventDateId: d.id });
 
     const totalRefundedCents: Record<string, number> = {};
     for (const r of refunded) totalRefundedCents[r.currency] = (totalRefundedCents[r.currency] ?? 0) + r.cents;

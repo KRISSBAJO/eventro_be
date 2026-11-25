@@ -12,6 +12,7 @@ import { CurrentUser, Roles, type AuthUser } from '../common/auth';
 import { donationLeft, ticketLeft, ticketTotal } from '../domain/pwyw';
 import { organizerPaidOut } from '../domain/paid-out';
 import { LIVE_TYPE, dateView } from '../domain/event-dates';
+import { releaseReservations } from '../schedule/release';
 
 export class RejectDto {
   @ApiProperty() @IsString() @MinLength(5) @MaxLength(500) note: string;
@@ -173,6 +174,8 @@ export class AdminService {
       });
       if (ticketsDone) {
         const { count } = await tx.ticket.updateMany({ where: { orderId, status: { not: 'VOID' } }, data: { status: 'VOID', listCents: null, transferTo: null } });
+        // Session places booked with these tickets go back.
+        await releaseReservations(tx, { orderId, status: 'VOID' });
         // A resale order's seat was already counted as sold for the original buyer; hold the seller's payout for review.
         if (o.resaleListingId) {
           if (!opts.keepSellerPayout) await tx.resaleListing.update({ where: { id: o.resaleListingId }, data: { payoutStatus: 'HELD', payoutNote: `Buyer refunded: ${reason}` } });
@@ -202,6 +205,8 @@ export class AdminService {
     const status = await this.prisma.$transaction(async (tx) => {
       const { count } = opts.keepTicket ? { count: 0 } : await tx.ticket.updateMany({ where: { id: ticketId, status: { not: 'VOID' } }, data: { status: 'VOID', listCents: null, transferTo: null } });
       if (count) await tx.ticketType.update({ where: { id: t.ticketTypeId }, data: { sold: { decrement: count } } });
+      // A voided ticket's session places go back (a multi-day pass kept for its other days keeps them).
+      if (count) await releaseReservations(tx, { id: ticketId });
       const live = await tx.ticket.count({ where: { orderId, status: { not: 'VOID' } } });
       const next = live === 0 && amountCents === remaining ? 'REFUNDED' : 'PARTIALLY_REFUNDED';
       await tx.order.update({ where: { id: orderId }, data: { refundedCents: { increment: amountCents }, status: next } });

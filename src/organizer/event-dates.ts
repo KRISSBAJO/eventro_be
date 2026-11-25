@@ -14,6 +14,7 @@ import { BadRequestException, ConflictException, Injectable } from '@nestjs/comm
 import { Prisma, type EventDate, type TicketType } from '@prisma/client';
 import { MAX_DATES, MAX_DAYS, byStart, dateTimeLabel, dayLabel, dayOf, isActive, summaryTimes, type DateMode } from '../domain/event-dates';
 import type { SeatMap } from '../domain/seatmap';
+import { dateForItem } from '../domain/schedule';
 
 type Tx = Prisma.TransactionClient;
 
@@ -224,6 +225,8 @@ export class EventDatesService {
     } else {
       await tx.ticketType.updateMany({ where: { eventId: ev.id }, data: { validDateIds: [] } });
     }
+    // The schedule stays, as the one date's (no orders, so no bookings).
+    await tx.scheduleItem.updateMany({ where: { eventId: ev.id }, data: { eventDateId: null } });
     await tx.eventDate.deleteMany({ where: { eventId: ev.id } });
     await tx.event.update({ where: { id: ev.id }, data: { dateMode: 'SINGLE' } });
   }
@@ -247,6 +250,10 @@ export class EventDatesService {
       if (map) await tx.event.update({ where: { id: eventId }, data: { seatMap: map } });
     } else {
       await tx.ticketType.updateMany({ where: { eventId }, data: { validDateIds: dates.map((d) => d.id) } });
+    }
+    // Schedule items go on the date whose times hold them (else the same calendar day, else the first date).
+    for (const i of await tx.scheduleItem.findMany({ where: { eventId, eventDateId: null } })) {
+      await tx.scheduleItem.update({ where: { id: i.id }, data: { eventDateId: dateForItem(i, dates)?.id ?? null } });
     }
     await tx.event.update({ where: { id: eventId }, data: { dateMode: mode } });
     await this.syncSummary(tx, eventId);

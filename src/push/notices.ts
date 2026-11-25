@@ -16,6 +16,8 @@
  *   reminder.doors           holders of ACTIVE     reminders   reminder.doors:<eventId>:<userId>
  *   order.sale               org admins, managers  sales       order.sale:<orderId>:<userId>
  *   guarantee.<kind>         claimant              orders      guarantee.<kind>:<claimId>   (received, approved, declined, refunded)
+ *   session.cancelled        holders who booked    tickets     session.cancelled:<itemId>:<userId>
+ *   session.moved            holders who booked    tickets     session.moved:<itemId>:<startsAt ms>:<userId>
  *
  * Every method swallows its own errors (logged), so callers can `void` them.
  */
@@ -319,6 +321,33 @@ export class NoticeService implements OnModuleInit, OnModuleDestroy {
           body: `Now at ${venue.name}, ${venue.city}. Same date and time, and your tickets still work.`,
           data: link('/tickets', { type: 'event.venue', eventId: e.id }),
           dedupeKey: `event.venue:${e.id}:${changeId}:${userId}`,
+        })),
+      );
+    });
+  }
+
+  /**
+   * A booked session (bookable schedule item) was cancelled, or has a new time: to each holder with an account, once
+   * per person per change (a holder with two tickets booked hears once), opening their ticket.
+   */
+  sessionChanged(kind: 'cancelled' | 'moved', e: { id: string; title: string }, item: { id: string; title: string; startsAt: Date }, holders: { ticketId: string; ownerId: string | null; holderEmail: string }[]) {
+    return this.guard(`session.${kind} ${item.id}`, async () => {
+      const byEmail = await this.usersByEmail(holders.filter((h) => !h.ownerId).map((h) => h.holderEmail));
+      const ticketOf = new Map<string, string>();
+      for (const h of holders) {
+        const id = h.ownerId ?? byEmail.get(h.holderEmail);
+        if (id && !ticketOf.has(id)) ticketOf.set(id, h.ticketId);
+      }
+      const when = wallClockLabel(item.startsAt, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+      await this.push.send(
+        `session.${kind}`,
+        'tickets',
+        [...ticketOf].map(([userId, ticketId]) => ({
+          userId,
+          title: kind === 'cancelled' ? `Session cancelled: ${item.title}` : `Session moved: ${item.title}`,
+          body: kind === 'cancelled' ? `${e.title}: this session was cancelled and your place released. Your ticket still works.` : `${e.title}: now ${when}. Your place is still booked.`,
+          data: link(`/tickets/${ticketId}`, { type: `session.${kind}`, eventId: e.id, itemId: item.id, ticketId }),
+          dedupeKey: kind === 'cancelled' ? `session.cancelled:${item.id}:${userId}` : `session.moved:${item.id}:${item.startsAt.getTime()}:${userId}`,
         })),
       );
     });

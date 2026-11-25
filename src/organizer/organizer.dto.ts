@@ -25,8 +25,9 @@ import {
   ValidateIf,
   ValidateNested,
 } from 'class-validator';
-import { Category } from '@prisma/client';
+import { Category, type ScheduleKind } from '@prisma/client';
 import { DATE_MODES, MAX_DATES, MAX_DAYS, type DateMode } from '../domain/event-dates';
+import { MAX_ITEMS, MAX_PEOPLE, MAX_PLACES, SCHEDULE_KINDS } from '../domain/schedule';
 
 const lower = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim().toLowerCase() : value);
 const upper = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim().toUpperCase() : value);
@@ -155,6 +156,63 @@ export class EventExtrasDto {
   @ApiPropertyOptional({ nullable: true, description: 'Most live complimentary tickets on this event (null = no limit)' }) @IsOptional() @IsInt() @Min(0) @Max(200_000) compLimit?: number | null;
 }
 
+const toIntOrSelf = ({ value }: { value: unknown }) => (typeof value === 'string' && /^\d+$/.test(value.trim()) ? Number(value) : value);
+
+/** One schedule item (create, or PUT /organizer/events/:id/schedule). See src/schedule. */
+export class ScheduleItemInputDto {
+  @ApiPropertyOptional({ description: 'PUT: an item to keep (and change). Without: a new item' }) @IsOptional() @IsString() @MaxLength(40) id?: string;
+  @ApiPropertyOptional({ nullable: true, description: 'DATES/DAYS: the date or day it is on (required there; leave out for one-date events)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  eventDateId?: string | null;
+  @ApiPropertyOptional({ nullable: true, description: 'Create only: the date as an index into `dates` as sent (instead of eventDateId)' })
+  @IsOptional()
+  @Transform(toIntOrSelf)
+  @IsInt()
+  @Min(0)
+  @Max(MAX_DATES - 1)
+  dateRef?: number | null;
+  @ApiProperty({ description: 'Wall-clock time, like event times' }) @IsDateString() startsAt: string;
+  @ApiPropertyOptional({ nullable: true }) @IsOptional() @IsDateString() endsAt?: string | null;
+  @ApiProperty() @IsString() @MinLength(1) @MaxLength(120) title: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(600) note?: string | null;
+  @ApiPropertyOptional({ nullable: true, description: 'Stage or room' }) @IsOptional() @IsString() @MaxLength(60) stage?: string | null;
+  @ApiPropertyOptional({ type: [String], description: `Artists, speakers, hosts (up to ${MAX_PEOPLE})` })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(MAX_PEOPLE)
+  @IsString({ each: true })
+  @MaxLength(80, { each: true })
+  people?: string[] | null;
+  @ApiPropertyOptional({ enum: SCHEDULE_KINDS, default: 'OTHER' }) @IsOptional() @IsIn(SCHEDULE_KINDS) kind?: ScheduleKind;
+  @ApiPropertyOptional({ description: 'Ticket holders can book a place' }) @IsOptional() @IsBoolean() bookable?: boolean;
+  @ApiPropertyOptional({ nullable: true, description: `Places (required when bookable), 1–${MAX_PLACES}` }) @IsOptional() @IsInt() @Min(1) @Max(MAX_PLACES) capacity?: number | null;
+  @ApiPropertyOptional({
+    type: [String],
+    description: 'Bookable items: only these ticket types can book (TicketType ids; DATES: tier keys or any copy id; create: indexes into `ticketTypes`). Empty = any ticket for that date',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(40)
+  @IsString({ each: true })
+  @MaxLength(60, { each: true })
+  eligibleTiers?: string[] | null;
+}
+
+export class ScheduleDto {
+  @ApiProperty({ type: [ScheduleItemInputDto], description: 'The full schedule: items left out are removed (bookings on them are cancelled and holders told)' })
+  @IsArray()
+  @ArrayMaxSize(MAX_ITEMS, { message: `A schedule can have up to ${MAX_ITEMS} items.` })
+  @ValidateNested({ each: true })
+  @Type(() => ScheduleItemInputDto)
+  items: ScheduleItemInputDto[];
+}
+
+export class SessionCheckInDto {
+  @ApiProperty({ description: 'The ticket QR payload or the ticket number' }) @IsString() @MinLength(3) @MaxLength(200) code: string;
+}
+
 export class CreateEventDto extends EventExtrasDto {
   @ApiProperty() @IsString() @MinLength(3) @MaxLength(120) title: string;
   @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(120) subtitle?: string;
@@ -200,6 +258,13 @@ export class CreateEventDto extends EventExtrasDto {
   @ArrayMinSize(1)
   @ArrayMaxSize(20)
   ticketTypes: TicketTypeInputDto[];
+  @ApiPropertyOptional({ type: [ScheduleItemInputDto], description: 'Optional schedule (agenda); DATES/DAYS items name their date with `dateRef` (index into `dates`)' })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(MAX_ITEMS, { message: `A schedule can have up to ${MAX_ITEMS} items.` })
+  @ValidateNested({ each: true })
+  @Type(() => ScheduleItemInputDto)
+  schedule?: ScheduleItemInputDto[];
 }
 
 export class UpdateEventDto extends EventExtrasDto {

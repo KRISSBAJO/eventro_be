@@ -28,6 +28,7 @@ import { config } from '../config';
 import { orderCode, ticketCode } from '../domain/codes';
 import { pickFromSections, type SeatMap, type SeatPick } from '../domain/seatmap';
 import { seatTier, ticketDateFields } from '../domain/event-dates';
+import { releaseReservations } from '../schedule/release';
 import { DOOR_ROLES, EDIT_ROLES, EMAIL, eventForRole, lines } from './access';
 import { IssueCompsDto, RevokeCompDto } from './organizer.dto';
 
@@ -272,6 +273,7 @@ export class CompService {
         data: { status: 'VOID', transferTo: null, transferExpiresAt: null, listCents: null, qrVersion: { increment: 1 } },
       });
       if (voided.count) await tx.ticketType.update({ where: { id: o.ticketTypeId }, data: { sold: { decrement: voided.count } } });
+      await releaseReservations(tx, { orderId, status: 'VOID' });
       await tx.resaleListing.updateMany({ where: { ticketId: t?.id ?? '', status: { in: ['ACTIVE', 'HELD'] } }, data: { status: 'CANCELLED', cancelReason: 'Comp cancelled by the organizer', heldBy: null, heldUntil: null } });
     });
     await this.audit.log(user.id, 'comp.revoke', 'Order', orderId, { eventId, ticketId: t?.id ?? null, reason });

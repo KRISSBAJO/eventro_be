@@ -16,6 +16,7 @@ import { NoticeService } from '../push/notices';
 import { GiftService } from '../gifts/gifts.module';
 import { guaranteeFor } from '../guarantee/guarantee';
 import { byStart, dateView, ticketDates, ticketTimes } from '../domain/event-dates';
+import { ScheduleService } from '../schedule/schedule.module';
 
 /** How the phone turns a seed into door codes (also in the README). */
 export const QR_SEED_SPEC = {
@@ -46,6 +47,7 @@ export class TicketsService {
     private readonly mail: MailService,
     private readonly notices: NoticeService,
     private readonly gifts: GiftService,
+    private readonly schedule: ScheduleService,
   ) {}
 
   /** Transfers nobody accepted in time go back to the sender. */
@@ -105,6 +107,8 @@ export class TicketsService {
     // Section names come from the event's seat map ("Lower Level 104"); the map itself stays out of the response.
     // Online events: the stream link goes only with tickets the holder still has (not ones being sold or transferred).
     // Paid tickets carry the Eventro Guarantee: cover, who pays, the claim window and any claim (see src/guarantee).
+    // Booked sessions (bookable schedule items) go with each ticket.
+    const sessions = await this.schedule.sessionsByTicket(rows.map((r) => r.id));
     const tickets = rows.map(({ event: { seatMap, streamUrl, dates, ...event }, guaranteeClaim, ...t }) => {
       const s = (seatMap as SeatMap | null)?.sections.find((x) => x.id === t.section);
       const watch = event.online && (t.status === 'ACTIVE' || t.status === 'CHECKED_IN') ? streamUrl : null;
@@ -114,7 +118,7 @@ export class TicketsService {
       const guarantee = guaranteeFor({ id: t.id, resaleGuarantee: t.resaleGuarantee, guaranteeClaim }, t.order, event, Date.now(), dated);
       // Multiple dates: the ticket's own date (DATES) or the days it admits on (DAYS); the event's dates for context.
       const when = ticketDates(event.dateMode, t.ticketType, dates);
-      return { ...t, ticketType: withLook(t.ticketType), ...seed, event: { ...event, streamUrl: watch, dates: dates.sort(byStart).map(dateView) }, ...when, sectionName: s ? sectionName(s) : null, guarantee };
+      return { ...t, ticketType: withLook(t.ticketType), ...seed, event: { ...event, streamUrl: watch, dates: dates.sort(byStart).map(dateView) }, ...when, sectionName: s ? sectionName(s) : null, guarantee, sessions: sessions.get(t.id) ?? [] };
     });
     const incoming = await this.prisma.ticket.findMany({
       where: { transferTo: user.email, status: 'TRANSFER_PENDING' },

@@ -23,6 +23,7 @@ import { EventCancellation } from '../admin/cancel-event';
 import { VenueChange } from './venue-change';
 import { VenueBookingService, assertFits } from '../venues/venue-bookings';
 import { isLive } from '../venues/booking-rules';
+import { ScheduleService } from '../schedule/schedule.module';
 import { EventDatesService, planDates, capacitiesFor, daysFor, resolveRef, type TierInput } from './event-dates';
 import { liveType, dateName, dateRangeWhere, dateView, daysList, doorDate, isActive, nextActive, nextDateView, seatTier, ticketDates, ticketTimes, validDays, type DateMode } from '../domain/event-dates';
 import type {
@@ -117,6 +118,7 @@ export class OrganizerService {
     private readonly scans: ScanLog,
     private readonly guests: GuestListService,
     private readonly dates: EventDatesService,
+    private readonly schedule: ScheduleService,
   ) {}
 
   /* ---------- access ---------- */
@@ -232,7 +234,16 @@ export class OrganizerService {
     return this.venues.sameVenue(v, country);
   }
 
+  /** Creates an event; an optional `schedule` is checked first (nothing is created if it's wrong) and stored after. */
   async createEvent(orgId: string, user: AuthUser, dto: CreateEventDto) {
+    if (!dto.schedule?.length) return this.createEventCore(orgId, user, dto);
+    await this.member(orgId, user, EDIT);
+    const plan = this.schedule.planForCreate(dto);
+    const created = await this.createEventCore(orgId, user, dto);
+    return { ...created, schedule: await this.schedule.insertCreated(created.id, plan) };
+  }
+
+  private async createEventCore(orgId: string, user: AuthUser, dto: CreateEventDto) {
     await this.member(orgId, user, EDIT);
     if (!dto.online && !dto.venueId && !dto.venue && !dto.venueBookingId) throw new BadRequestException('Add a venue, or mark the event as online.');
     // Times are wall-clock times in this zone, so an unknown zone would show the wrong time to everyone.
@@ -928,6 +939,8 @@ export class OrganizerService {
       guestList,
       // Multiple dates and multi-day events: sold / capacity / in per date (see byDate)
       byDate: await this.byDate(ev, money),
+      // Bookable schedule items: places booked and checked in ([] without any)
+      sessions: await this.schedule.statsSessions(id, ev.dates),
       donations: {
         orders: donation._count._all,
         cents: (donation._sum.donationCents ?? 0) - (donation._sum.donationRefundedCents ?? 0),

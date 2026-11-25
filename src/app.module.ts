@@ -25,6 +25,7 @@ import { VenuesModule } from './venues/venues.module';
 import { ResaleModule } from './resale/resale.module';
 import { PushModule } from './push/push.module';
 import { SavedModule } from './saved/saved.module';
+import { ScheduleModule } from './schedule/schedule.module';
 import { Payments } from './checkout/payments';
 
 @ApiTags('health')
@@ -69,6 +70,7 @@ class CoreModule {}
     VenuesModule,
     ResaleModule,
     SavedModule,
+    ScheduleModule,
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_GUARD, useClass: AuthGuard }],

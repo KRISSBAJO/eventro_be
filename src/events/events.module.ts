@@ -15,6 +15,7 @@ import { resolveLook } from '../domain/tier-look';
 import { pastCutoff } from '../resale/resale.module';
 import { donationsView, pwywView } from '../domain/pwyw';
 import { config } from '../config';
+import { ScheduleService } from '../schedule/schedule.module';
 import { LIVE_TYPE, dateRangeWhere, dateView, liveType, nextActive, nextDateView, ticketTimes, type DateRow } from '../domain/event-dates';
 
 /** The date asked for (DATES), else the next one on sale, else the first. */
@@ -96,6 +97,7 @@ export class EventsService {
     private readonly prisma: PrismaService,
     private readonly inventory: InventoryService,
     private readonly fx: FxService,
+    private readonly schedule: ScheduleService,
   ) {}
 
   /** Paid tickets per event in the last TRENDING_DAYS days (refunded orders don't count). */
@@ -235,6 +237,8 @@ export class EventsService {
       return ticketTimes(e.dateMode, e, t, e.dates).first.startsAt > now;
     };
     const left = (t: (typeof e.ticketTypes)[number]) => (cancelled || !onSale(t) ? 0 : (avail.get(t.id) ?? 0));
+    // The schedule (agenda) with places left on bookable items; stages for the filter chips. Empty without one.
+    const { schedule, stages } = await this.schedule.publicView(e);
     return {
       id: e.id,
       slug: e.slug,
@@ -292,6 +296,8 @@ export class EventsService {
       },
       // DATES: the date the seat map's `available` numbers are for
       seatMapDateId: seatDate?.id ?? null,
+      schedule,
+      stages,
     };
   }
 }

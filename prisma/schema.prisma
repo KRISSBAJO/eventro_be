@@ -409,6 +409,7 @@ model Event {
   compLimit              Int?
   guestList              GuestListEntry[]
   guestCheckIns          GuestCheckIn[]
+  scheduleItems          ScheduleItem[]
 
   @@index([status, startsAt])
   @@index([orgId])
@@ -434,6 +435,7 @@ model EventDate {
   ticketTypes TicketType[]
   tickets     Ticket[]
   checkIns    TicketCheckIn[]
+  scheduleItems ScheduleItem[]
 
   @@index([eventId, startsAt])
 }
@@ -605,6 +607,7 @@ model Ticket {
   scanAttempts   ScanAttempt[]
   guaranteeClaim GuaranteeClaim?
   checkIns       TicketCheckIn[]
+  sessionReservations SessionReservation[]
 
   /// A reserved seat can only be sold once per date (GA tickets have no seat, so they don't collide).
   @@unique([eventId, dateKey, section, row, seat])
@@ -1041,6 +1044,70 @@ model GuestCheckIn {
 
   @@index([eventId, at])
   @@index([entryId, at])
+}
+
+/// What a schedule item is (icons and filters on the event page).
+enum ScheduleKind {
+  PERFORMANCE
+  TALK
+  WORKSHOP
+  BREAK
+  OTHER
+}
+
+/// One entry of an event's schedule (agenda): a set, a talk, a workshop, a break. Optional for organizers. DATES/DAYS
+/// items are on one date (eventDateId); SINGLE items have none. Times are wall clock stored as UTC, like event times.
+/// Bookable items have `capacity` places that ticket holders reserve for free (SessionReservation); `reserved` is kept
+/// in step with the active reservations by atomic updates. `eligibleTiers` limits who can book: TicketType ids
+/// (SINGLE/DAYS) or tier keys (DATES); empty = any ticket for that date. An item removed while it had reservations is
+/// kept with `cancelledAt` (its holders were told); one without reservations is deleted.
+model ScheduleItem {
+  id            String       @id @default(cuid())
+  eventId       String
+  eventDateId   String?
+  startsAt      DateTime
+  endsAt        DateTime?
+  title         String
+  note          String       @default("")
+  stage         String?
+  people        String[]     @default([])
+  kind          ScheduleKind @default(OTHER)
+  sortOrder     Int          @default(0)
+  bookable      Boolean      @default(false)
+  capacity      Int?
+  reserved      Int          @default(0)
+  eligibleTiers String[]     @default([])
+  cancelledAt   DateTime?
+  createdAt     DateTime     @default(now())
+
+  event        Event                @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  eventDate    EventDate?           @relation(fields: [eventDateId], references: [id], onDelete: Cascade)
+  reservations SessionReservation[]
+
+  @@index([eventId, startsAt])
+  @@index([eventDateId])
+}
+
+/// A ticket's place in a bookable schedule item. It belongs to the ticket: a transfer or gift (same ticket) keeps it;
+/// resale (a new ticket), a refund, a void, or a cancelled date or event releases it (`cancelledAt`, and the item's
+/// `reserved` goes down). Cancelling and booking again reuses the row. `checkedInAt`/`checkedInBy`: let in to the
+/// session (separate from the event's door check-in).
+model SessionReservation {
+  id             String    @id @default(cuid())
+  scheduleItemId String
+  ticketId       String
+  /// the account that booked
+  userId         String?
+  createdAt      DateTime  @default(now())
+  cancelledAt    DateTime?
+  checkedInAt    DateTime?
+  checkedInBy    String?
+
+  item   ScheduleItem @relation(fields: [scheduleItemId], references: [id], onDelete: Cascade)
+  ticket Ticket       @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  @@unique([scheduleItemId, ticketId])
+  @@index([ticketId])
 }
 
 enum GuaranteeClaimStatus {
