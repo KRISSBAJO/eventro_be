@@ -4,9 +4,9 @@
  *
  * Refunds are for the org's ADMINs only, like cancelling the event and the payouts screen (money leaves the
  * organizer's payout); managers and door staff can see the list. A refund goes through AdminService.refundDonation,
- * the same path as an Eventro admin's: a conditional update and the provider idempotency key `donation-<orderId>`,
+ * the same path as an Omoshow admin's: a conditional update and the provider idempotency key `donation-<orderId>`,
  * so an admin and an organizer can't both refund it; what's refunded is counted in donationRefundedCents (payouts and
- * donation totals drop by it), recorded as owed to Eventro if the organizer had already been paid for the order, and
+ * donation totals drop by it), recorded as owed to Omoshow if the organizer had already been paid for the order, and
  * the buyer is emailed "Your donation of $X to {cause} was refunded." The tickets are untouched.
  *
  *   GET  /organizer/events/:id/donations                              (ADMIN, MANAGER, DOOR)

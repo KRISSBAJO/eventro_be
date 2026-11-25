@@ -1,5 +1,5 @@
 /**
- * Cancelling a whole event, by its organizer (org admins) or by Eventro.
+ * Cancelling a whole event, by its organizer (org admins) or by Omoshow.
  *
  * The event becomes CANCELLED with sales paused; active holds are released and resale listings taken down; every
  * paid order is refunded for what's left on it, one at a time through AdminService.refundOrder (the same path as
@@ -107,7 +107,7 @@ export class EventCancellation {
       this.prisma.hold.updateMany({ where: { eventId, status: 'ACTIVE' }, data: { status: 'RELEASED' } }),
       this.prisma.resaleListing.updateMany({ where: { eventId, status: { in: ['ACTIVE', 'HELD'] } }, data: { status: 'CANCELLED', cancelReason: 'Event cancelled', heldBy: null, heldUntil: null } }),
     ]);
-    // The venue booked for it on Eventro is let go, and its managers hear. Never stops the refunds.
+    // The venue booked for it on Omoshow is let go, and its managers hear. Never stops the refunds.
     const venueBookingCancelled = await this.bookings.cancelForEvent(eventId, actor).catch((err) => {
       this.log.warn(`Venue booking of cancelled event ${eventId}: ${(err as Error).message}`);
       return null;
@@ -360,7 +360,7 @@ export class EventCancellation {
     const when = e.startsAt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
     const where = e.venue ? ` at ${e.venue.name}, ${e.venue.city}` : '';
     const first = (name: string) => name.split(' ')[0] || 'there';
-    const footer = `You’re getting this because you bought tickets to ${e.title} on Eventro.`;
+    const footer = `You’re getting this because you bought tickets to ${e.title} on Omoshow.`;
     const mails: Mail[] = refunded.map((r) => {
       const amount = formatMoney(r.cents, r.currency);
       return {
@@ -394,7 +394,7 @@ export class EventCancellation {
             paragraphs: [
               `Hi ${first(f.buyerName)}, we’re sorry: ${e.title} by ${e.org.name} (${when}${where}) has been cancelled.`,
               `The reason given: “${reason}”`,
-              `Your refund of ${amount} for order ${f.orderId} is being processed by the Eventro team. We’ll email you again as soon as it’s sent; after that it can take 5–10 business days to show up.`,
+              `Your refund of ${amount} for order ${f.orderId} is being processed by the Omoshow team. We’ll email you again as soon as it’s sent; after that it can take 5–10 business days to show up.`,
             ],
             highlight: { label: 'Refund due', value: amount },
             footer,
@@ -421,7 +421,7 @@ export class EventCancellation {
               'You were on the guest list with a complimentary ticket. It has been cancelled, so there’s nothing else you need to do.',
             ],
             cta: { label: 'Find another event', url: `${config.webUrl}/events` },
-            footer: `You’re getting this because ${e.org.name} put you on the guest list for ${e.title} on Eventro.`,
+            footer: `You’re getting this because ${e.org.name} put you on the guest list for ${e.title} on Omoshow.`,
           }),
         });
       }

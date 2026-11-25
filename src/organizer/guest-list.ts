@@ -7,7 +7,7 @@
  * with the same results (ADMITTED, or ALREADY_USED when the whole party was already in), the head count it let in,
  * the scanner, the staff member and the time (the scanner's own time for offline check-ins). A parallel table rather
  * than ScanAttempt rows because guest arrivals have no ticket and carry a head count, while ScanAttempt is the
- * ticket-only evidence the Eventro Guarantee reads (one row per ticket scan, and nothing else on it). Offline
+ * ticket-only evidence the Omoshow Guarantee reads (one row per ticket scan, and nothing else on it). Offline
  * check-ins carry an `opId`: its hash with the scanner id is the row's unique dedupe key, written in the same
  * transaction as the head count, so a re-sent sync is applied once.
  *

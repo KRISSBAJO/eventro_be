@@ -1,4 +1,4 @@
-# Eventro API — production image.
+# Omoshow API — production image.
 #   docker build -t eventro-api .
 #   docker run -p 4000:4000 --env-file .env.production eventro-api
 # On start it applies pending database migrations, then serves on $PORT (default 4000).

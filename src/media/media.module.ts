@@ -1,7 +1,7 @@
 /**
  * Event photos and videos, hosted on mediaEX.
  *
- * The mediaEX API key stays on this server. Browsers ask Eventro for an upload slot; Eventro asks mediaEX with the key
+ * The mediaEX API key stays on this server. Browsers ask Omoshow for an upload slot; Omoshow asks mediaEX with the key
  * and hands back where to send the file:
  *   - a presigned bucket URL when mediaEX stores files in S3/R2 (the browser uploads straight there), or
  *   - PUT /media/uploads/:id on this API when mediaEX stores files on disk (this API streams the file through,
@@ -126,7 +126,7 @@ export class MediaService {
       this.log.error(`mediaEX answered ${res.status} with non-JSON for ${init.method ?? 'GET'} ${path}: ${text.replace(/\s+/g, ' ').slice(0, 160)}`);
       throw new ServiceUnavailableException(
         res.status === 404
-          ? 'Uploads aren’t working right now: the media service isn’t answering (Eventro’s MEDIAEX_URL may be wrong). Try again later.'
+          ? 'Uploads aren’t working right now: the media service isn’t answering (Omoshow’s MEDIAEX_URL may be wrong). Try again later.'
           : 'Uploads aren’t working right now: the media service sent an unexpected reply. Try again in a minute.',
       );
     }
@@ -134,7 +134,7 @@ export class MediaService {
       const msg = (data as { error?: string } | null)?.error ?? `mediaEX error ${res.status}`;
       if (res.status === 401 || res.status === 403) {
         this.log.error(`mediaEX rejected the API key: ${msg}`);
-        throw new ServiceUnavailableException('The media service rejected Eventro’s key. An admin needs to check MEDIAEX_API_KEY.');
+        throw new ServiceUnavailableException('The media service rejected Omoshow’s key. An admin needs to check MEDIAEX_API_KEY.');
       }
       throw new BadRequestException(msg);
     }

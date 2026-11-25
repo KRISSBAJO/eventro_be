@@ -1,5 +1,5 @@
 /**
- * Hiring a venue on Eventro (stage 1: the price is shown, payment happens outside Eventro).
+ * Hiring a venue on Omoshow (stage 1: the price is shown, payment happens outside Omoshow).
  *
  * A venue's approved managers (VenueClaim APPROVED) list it for hire with terms and weekly hours, and block out
  * times. Organizers (org admins and managers) request a time; the request holds that time for 48 hours (never past
@@ -188,7 +188,7 @@ export function publicListing(l: VenueListing | null | undefined, v: Pick<Venue,
   };
 }
 
-/** A new listing is priced in the venue country's currency (when Eventro takes it), else US dollars. */
+/** A new listing is priced in the venue country's currency (when Omoshow takes it), else US dollars. */
 const LOCAL_CURRENCY: Record<string, Currency> = { NG: 'NGN', GH: 'GHS', KE: 'KES', ZA: 'ZAR', GB: 'GBP', CA: 'CAD', AU: 'AUD' };
 export const listingCurrency = (country: string | null | undefined) => (country ? LOCAL_CURRENCY[country.toUpperCase()] : undefined) ?? currencyForCountry(country);
 
@@ -337,7 +337,7 @@ export class VenueBookingService implements OnModuleInit, OnModuleDestroy {
     if (next.priceMode === 'QUOTE') next.priceCents = null;
     else if (next.priceCents === null) throw new BadRequestException(`Set a price per ${next.priceMode === 'HOUR' ? 'hour' : 'day'}, or choose “Ask for a quote”.`);
     if (next.capacity !== null && v.capacity !== null && next.capacity > v.capacity) throw new BadRequestException(`Guests can’t be more than the venue holds (${v.capacity.toLocaleString('en-US')}).`);
-    if (next.active && v.hiddenAt) throw new BadRequestException('This venue is hidden on Eventro, so it can’t take bookings. Contact Eventro support.');
+    if (next.active && v.hiddenAt) throw new BadRequestException('This venue is hidden on Omoshow, so it can’t take bookings. Contact Omoshow support.');
     if (next.minHours > MAX_BOOKING_DAYS * 24) throw new BadRequestException('That minimum is longer than the longest booking.');
     const data = { ...next, photos: next.photos ?? Prisma.DbNull, hours: next.hours ?? Prisma.DbNull } as Prisma.VenueListingUncheckedCreateInput;
     await this.prisma.venueListing.upsert({ where: { venueId }, create: { ...data, venueId }, update: { ...data, venueId: undefined } });
@@ -431,7 +431,7 @@ export class VenueBookingService implements OnModuleInit, OnModuleDestroy {
     const v = await this.prisma.venue.findUnique({ where: { slug }, include: { listing: true } });
     if (!v || v.hiddenAt) throw new NotFoundException('Venue not found.');
     const listing = publicListing(v.listing, v);
-    if (!listing) throw new NotFoundException('This venue isn’t taking bookings on Eventro.');
+    if (!listing) throw new NotFoundException('This venue isn’t taking bookings on Omoshow.');
     const zone = venueZone(v);
     const today = instantToWallClock(new Date(), zone).toISOString().slice(0, 10);
     const range = rangeOf(from ?? today, to, 120);
@@ -467,11 +467,11 @@ export class VenueBookingService implements OnModuleInit, OnModuleDestroy {
   async request(orgId: string, user: AuthUser, dto: BookingRequestDto) {
     await this.member(orgId, user, EDIT);
     const org = await this.prisma.organization.findUniqueOrThrow({ where: { id: orgId }, select: { suspendedAt: true } });
-    if (org.suspendedAt) throw new ForbiddenException('This organizer account is suspended. Contact Eventro support.');
+    if (org.suspendedAt) throw new ForbiddenException('This organizer account is suspended. Contact Omoshow support.');
     const v = await this.prisma.venue.findUnique({ where: { id: dto.venueId }, include: { listing: true } });
     if (!v || v.hiddenAt) throw new NotFoundException('Venue not found.');
     const l = v.listing;
-    if (!l?.active) throw new BadRequestException(`${v.name} isn’t taking bookings on Eventro right now.`);
+    if (!l?.active) throw new BadRequestException(`${v.name} isn’t taking bookings on Omoshow right now.`);
     const zone = venueZone(v);
     const startsAt = minute(dto.startsAt);
     const endsAt = minute(dto.endsAt);
@@ -549,8 +549,8 @@ export class VenueBookingService implements OnModuleInit, OnModuleDestroy {
     const ev = await this.prisma.event.findUnique({ where: { id: eventId }, include: { venueBooking: true } });
     if (!ev || ev.orgId !== orgId) throw new NotFoundException('Event not found.');
     if (ev.online) throw new BadRequestException('This is an online event, so it doesn’t need a venue.');
-    // v1: only one-date events are booked through Eventro (multiple dates and multi-day events pick a venue instead).
-    if (ev.dateMode !== 'SINGLE') throw new BadRequestException('Venue bookings on Eventro are for single-date events for now. Pick the venue for this event instead.');
+    // v1: only one-date events are booked through Omoshow (multiple dates and multi-day events pick a venue instead).
+    if (ev.dateMode !== 'SINGLE') throw new BadRequestException('Venue bookings on Omoshow are for single-date events for now. Pick the venue for this event instead.');
     if (ev.status !== 'DRAFT' && ev.status !== 'REJECTED') throw new BadRequestException('Only draft events can wait for a venue. Request the booking on its own, then attach it to the event once the venue confirms.');
     if (ev.venueBooking && isLive(ev.venueBooking)) throw new ConflictException({ statusCode: 409, code: 'EVENT_ALREADY_BOOKED', message: `This event already has a venue booking (${ev.venueBooking.code}). Cancel it first.` });
     assertFits({ startsAt, endsAt }, ev);
@@ -733,7 +733,7 @@ export class VenueBookingService implements OnModuleInit, OnModuleDestroy {
     const status = effectiveStatus(b);
     if (status !== 'PENDING' && status !== 'CONFIRMED') throw new BadRequestException(`Booking ${b.code} was ${status.toLowerCase()}. Request another time or venue.`);
     if (b.eventId && b.eventId !== eventId) throw new ConflictException({ statusCode: 409, code: 'BOOKING_IN_USE', message: `Booking ${b.code} is already used by another event.` });
-    if (b.venue.hiddenAt) throw new BadRequestException('That venue is no longer on Eventro.');
+    if (b.venue.hiddenAt) throw new BadRequestException('That venue is no longer on Omoshow.');
     return { ...b, status, timezone: venueZone(b.venue) };
   }
 
@@ -754,7 +754,7 @@ export class VenueBookingService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * The event was cancelled (by its organizer or by Eventro): its venue booking, if it's still pending or confirmed
+   * The event was cancelled (by its organizer or by Omoshow): its venue booking, if it's still pending or confirmed
    * and hasn't ended, is cancelled too, with the reason "The event was cancelled", and the venue's managers hear.
    * Answers with the booking's code, or null when there was nothing to cancel. Safe to call again.
    */
@@ -917,7 +917,7 @@ export class VenueBookingService implements OnModuleInit, OnModuleDestroy {
         paragraphs: [
           `${by.name} at ${b.org.name} ${instant ? 'booked' : 'asked to book'} ${b.venue.name} for ${when} (the venue’s local time)${b.guests ? `, for ${b.guests.toLocaleString('en-US')} guests` : ''}.`,
           ...(b.message ? [`Their message: “${b.message}”`] : []),
-          ...(price ? [`Price shown: ${price}. Payment is arranged between you and the organizer, outside Eventro.`] : ['You quote the price; payment is arranged between you and the organizer, outside Eventro.']),
+          ...(price ? [`Price shown: ${price}. Payment is arranged between you and the organizer, outside Omoshow.`] : ['You quote the price; payment is arranged between you and the organizer, outside Omoshow.']),
           instant
             ? 'Your listing confirms free times instantly, so this booking is confirmed.'
             : `The time is held for them until ${b.holdUntil.toUTCString().slice(0, 22)} UTC. Confirm or decline before then.`,
@@ -929,7 +929,7 @@ export class VenueBookingService implements OnModuleInit, OnModuleDestroy {
       },
       venueBookingPath(b.id),
       { bookingId: b.id, venueId: b.venueId },
-      `You’re getting this because you manage ${b.venue.name} on Eventro.`,
+      `You’re getting this because you manage ${b.venue.name} on Omoshow.`,
     );
   }
 
@@ -946,7 +946,7 @@ export class VenueBookingService implements OnModuleInit, OnModuleDestroy {
         preheader: `${when} is yours.${ev ? ` You can submit ${ev.title} for review now.` : ''}`,
         paragraphs: [
           `${b.venue.name} confirmed booking ${b.code} for ${when} (the venue’s local time).`,
-          ...(price ? [`Price: ${price}. Pay the venue directly, the way you agree with them; Eventro doesn’t take this payment.`] : ['The venue will tell you the price. Pay them directly; Eventro doesn’t take this payment.']),
+          ...(price ? [`Price: ${price}. Pay the venue directly, the way you agree with them; Omoshow doesn’t take this payment.`] : ['The venue will tell you the price. Pay them directly; Omoshow doesn’t take this payment.']),
           ev ? `${ev.title} is no longer on hold: submit it for review when it’s ready.` : 'You can attach this booking to an event from the event’s venue settings.',
         ],
         highlight: { label: 'Booking', value: b.code },
@@ -998,7 +998,7 @@ export class VenueBookingService implements OnModuleInit, OnModuleDestroy {
       },
     };
     const path = what === 'cancelled' && live ? `/organizer/events/${ev!.id}` : orgBookingPath(b.id);
-    await this.tell(`venue_booking.${what}`, b.id, to, notes[what], path, { bookingId: b.id, eventId: ev?.id ?? null }, `You’re getting this because you manage ${b.org.name} on Eventro.`);
+    await this.tell(`venue_booking.${what}`, b.id, to, notes[what], path, { bookingId: b.id, eventId: ev?.id ?? null }, `You’re getting this because you manage ${b.org.name} on Omoshow.`);
   }
 
   private async notifyVenueCancelled(b: BookingRow, by: AuthUser) {
@@ -1019,7 +1019,7 @@ export class VenueBookingService implements OnModuleInit, OnModuleDestroy {
       },
       venueBookingPath(b.id),
       { bookingId: b.id, venueId: b.venueId },
-      `You’re getting this because you manage ${b.venue.name} on Eventro.`,
+      `You’re getting this because you manage ${b.venue.name} on Omoshow.`,
     );
   }
 
@@ -1042,7 +1042,7 @@ export class VenueBookingService implements OnModuleInit, OnModuleDestroy {
       },
       venueBookingPath(b.id),
       { bookingId: b.id, venueId: b.venueId },
-      `You’re getting this because you manage ${b.venue.name} on Eventro.`,
+      `You’re getting this because you manage ${b.venue.name} on Omoshow.`,
     );
   }
 
@@ -1065,7 +1065,7 @@ export class VenueBookingService implements OnModuleInit, OnModuleDestroy {
       },
       side === 'ORGANIZER' ? venueBookingPath(b.id) : orgBookingPath(b.id),
       { bookingId: b.id, messageId },
-      side === 'ORGANIZER' ? `You’re getting this because you manage ${b.venue.name} on Eventro.` : `You’re getting this because you manage ${b.org.name} on Eventro.`,
+      side === 'ORGANIZER' ? `You’re getting this because you manage ${b.venue.name} on Omoshow.` : `You’re getting this because you manage ${b.org.name} on Omoshow.`,
     );
   }
 }

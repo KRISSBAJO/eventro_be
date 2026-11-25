@@ -96,7 +96,7 @@ after(async () => {
   mock?.close();
 });
 
-test('media: upload through Eventro, attach to an event, and only your team’s files', async () => {
+test('media: upload through Omoshow, attach to an event, and only your team’s files', async () => {
   const stamp = Date.now();
   const signup = async (who: string) => (await ok(call('POST', '/auth/signup', { email: `${who}${stamp}@media.test`, name: `${who} Test`, password: 'test-password-123' }))).token as string;
   const org = await signup('owner');
@@ -114,7 +114,7 @@ test('media: upload through Eventro, attach to an event, and only your team’s 
     ),
   );
 
-  // Start an upload: the browser is told to send the file to Eventro (the mock stores files "on disk").
+  // Start an upload: the browser is told to send the file to Omoshow (the mock stores files "on disk").
   const photo = Buffer.alloc(2048, 7);
   const s = await ok(call('POST', '/media/uploads', { fileName: 'stage.jpg', size: photo.length, mimeType: 'image/jpeg' }, org));
   assert.equal(s.kind, 'image');

@@ -1,7 +1,7 @@
 /**
  * Multiple dates (DATES: separate performances, a copy of every tier per date) and multi-day events (DAYS: ticket
  * types valid on one or more days): creating and editing dates, buying on a date, the door per date (online and
- * offline), cancelling one date, the Eventro Guarantee per date and per day, list items, and one-date events unchanged.
+ * offline), cancelling one date, the Omoshow Guarantee per date and per day, list items, and one-date events unchanged.
  */
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -565,7 +565,7 @@ test('list items: nextDate and dateCount; a run whose first show has passed stil
   assert.equal(list.items[0].dateCount, 2);
   const orgList = await ok(call('GET', `/organizer/orgs/${ev.orgId}/events`, undefined, org.token));
   assert.equal(orgList[0].nextDate.id, d2.id);
-  // Venue bookings on Eventro are for one-date events (v1).
+  // Venue bookings on Omoshow are for one-date events (v1).
   const booking = await call('PUT', `/organizer/events/${ev.id}/venue-booking`, { bookingId: 'nope' }, org.token);
   assert.equal(booking.status, 400);
   assert.match(booking.body.message, /single-date events/);

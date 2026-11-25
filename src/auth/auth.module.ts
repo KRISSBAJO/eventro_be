@@ -134,7 +134,7 @@ export class AuthService {
     // Same message and similar timing whether or not the email exists.
     const ok = await bcrypt.compare(dto.password, user?.passwordHash ?? '$2a$11$invalidinvalidinvalidinvalidinvalidinvalidinvalidinv');
     if (!user || !ok) throw new UnauthorizedException('Email or password is incorrect.');
-    if (user.suspendedAt) throw new ForbiddenException('This account is suspended. Contact Eventro support.');
+    if (user.suspendedAt) throw new ForbiddenException('This account is suspended. Contact Omoshow support.');
     return this.session(user, dto.device, ip);
   }
 
@@ -166,7 +166,7 @@ export class AuthService {
     await this.prisma.passwordReset.create({ data: { userId: user.id, tokenHash: hashToken(token), expiresAt: new Date(Date.now() + RESET_TTL_MS), ip } });
     const url = `${config.webUrl}/reset-password?token=${encodeURIComponent(token)}${next && SAFE_NEXT.test(next) ? `&next=${encodeURIComponent(next)}` : ''}`;
     const { html, text } = render({
-      preheader: 'Choose a new password for your Eventro account. The link works for an hour.',
+      preheader: 'Choose a new password for your Omoshow account. The link works for an hour.',
       heading: 'Reset your password',
       paragraphs: [
         `Hi ${user.name.split(' ')[0] || 'there'}, someone (hopefully you) asked to reset the password for ${user.email}.`,
@@ -174,9 +174,9 @@ export class AuthService {
         'If you didn’t ask for this, you can ignore this email: your password stays the same.',
       ],
       cta: { label: 'Choose a new password', url },
-      footer: 'You’re getting this because a password reset was requested for your Eventro account.',
+      footer: 'You’re getting this because a password reset was requested for your Omoshow account.',
     });
-    await this.mail.send('auth.password_reset', { to: user.email, subject: 'Reset your Eventro password', html, text });
+    await this.mail.send('auth.password_reset', { to: user.email, subject: 'Reset your Omoshow password', html, text });
   }
 
   /** The reset this token belongs to, if it can still be used; otherwise a 400 saying why not (`code`). */
@@ -185,7 +185,7 @@ export class AuthService {
     if (!r) throw resetRefused('RESET_INVALID');
     if (r.usedAt) throw resetRefused('RESET_USED');
     if (r.expiresAt <= new Date()) throw resetRefused('RESET_EXPIRED');
-    if (r.user.suspendedAt) throw new ForbiddenException('This account is suspended. Contact Eventro support.');
+    if (r.user.suspendedAt) throw new ForbiddenException('This account is suspended. Contact Omoshow support.');
     return r;
   }
 
@@ -235,17 +235,17 @@ export class AuthService {
     ]);
     await this.audit.log(userId, action, 'User', userId, { ip });
     const { html, text } = render({
-      preheader: 'The password for your Eventro account was just changed.',
+      preheader: 'The password for your Omoshow account was just changed.',
       heading: 'Your password was changed',
       paragraphs: [
         `The password for ${user.email} was changed on ${now.toUTCString()}.`,
         'For your security, you’ve been signed out everywhere else. Sign in with the new password on your other devices.',
-        'If this wasn’t you, reset your password right away and reply to this email to reach Eventro support.',
+        'If this wasn’t you, reset your password right away and reply to this email to reach Omoshow support.',
       ],
       cta: { label: 'Reset my password', url: `${config.webUrl}/forgot-password` },
-      footer: 'You’re getting this because the password on your Eventro account changed.',
+      footer: 'You’re getting this because the password on your Omoshow account changed.',
     });
-    void this.mail.send('auth.password_changed', { to: user.email, subject: 'Your Eventro password was changed', html, text }).catch(() => undefined);
+    void this.mail.send('auth.password_changed', { to: user.email, subject: 'Your Omoshow password was changed', html, text }).catch(() => undefined);
     return user;
   }
 }

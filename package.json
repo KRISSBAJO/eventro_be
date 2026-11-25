@@ -2,7 +2,7 @@
   "name": "eventro-be",
   "version": "0.1.0",
   "private": true,
-  "description": "Eventro API: events, seat maps, orders, tickets, payouts and admin.",
+  "description": "Omoshow API: events, seat maps, orders, tickets, payouts and admin.",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "start": "node --enable-source-maps dist/src/main.js",

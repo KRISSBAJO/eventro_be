@@ -1,8 +1,8 @@
 /**
- * Venue owners joining Eventro: finding a venue to claim (GET /venues?q=), adding one that isn't on Eventro yet
+ * Venue owners joining Omoshow: finding a venue to claim (GET /venues?q=), adding one that isn't on Omoshow yet
  * (POST /me/venues: hidden, with a pending claim marked newVenue, in its place's zone), the duplicate check
  * (409 VENUE_EXISTS), what the person and the admins see while it waits, and what approving or declining does
- * (shown or left hidden; venues hidden by Eventro are left alone). Email is logged (not sent); pushes are logged.
+ * (shown or left hidden; venues hidden by Omoshow are left alone). Email is logged (not sent); pushes are logged.
  */
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -166,7 +166,7 @@ test('add a venue: hidden with a pending claim, checked for duplicates, shown on
   // Now they can list it for hire.
   await ok(call('PUT', `/me/venues/${v.id}/listing`, { active: true, priceMode: 'QUOTE' }, owner.token));
 
-  // The same name in the same city and country (any case) is on Eventro now: claim it instead.
+  // The same name in the same city and country (any case) is on Omoshow now: claim it instead.
   const other = await account(`vo-other-${run}@test.local`, 'Ike Other');
   const dup = await call('POST', '/me/venues', newVenue({ name: `  HARBOUR   lights ${run} `, city: 'lagos', country: 'NG' }), other.token);
   assert.equal(dup.status, 409);
@@ -177,7 +177,7 @@ test('add a venue: hidden with a pending claim, checked for duplicates, shown on
   assert.equal(abuja.status, 'PENDING');
 });
 
-test('declined: the new venue stays hidden; venues hidden by Eventro stay hidden when a claim is approved', async () => {
+test('declined: the new venue stays hidden; venues hidden by Omoshow stay hidden when a claim is approved', async () => {
   const admin = await account('admin@test.local', 'Admin');
   const owner = await account(`vo-decline-${run}@test.local`, 'Dee Decline');
   const added = await ok(call('POST', '/me/venues', newVenue({ name: `Maybe Hall ${run}`, city: 'Ibadan', region: 'Oyo' }), owner.token));
@@ -194,7 +194,7 @@ test('declined: the new venue stays hidden; venues hidden by Eventro stay hidden
   const retry = await ok(call('POST', '/me/venues', newVenue({ name: `Maybe Hall ${run}`, city: 'Ibadan', region: 'Oyo', message: 'Here is our page: https://maybehall.example.com' }), owner.token));
   assert.notEqual(retry.venue.id, added.venue.id);
 
-  // Hidden by Eventro (spam, closed, a duplicate): approving an ordinary claim on it doesn't bring it back.
+  // Hidden by Omoshow (spam, closed, a duplicate): approving an ordinary claim on it doesn't bring it back.
   const closed = await prisma.venue.create({ data: { slug: `vo-spam-${run}`, name: `Closed Club ${run}`, address: '1 Old Rd', city: 'Lagos', country: 'NG', hiddenAt: new Date() } });
   const c = await prisma.venueClaim.create({ data: { venueId: closed.id, userId: owner.user.id as string, role: 'manager', message: 'I used to run this club.', status: 'PENDING' } });
   const out = await ok(call('POST', `/admin/venue-claims/${c.id}/decide`, { decision: 'APPROVE' }, admin.token));

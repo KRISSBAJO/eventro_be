@@ -70,7 +70,7 @@ export class TicketsService {
   async mine(user: AuthUser) {
     await this.expireTransfers();
     const rows = await this.prisma.ticket.findMany({
-      // Voided tickets stay hidden, except for cancelled events and Eventro Guarantee claims, so holders see what
+      // Voided tickets stay hidden, except for cancelled events and Omoshow Guarantee claims, so holders see what
       // happened to them.
       where: {
         AND: [
@@ -106,7 +106,7 @@ export class TicketsService {
     });
     // Section names come from the event's seat map ("Lower Level 104"); the map itself stays out of the response.
     // Online events: the stream link goes only with tickets the holder still has (not ones being sold or transferred).
-    // Paid tickets carry the Eventro Guarantee: cover, who pays, the claim window and any claim (see src/guarantee).
+    // Paid tickets carry the Omoshow Guarantee: cover, who pays, the claim window and any claim (see src/guarantee).
     // Booked sessions (bookable schedule items) go with each ticket.
     const sessions = await this.schedule.sessionsByTicket(rows.map((r) => r.id));
     const tickets = rows.map(({ event: { seatMap, streamUrl, dates, ...event }, guaranteeClaim, ...t }) => {
@@ -175,10 +175,10 @@ export class TicketsService {
       heading: `${user.name.split(' ')[0]} sent you a ticket`,
       paragraphs: [
         `${t.ticketType.name} for ${t.event.title}.`,
-        `Sign in to Eventro with this email (${email}) to accept it. If you don’t accept by ${expires.toUTCString().slice(0, 16)}, it goes back to ${user.name.split(' ')[0]}.`,
+        `Sign in to Omoshow with this email (${email}) to accept it. If you don’t accept by ${expires.toUTCString().slice(0, 16)}, it goes back to ${user.name.split(' ')[0]}.`,
       ],
       cta: { label: 'Accept your ticket', url: `${config.webUrl}/signin?next=/tickets` },
-      footer: `${user.name} sent this from their Eventro account. Not expecting it? You can ignore this email.`,
+      footer: `${user.name} sent this from their Omoshow account. Not expecting it? You can ignore this email.`,
     });
     void this.mail.send('ticket.transfer', { to: email, subject: `${user.name.split(' ')[0]} sent you a ticket to ${t.event.title}`, html, text });
     void this.notices.transferSent(id, user.name);

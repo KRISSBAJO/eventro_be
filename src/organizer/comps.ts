@@ -7,7 +7,7 @@
  * ticket waits for them (TRANSFER_PENDING) and doesn't scan. Comps take a place in the tier (TicketType.sold, under
  * the same row lock as checkout), so the event can't oversell, and the event's comp limit (Event.compLimit) caps how
  * many are live. Revoking an unused comp voids its ticket (new QR seed, so saved codes stop working), frees the
- * place and emails the holder. Comps aren't sales: revenue, payouts and the Eventro Guarantee leave them out.
+ * place and emails the holder. Comps aren't sales: revenue, payouts and the Omoshow Guarantee leave them out.
  *
  *   GET  /organizer/events/:id/comps                    list and counts (ADMIN, MANAGER, DOOR)
  *   POST /organizer/events/:id/comps                    { ticketTypeId, recipients? | text?, group?, note? } (ADMIN, MANAGER)
@@ -287,7 +287,7 @@ export class CompService {
         'Its QR code no longer works. If you think this is a mistake, contact the organizer.',
       ],
       cta: { label: 'Find events', url: `${config.webUrl}/events` },
-      footer: `${ev.org.name} had put you on the guest list on Eventro.`,
+      footer: `${ev.org.name} had put you on the guest list on Omoshow.`,
     });
     void this.mail.send('comp.revoked', { to, subject: `Your complimentary ticket was cancelled: ${ev.title}`, html, text }).catch(() => undefined);
     return (await this.views([await this.comp(eventId, orderId)]))[0];

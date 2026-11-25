@@ -167,7 +167,7 @@ test('pay what you want: set on create and edit, validated at the hold, the quot
   assert.equal(held.unitCents, buyerPrice(1200, 'BUYER', FEE));
   assert.equal(held.ticketType.pwyw.minCents, 500);
 
-  // The quote: BUYER mode adds Eventro's fee to the chosen amount, as for a fixed price.
+  // The quote: BUYER mode adds Omoshow's fee to the chosen amount, as for a fixed price.
   const unit = buyerPrice(1200, 'BUYER', FEE);
   const q = await ok(call('POST', '/quote', { holdId: h.id }));
   assert.equal(q.unitCents, unit);
@@ -310,7 +310,7 @@ test('donations: in the total with no fee, their own line on the order, never in
   const receipt = await waitFor(() => prisma.emailLog.findFirst({ where: { kind: 'order.receipt', to: fan.user.email } }));
   assert.ok(receipt);
 
-  // Payouts: the organizer's share of the tickets (after Eventro's fee), plus the whole donation as its own line.
+  // Payouts: the organizer's share of the tickets (after Omoshow's fee), plus the whole donation as its own line.
   const pay = await ok(call('GET', `/organizer/orgs/${o.id}/payouts`, undefined, org.token));
   const ticketNet = organizerNet(price, 'BUYER', FEE) * 2;
   assert.equal(pay.pendingCents, ticketNet + 500);
@@ -631,7 +631,7 @@ test('guest list: add and paste, edit and remove, check in with plus-ones (2 of 
 
 /* ---------- donation gaps: organizer refunds, resale donations, the hold's donation, comp limit on create ---------- */
 
-test('organizer donation refund: org admins only (door 403, strangers 404), emailed, idempotent with an Eventro admin refund, out of payouts; owed once paid out', async () => {
+test('organizer donation refund: org admins only (door 403, strangers 404), emailed, idempotent with an Omoshow admin refund, out of payouts; owed once paid out', async () => {
   const admin = await account('admin@test.local', 'Admin');
   const org = await account(`odr-org-${run}@test.local`, 'Ola Organizer');
   const manager = await account(`odr-mgr-${run}@test.local`, 'Mo Manager');
@@ -680,7 +680,7 @@ test('organizer donation refund: org admins only (door 403, strangers 404), emai
   const audit = await prisma.auditLog.findFirst({ where: { action: 'order.donation_refund', entityId: paid.id } });
   assert.equal((audit!.data as Json).by, 'organizer');
 
-  // Once is enough: neither the organizer nor an Eventro admin can refund it again.
+  // Once is enough: neither the organizer nor an Omoshow admin can refund it again.
   assert.equal((await call('POST', path, {}, org.token)).status, 400);
   assert.equal((await call('POST', `/admin/orders/${paid.id}/refund-donation`, { reason: 'Fan asked for it back' }, admin.token)).status, 400);
 
@@ -694,7 +694,7 @@ test('organizer donation refund: org admins only (door 403, strangers 404), emai
   const after = await ok(call('GET', `/organizer/events/${ev.id}/donations`, undefined, org.token));
   assert.equal(after.items[0].leftCents, 0);
 
-  // An order the organizer was already paid for (sold three days ago, daily payouts): an Eventro admin refunds it
+  // An order the organizer was already paid for (sold three days ago, daily payouts): an Omoshow admin refunds it
   // first, it's recorded as owed by the organizer, and the organizer's own refund then finds nothing left.
   const { order: old } = await buy(fan, tier(ev, 'General').id, 1, {}, { donationCents: 400 });
   await prisma.order.update({ where: { id: old.id }, data: { paidAt: new Date(Date.now() - 3 * 86_400_000) } });
@@ -764,11 +764,11 @@ test('resale orders with a donation: the total, the seller’s payout unchanged,
   const createdB = await ok(call('POST', `/resale/${b.listingId}/orders`, { holdKey: b.holdKey, email: buyer.user.email, name: buyer.user.name, donationCents: 300 }, buyer.token));
   await ok(call('POST', `/orders/${createdB.orderId}/pay`));
 
-  // Eventro Guarantee claim on the first: the ticket's price only, at Eventro's cost; the donation and the seller's payout stay.
+  // Omoshow Guarantee claim on the first: the ticket's price only, at Omoshow's cost; the donation and the seller's payout stay.
   await setTimes(ev.id, new Date(Date.now() - HOUR));
   const ticketId = paid.tickets[0].id;
   const claim = await ok(call('POST', `/tickets/${ticketId}/guarantee-claims`, { reason: 'DID_NOT_SCAN' }, buyer.token));
-  assert.equal(claim.payer, 'EVENTRO');
+  assert.equal(claim.payer, 'OMOSHOW');
   assert.equal(claim.amountCents, a.price);
   await ok(call('POST', `/admin/guarantee-claims/${claim.id}/decide`, { decision: 'APPROVE' }, admin.token));
   const afterClaim = await prisma.order.findUniqueOrThrow({ where: { id: paid.id } });

@@ -75,7 +75,7 @@ before(async () => {
   await new Promise<void>((r) => resend.listen(0, '127.0.0.1', r));
   process.env.RESEND_API_URL = `http://127.0.0.1:${(resend.address() as AddressInfo).port}`;
   process.env.RESEND_API_KEY = KEY;
-  process.env.MAIL_FROM = 'Eventro Test <hello@test.local>';
+  process.env.MAIL_FROM = 'Omoshow Test <hello@test.local>';
 
   const { createApp } = await import('../src/main');
   app = await createApp();
@@ -114,7 +114,7 @@ test('newsletter sign-up sends a welcome email with a one-click unsubscribe head
   const email = `welcome.${run}@example.com`;
   const r = await ok(call('POST', '/newsletter', { email }));
   const m = await waitFor(() => outbox.find((x) => x.to === email));
-  assert.match(m.subject, /on the Eventro list/);
+  assert.match(m.subject, /on the Omoshow list/);
   assert.ok(m.html.includes(`/newsletter/manage?t=${r.token}`));
   assert.ok(m.headers?.['List-Unsubscribe']?.includes(r.token));
 });

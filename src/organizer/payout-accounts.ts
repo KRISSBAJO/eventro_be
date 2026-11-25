@@ -5,11 +5,11 @@
  *   - Nigeria, Ghana, Kenya and South Africa → a Paystack subaccount. The organizer picks their bank, types the account
  *     number, and Paystack tells us the account holder's name so they can confirm it's the right account. The number
  *     goes straight to Paystack; we keep only the bank, the last 4 digits and the holder's name. On each sale Paystack
- *     splits the payment: the organizer's share settles to their bank, Eventro keeps its fee.
+ *     splits the payment: the organizer's share settles to their bank, Omoshow keeps its fee.
  *   - Everywhere else → Stripe Connect (Stripe's hosted onboarding page; see OrganizerService.payoutOnboarding).
  *
  * Changing the account is guarded: org admins only, the name check must pass, every admin on the team is emailed, and
- * payouts pause for 24 hours (sales in that window are collected by Eventro and paid out after).
+ * payouts pause for 24 hours (sales in that window are collected by Omoshow and paid out after).
  *
  *   GET  /organizer/payout-countries
  *   GET  /organizer/orgs/:orgId/payouts/banks?country=NG
@@ -207,7 +207,7 @@ export class PayoutAccounts {
         'If this wasn’t your team, reply to this email right away and we’ll lock the account.',
       ],
       cta: { label: 'Review payouts', url: `${config.webUrl}/organizer/payouts` },
-      footer: `You’re getting this because you’re an admin of ${orgName} on Eventro.`,
+      footer: `You’re getting this because you’re an admin of ${orgName} on Omoshow.`,
     });
     await this.mail.sendMany('payout.bank', to.map((addr) => ({ to: addr, subject: `${a.changing ? 'Payout account changed' : 'Payout account added'}: ${a.bank} ···· ${a.last4}`, html, text }))).catch(() => undefined);
   }

@@ -146,7 +146,7 @@ export class ScheduleService {
     return { schedule: items.map((i) => itemView(i, names)), stages };
   }
 
-  /** The schedule with booking counts, for organizers and Eventro admins. */
+  /** The schedule with booking counts, for organizers and Omoshow admins. */
   private async fullView(e: { id: string; dates: { id: string; status: string }[]; ticketTypes: TypeRow[] }) {
     const items = await this.liveItems(e.id, e.dates);
     const inCounts = await this.checkedInCounts(items.map((i) => i.id));
@@ -356,7 +356,7 @@ export class ScheduleService {
                   heading: `Session cancelled: ${c.item.title}`,
                   paragraphs: [`Hi ${first(h.holderName)}, ${e.orgName} cancelled ${c.item.title} (${when}) at ${e.title}, so your booking for it has been released.`, `Your ticket for ${e.title} still works as before.`],
                   cta: { label: 'See your tickets', url: `${config.webUrl}/tickets` },
-                  footer: 'You’re getting this because you booked this session with your Eventro ticket.',
+                  footer: 'You’re getting this because you booked this session with your Omoshow ticket.',
                 })
               : render({
                   preheader: `${c.item.title} at ${e.title} has a new time.`,
@@ -366,7 +366,7 @@ export class ScheduleService {
                     'Your place is still booked. Can’t make the new time? Cancel your booking in your tickets so someone else can have the place.',
                   ],
                   cta: { label: 'See your tickets', url: `${config.webUrl}/tickets` },
-                  footer: 'You’re getting this because you booked this session with your Eventro ticket.',
+                  footer: 'You’re getting this because you booked this session with your Omoshow ticket.',
                 });
           mails.push({ kind: `session.${kind}`, to, subject: `Session ${kind}: ${c.item.title}`, ...copy });
         }
@@ -431,11 +431,11 @@ export class ScheduleService {
     const invalid = (message: string) => ({ result: 'INVALID' as const, message });
     if (raw.includes('.')) {
       const p = parseQr(raw);
-      if (!p.ok) return invalid('Not a valid Eventro code.');
+      if (!p.ok) return invalid('Not a valid Omoshow code.');
       const owner = await this.prisma.ticket.findUnique({ where: { id: p.ticketId }, select: { qrVersion: true } });
-      if (!owner) return invalid('Not a valid Eventro code.');
+      if (!owner) return invalid('Not a valid Omoshow code.');
       const v = verifyQr(config.qrSecret, raw, Date.now(), owner.qrVersion);
-      if (!v.ok) return invalid(v.reason === 'expired' ? 'This code has expired. Ask them to reopen the ticket.' : 'Not a valid Eventro code.');
+      if (!v.ok) return invalid(v.reason === 'expired' ? 'This code has expired. Ask them to reopen the ticket.' : 'Not a valid Omoshow code.');
       ticketId = v.ticketId;
     }
     const t = await this.prisma.ticket.findUnique({ where: { id: ticketId }, include: { ticketType: { select: { name: true, tierKey: true, validDateIds: true } } } });

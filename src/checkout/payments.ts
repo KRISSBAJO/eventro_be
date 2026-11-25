@@ -20,7 +20,7 @@ export type PaymentInput = {
   currency: Currency;
   email: string;
   description: string;
-  /** Paystack only: send the organizer's share straight to their subaccount; Eventro keeps `platformCents`. */
+  /** Paystack only: send the organizer's share straight to their subaccount; Omoshow keeps `platformCents`. */
   split?: { subaccount: string; platformCents: number };
   /** Paystack only: 'app' sends the fan back to the website's return page with `&app=1`, which hands over to the app. */
   returnTo?: 'app';
@@ -167,7 +167,7 @@ export class PaystackProvider implements PaymentProvider, PayoutBanks {
         reference: input.orderId,
         callback_url: `${config.webUrl}/checkout/return?order=${encodeURIComponent(input.orderId)}${input.returnTo === 'app' ? '&app=1' : ''}`,
         metadata: { orderId: input.orderId, description: input.description },
-        // Split: the organizer's share settles to their subaccount; Eventro keeps a flat charge and pays Paystack's fee.
+        // Split: the organizer's share settles to their subaccount; Omoshow keeps a flat charge and pays Paystack's fee.
         ...(input.split ? { subaccount: input.split.subaccount, transaction_charge: input.split.platformCents, bearer: 'account' } : {}),
       }),
     });

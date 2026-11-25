@@ -60,7 +60,7 @@ export class AdminService {
   }
 
   /**
-   * An event held at a venue booked on Eventro goes live only while that booking is confirmed (it can be cancelled
+   * An event held at a venue booked on Omoshow goes live only while that booking is confirmed (it can be cancelled
    * during review, or after a takedown). Used by review approval and by the console's publish.
    */
   async assertVenueBookingConfirmed(eventId: string, hint = 'Reject it so the organizer can pick another venue.') {
@@ -89,7 +89,7 @@ export class AdminService {
 
   /**
    * Tells the organizer about a review decision (their admins and managers, plus the support address), and copies the
-   * other Eventro admins on rejections so the team sees why. Email trouble never undoes the decision.
+   * other Omoshow admins on rejections so the team sees why. Email trouble never undoes the decision.
    */
   private async notifyDecision(id: string, admin: AuthUser, decision: 'approved' | 'rejected', note?: string) {
     try {
@@ -110,20 +110,20 @@ export class AdminService {
           ? render({
               preheader: `${e.title} passed review and is on sale now.`,
               heading: `${e.title} is live`,
-              paragraphs: ['Your event passed review and is now public on Eventro, with tickets on sale.', 'Share the link to get your first sales.'],
+              paragraphs: ['Your event passed review and is now public on Omoshow, with tickets on sale.', 'Share the link to get your first sales.'],
               cta: { label: 'See your event', url: `${config.webUrl}/events/${e.slug}` },
-              footer: `You’re getting this because you manage ${e.org.name} on Eventro.`,
+              footer: `You’re getting this because you manage ${e.org.name} on Omoshow.`,
             })
           : render({
               preheader: `${e.title} needs a few changes before it can go live.`,
               heading: `${e.title} needs changes`,
               paragraphs: [
-                `Eventro’s review team couldn’t approve ${e.title} yet. Their note:`,
+                `Omoshow’s review team couldn’t approve ${e.title} yet. Their note:`,
                 `“${note ?? ''}”`,
                 'Make the changes in your dashboard and submit the event again. Resubmitted events go back to the front of the queue.',
               ],
               cta: { label: 'Edit and resubmit', url: manage },
-              footer: `You’re getting this because you manage ${e.org.name} on Eventro. Questions? Reply to this email.`,
+              footer: `You’re getting this because you manage ${e.org.name} on Omoshow. Questions? Reply to this email.`,
             });
       const subject = decision === 'approved' ? `Approved: ${e.title} is live` : `Changes needed: ${e.title}`;
       await this.mail.sendMany(`event.${decision}`, to.map((addr) => ({ to: addr, subject, ...org })));
@@ -136,7 +136,7 @@ export class AdminService {
             heading: `${e.title} was rejected`,
             paragraphs: [`${admin.name} rejected ${e.title} by ${e.org.name}. The note sent to the organizer:`, `“${note ?? ''}”`],
             cta: { label: 'Open the review queue', url: `${config.webUrl}/admin#review` },
-            footer: 'You’re getting this because you’re an Eventro admin.',
+            footer: 'You’re getting this because you’re an Omoshow admin.',
           });
           await this.mail.sendMany('event.rejected.admins', admins.map((a) => ({ to: a.email, subject: `Rejected: ${e.title} (${e.org.name})`, ...copy })));
         }
@@ -149,7 +149,7 @@ export class AdminService {
   /**
    * Refunds through the payment provider; a full refund voids the tickets and returns them to sale.
    * A full refund of a resale order holds the seller's payout for review, except with `keepSellerPayout`: the resale
-   * scan guarantee refunds at Eventro's cost, and the seller (whose ticket was voided at sale) is paid as normal.
+   * scan guarantee refunds at Omoshow's cost, and the seller (whose ticket was voided at sale) is paid as normal.
    */
   async refundOrder(orderId: string, amountCents: number, admin: Pick<AuthUser, 'id'> | null, reason: string, opts: { keepSellerPayout?: boolean; refundKey?: string } = {}) {
     const o = await this.prisma.order.findUnique({ where: { id: orderId } });
@@ -163,7 +163,7 @@ export class AdminService {
     // A donation is refunded last: a partial refund counts against the tickets first, and only what goes past the
     // ticket total is the donation. A full refund (e.g. the event was cancelled) refunds the donation too.
     const donationRefundedCents = full ? o.donationCents : Math.min(o.donationCents, Math.max(o.donationRefundedCents, o.refundedCents + amountCents - ticketTotal(o)));
-    // The tickets are done once everything paid for them is back, even if a donation stays on the order (an Eventro
+    // The tickets are done once everything paid for them is back, even if a donation stays on the order (an Omoshow
     // Guarantee refund of a resale order that came with a donation): they're voided as on a full refund. Without a
     // donation this is the same as a full refund.
     const ticketsDone = full || (amountCents > 0 && amountCents >= ticketLeft(o));
@@ -186,7 +186,7 @@ export class AdminService {
   }
 
   /**
-   * Refunds one ticket of an order (the Eventro Guarantee on a normal order): `amountCents` back through the payment
+   * Refunds one ticket of an order (the Omoshow Guarantee on a normal order): `amountCents` back through the payment
    * provider, and only that ticket voided and returned to sale. The order becomes REFUNDED once none of its tickets
    * is left and its whole total has been refunded; until then it is PARTIALLY_REFUNDED. Not for resale orders, whose
    * seller payout rules live in `refundOrder`. With `keepTicket` (a multi-day pass refunded for one of its days) the
@@ -217,11 +217,11 @@ export class AdminService {
   }
 
   /**
-   * Refunds what's left of an order's charity donation, by hand: an Eventro admin (admin console) or the event's org
+   * Refunds what's left of an order's charity donation, by hand: an Omoshow admin (admin console) or the event's org
    * admin (OrganizerDonations). The tickets are untouched. Both go through here, guarded by a conditional update (so
    * a double click, or an admin and an organizer at once, refunds once) and the provider idempotency key
    * `donation-<orderId>`. If the organizer had already been paid for the order (organizerPaidOut, as for guarantee
-   * claims), the refunded amount is recorded as owed by them to Eventro (Order.donationOwedCents). Their payouts drop
+   * claims), the refunded amount is recorded as owed by them to Omoshow (Order.donationOwedCents). Their payouts drop
    * by it either way (they count donationCents − donationRefundedCents). The buyer gets an email.
    */
   async refundDonation(orderId: string, admin: Pick<AuthUser, 'id'>, reason: string, opts: { by?: 'eventro' | 'organizer' } = {}) {
@@ -267,7 +267,7 @@ export class AdminService {
       highlight: { label: `Order ${o.id} · ${o.event.title}`, value: formatMoney(amount, o.currency) },
       paragraphs: [line, 'It goes back to your original payment method and can take 5–10 business days to show up, depending on your bank. Your tickets aren’t affected.'],
       cta: { label: 'View my tickets', url: `${config.webUrl}/tickets` },
-      footer: `You got this email because you donated through Eventro at checkout for an event by ${o.event.org.name}.`,
+      footer: `You got this email because you donated through Omoshow at checkout for an event by ${o.event.org.name}.`,
     });
     await this.mail.send('order.donation_refund', { to: o.email, subject: `Your donation to ${cause} was refunded`, html, text });
   }

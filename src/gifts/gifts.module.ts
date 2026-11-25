@@ -122,10 +122,10 @@ export class GiftService implements OnModuleInit, OnModuleDestroy {
       paragraphs: [
         ...(g.message ? [`“${g.message}” — ${from}`] : []),
         `${g.order.quantity} × ${g.order.ticketType.name} · ${when}${where ? ` · ${where}` : ''}`,
-        'Open your gift to add the tickets to your Eventro account. Your QR code appears there before the event.',
+        'Open your gift to add the tickets to your Omoshow account. Your QR code appears there before the event.',
       ],
       cta: { label: 'Open your gift', url: link },
-      footer: `${g.order.buyerName} bought this for ${g.recipientName} on Eventro. Not you? Just ignore this email.`,
+      footer: `${g.order.buyerName} bought this for ${g.recipientName} on Omoshow. Not you? Just ignore this email.`,
     });
     const ok = await this.mail.send('gift.delivered', { to: g.recipientEmail, subject: `🎁 ${from} sent you tickets to ${e.title}`, html, text });
     await this.prisma.gift.update({ where: { id }, data: { sentAt: g.sentAt ?? new Date() } });
@@ -156,10 +156,10 @@ export class GiftService implements OnModuleInit, OnModuleDestroy {
       paragraphs: [
         `Hi ${firstName(g.recipientName)}, ${e.org.name} has given you a complimentary ticket to ${e.title}.`,
         `${g.order.ticketType.name} · ${when}${where ? ` · ${where}` : ''}`,
-        'Claim it to add it to your Eventro account. Your QR code appears there, and that’s what gets you in at the door.',
+        'Claim it to add it to your Omoshow account. Your QR code appears there, and that’s what gets you in at the door.',
       ],
       cta: { label: 'Claim your ticket', url: `${config.webUrl}/gift/${g.token}` },
-      footer: `${e.org.name} sent this through Eventro. Not you? Just ignore this email.`,
+      footer: `${e.org.name} sent this through Omoshow. Not you? Just ignore this email.`,
     });
     const ok = await this.mail.send('comp.issued', { to: g.recipientEmail, subject: `You’re on the guest list for ${e.title}`, html, text });
     await this.prisma.gift.update({ where: { id: g.id }, data: { sentAt: g.sentAt ?? new Date() } });

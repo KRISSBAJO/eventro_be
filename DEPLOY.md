@@ -1,6 +1,6 @@
-# Deploying Eventro
+# Deploying Omoshow
 
-Eventro is three pieces:
+Omoshow is three pieces:
 
 | Piece | Repo | Runs as | Needs |
 |---|---|---|---|

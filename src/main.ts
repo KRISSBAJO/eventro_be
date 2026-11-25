@@ -15,7 +15,7 @@ export async function createApp() {
   app.getHttpAdapter().getInstance().set('trust proxy', 1);
 
   const doc = new DocumentBuilder()
-    .setTitle('Eventro API')
+    .setTitle('Omoshow API')
     .setDescription('Events, seat maps, checkout, tickets, organizer tools and admin.')
     .setVersion('1.0')
     .addBearerAuth()
@@ -29,7 +29,7 @@ async function bootstrap() {
   // Local development stays on 127.0.0.1; containers set HOST=0.0.0.0.
   const host = process.env.HOST || '127.0.0.1';
   await app.listen(config.port, host);
-  Logger.log(`Eventro API on http://${host}:${config.port}/api/v1 (docs at /docs)`, 'Bootstrap');
+  Logger.log(`Omoshow API on http://${host}:${config.port}/api/v1 (docs at /docs)`, 'Bootstrap');
 }
 
 if (require.main === module) {

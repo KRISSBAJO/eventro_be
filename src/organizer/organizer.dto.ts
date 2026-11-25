@@ -138,7 +138,7 @@ export class EventDateInputDto {
 
 /** Charity donations at checkout and the comp limit, on create and edit. */
 export class EventExtrasDto {
-  @ApiPropertyOptional({ description: "Accept donations at checkout. Eventro collects donations on the organizer's behalf; the organizer is responsible for passing them to the cause." })
+  @ApiPropertyOptional({ description: "Accept donations at checkout. Omoshow collects donations on the organizer's behalf; the organizer is responsible for passing them to the cause." })
   @IsOptional()
   @IsBoolean()
   donationsEnabled?: boolean;
@@ -241,7 +241,7 @@ export class CreateEventDto extends EventExtrasDto {
   @ApiPropertyOptional() @IsOptional() @IsUrl({ require_protocol: true }) streamUrl?: string;
   @ApiPropertyOptional({ description: 'An existing venue' }) @IsOptional() @IsString() venueId?: string;
   @ApiPropertyOptional({ type: VenueInputDto, description: 'Or a new venue' }) @IsOptional() @ValidateNested() @Type(() => VenueInputDto) venue?: VenueInputDto;
-  @ApiPropertyOptional({ description: 'Or a venue booked on Eventro: the event is held there, and waits for the venue to confirm before it can be submitted' })
+  @ApiPropertyOptional({ description: 'Or a venue booked on Omoshow: the event is held there, and waits for the venue to confirm before it can be submitted' })
   @IsOptional()
   @IsString()
   @MaxLength(40)

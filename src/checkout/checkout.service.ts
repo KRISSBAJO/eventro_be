@@ -46,7 +46,7 @@ function unitFor(tt: PwywTier & { priceCents: number }, ev: { feeMode: 'BUYER' |
   return { unitCents, amountCents: amountCents! };
 }
 
-/** Eventro's fee inside the tickets' price that the fan pays on top (BUYER mode); 0 when the organizer absorbs it. */
+/** Omoshow's fee inside the tickets' price that the fan pays on top (BUYER mode); 0 when the organizer absorbs it. */
 const buyerFee = (unitCents: number, quantity: number, feeMode: 'BUYER' | 'ORGANIZER') => (feeMode === 'BUYER' ? (unitCents - organizerNet(unitCents, 'BUYER', config.organizerFeePermille)) * quantity : 0);
 
 /** Serializes inventory changes per ticket type (row lock for the rest of the transaction). */
@@ -260,8 +260,8 @@ export class CheckoutService {
   /* ---------- orders ---------- */
 
   /**
-   * Paystack split for organizers paid through a Paystack subaccount: their share of the tickets (after Eventro's fee
-   * and any discount) settles straight to their bank; Eventro keeps the rest (fee and ticket protection).
+   * Paystack split for organizers paid through a Paystack subaccount: their share of the tickets (after Omoshow's fee
+   * and any discount) settles straight to their bank; Omoshow keeps the rest (fee and ticket protection).
    * No split while payouts are on hold after a bank change, or if the sale is in a different currency than their bank.
    */
   private async paystackSplit(orgId: string, currency: string, q: { unitCents: number; quantity: number; discountCents: number; totalCents: number; donationCents: number }, feeMode: 'BUYER' | 'ORGANIZER') {
@@ -269,7 +269,7 @@ export class CheckoutService {
     if (org?.payoutProvider !== 'paystack' || !org.paystackSubaccount) return {};
     if (org.payoutHoldUntil && org.payoutHoldUntil > new Date()) return {};
     if (paystackCountryFor(currency)?.code !== org.bankCountry) return {};
-    // The organizer's share of the tickets, plus the whole donation (Eventro takes no fee on it).
+    // The organizer's share of the tickets, plus the whole donation (Omoshow takes no fee on it).
     const share = Math.max(0, organizerNet(q.unitCents, feeMode, config.organizerFeePermille) * q.quantity - q.discountCents) + q.donationCents;
     return { split: { subaccount: org.paystackSubaccount, platformCents: Math.max(0, q.totalCents - share) } };
   }
@@ -368,9 +368,9 @@ export class CheckoutService {
   /**
    * Pays for a fan-resale listing the buyer is holding (POST /resale/:id/hold gave them the key), with an optional
    * donation to the event's cause (checked as at a normal order). The donation is the organizer's, not the seller's:
-   * the seller's payout comes from the listing price only (fulfil), no Eventro fee is taken on it, and it counts in
+   * the seller's payout comes from the listing price only (fulfil), no Omoshow fee is taken on it, and it counts in
    * the organizer's donations and payouts. With Paystack and an organizer paid through a subaccount, the payment is
-   * split so the donation settles to the organizer, as on a normal order; the listing price stays with Eventro, which
+   * split so the donation settles to the organizer, as on a normal order; the listing price stays with Omoshow, which
    * pays the seller (and keeps its resale fee) as before.
    */
   async createResaleOrder(listingId: string, input: { holdKey: string; email: string; name: string; returnTo?: 'app'; donationCents?: number }, user: AuthUser | null, clientIp: string | null) {
@@ -406,7 +406,7 @@ export class CheckoutService {
       },
     });
     // Paystack split: only the donation goes to the organizer's subaccount (a resale order's ticket share is the
-    // seller's, paid out by Eventro). Same rules as a normal order (subaccount, no payout hold, same currency).
+    // seller's, paid out by Omoshow). Same rules as a normal order (subaccount, no payout hold, same currency).
     const split =
       provider.name === 'paystack' && donationCents > 0 ? await this.paystackSplit(l.event.orgId, currency, { unitCents: 0, quantity: 1, discountCents: 0, totalCents, donationCents }, l.event.feeMode) : {};
     const pay = await provider.createPayment({ orderId: id, amountCents: totalCents, currency, email: input.email, description: `Resale: ${l.ticket.ticketType.name} — ${l.event.title}`, returnTo: input.returnTo, ...split });
@@ -654,15 +654,15 @@ export class CheckoutService {
         `${o.quantity} × ${o.ticketType.name}: ${o.totalCents - o.donationCents > 0 ? formatMoney(o.totalCents - o.donationCents, o.currency) : 'Free'}`,
         ...(o.donationCents > 0
           ? [
-              `Donation to ${o.donationCause ?? 'the organizer’s cause'}: ${formatMoney(o.donationCents, o.currency)}. Thank you! Eventro collects donations on the organizer's behalf; the organizer is responsible for passing them to the cause. Donations aren’t refunded if a ticket doesn’t scan.`,
+              `Donation to ${o.donationCause ?? 'the organizer’s cause'}: ${formatMoney(o.donationCents, o.currency)}. Thank you! Omoshow collects donations on the organizer's behalf; the organizer is responsible for passing them to the cause. Donations aren’t refunded if a ticket doesn’t scan.`,
             ]
           : []),
         `${when}${where ? ` · ${where}` : ''}`,
         ...(seats.length ? [`Seats: ${seats.join('; ')}`] : []),
-        giftLine ?? 'Your tickets are in your Eventro account. The QR code refreshes every few seconds, so screenshots won’t work at the door.',
+        giftLine ?? 'Your tickets are in your Omoshow account. The QR code refreshes every few seconds, so screenshots won’t work at the door.',
       ],
       cta: { label: 'View my tickets', url: `${config.webUrl}/tickets` },
-      footer: 'You got this email because you bought tickets on Eventro. Need help?',
+      footer: 'You got this email because you bought tickets on Omoshow. Need help?',
       footerLink: { label: 'Visit the help centre', url: `${config.webUrl}/help` },
     });
     await this.mail.send('order.receipt', { to: o.email, subject: `Your tickets: ${o.event.title} (${o.id})`, html, text });

@@ -79,7 +79,7 @@ before(async () => {
   await new Promise<void>((r) => resend.listen(0, '127.0.0.1', r));
   process.env.RESEND_API_URL = `http://127.0.0.1:${(resend.address() as AddressInfo).port}`;
   process.env.RESEND_API_KEY = KEY;
-  process.env.MAIL_FROM = 'Eventro Test <hello@test.local>';
+  process.env.MAIL_FROM = 'Omoshow Test <hello@test.local>';
 
   const { createApp } = await import('../src/main');
   const { PrismaService } = await import('../src/prisma.service');
@@ -104,7 +104,7 @@ test('forgot password: same answer either way; one-time link that resets, signs 
   const unknown = await ok(call('POST', '/auth/forgot', { email: `nobody-${run}@test.local` }));
   const known = await ok(call('POST', '/auth/forgot', { email: email.toUpperCase(), next: '/events/some-show' }));
   assert.deepEqual(unknown, known);
-  const m = await waitFor(() => outbox.find((x) => x.to === email && /Reset your Eventro password/.test(x.subject)));
+  const m = await waitFor(() => outbox.find((x) => x.to === email && /Reset your Omoshow password/.test(x.subject)));
   await new Promise((r) => setTimeout(r, 200));
   assert.equal(outbox.filter((x) => x.to === `nobody-${run}@test.local`).length, 0);
   const token = resetToken(m.html);
@@ -398,7 +398,7 @@ test('organizer cancels an event: everything refunded once, tickets void, buyers
   assert.equal(t.event.status, 'CANCELLED');
   assert.equal(t.order.status, 'REFUNDED');
 
-  // Again (by an Eventro admin): only the failed refund is retried; nothing is refunded twice.
+  // Again (by an Omoshow admin): only the failed refund is retried; nothing is refunded twice.
   const retry = await ok(call('POST', `/admin/events/${ev.id}/cancel`, { reason: 'Retrying the failed refund' }, admin.token));
   assert.equal(retry.alreadyCancelled, true);
   assert.equal(retry.refunded, 1);

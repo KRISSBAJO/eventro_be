@@ -40,7 +40,7 @@ const refused = (code: 'REFRESH_INVALID' | 'REFRESH_EXPIRED' | 'REFRESH_REVOKED'
       REFRESH_EXPIRED: 'Your session has expired. Please sign in again.',
       REFRESH_REVOKED: 'You were signed out on this device. Please sign in again.',
       REFRESH_REUSED: 'For your security, this device was signed out. Please sign in again.',
-      ACCOUNT_SUSPENDED: 'This account is suspended. Contact Eventro support.',
+      ACCOUNT_SUSPENDED: 'This account is suspended. Contact Omoshow support.',
     }[code],
   });
 

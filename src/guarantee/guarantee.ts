@@ -1,5 +1,5 @@
 /**
- * The Eventro Guarantee (the scan guarantee): "If your ticket doesn't scan, you get your money back."
+ * The Omoshow Guarantee (the scan guarantee): "If your ticket doesn't scan, you get your money back."
  *
  * Covered: every ticket from a paid order (ticket total above zero, PAID or PARTIALLY_REFUNDED), also after it's
  * transferred on, pay-what-you-want tickets bought for more than $0 included. Free tickets ($0 pay-what-you-want
@@ -8,16 +8,16 @@
  * 3 hours before the event starts until 48 hours after it ends (no end time: start + 6 hours + 48 hours).
  *
  * Who pays an approved claim (`payer`, fixed when the claim is made):
- *   - EVENTRO   tickets bought on Eventro fan resale (Ticket.resaleGuarantee). The seller's payout is untouched, since
+ *   - OMOSHOW   tickets bought on Omoshow fan resale (Ticket.resaleGuarantee). The seller's payout is untouched, since
  *               their ticket was voided at sale.
  *   - ORGANIZER every other paid ticket. Like any refund it comes out of the organizer's payout, but only their share
- *               of the ticket (`organizerCents`): Eventro returns its own fee and any ticket protection. If the
+ *               of the ticket (`organizerCents`): Omoshow returns its own fee and any ticket protection. If the
  *               organizer had already been paid for the order (organizerPaidOut), that share is recorded as owed to
- *               Eventro (`organizerOwedCents`) and shown in the admin queue. The organizer's admins get an email.
+ *               Omoshow (`organizerOwedCents`) and shown in the admin queue. The organizer's admins get an email.
  *
  * Each claim is decided on arrival only when the door's records settle it:
  *   - the ticket was checked in → DECLINED ("This ticket was scanned in at …")
- *   - otherwise                 → PENDING, for Eventro to review within 24 hours, with the ticket's scan attempts
+ *   - otherwise                 → PENDING, for Omoshow to review within 24 hours, with the ticket's scan attempts
  *
  * A rejected scan doesn't approve a claim by itself: every rejection a fan can cause on purpose (an old screenshot
  * shows as EXPIRED_CODE, a pre-transfer QR as INVALID, another event's door as WRONG_EVENT) would otherwise turn
@@ -69,7 +69,7 @@ export const CLAIM_REASONS = ['DID_NOT_SCAN', 'TURNED_AWAY', 'OTHER'] as const;
 export type ClaimReason = (typeof CLAIM_REASONS)[number];
 const REASON_LABEL: Record<string, string> = { DID_NOT_SCAN: 'The ticket didn’t scan at the door', TURNED_AWAY: 'They were turned away at the door', OTHER: 'Something else went wrong at the door' };
 const STATUSES: GuaranteeClaimStatus[] = ['PENDING', 'APPROVED', 'DECLINED'];
-export const PAYERS = ['EVENTRO', 'ORGANIZER'] as const;
+export const PAYERS = ['OMOSHOW', 'ORGANIZER'] as const;
 export type GuaranteePayer = (typeof PAYERS)[number];
 /** Order statuses whose tickets are covered. */
 const COVERED_ORDERS: OrderStatus[] = ['PAID', 'PARTIALLY_REFUNDED'];
@@ -142,7 +142,7 @@ export const ticketShare = (o: { totalCents: number; quantity: number; donationC
 
 /**
  * The organizer's share of one ticket: what their payout counts for it (OrganizerService.payouts: the ticket's price
- * less Eventro's fee, less its part of any discount), split the same way, so the shares add up to their net for the order.
+ * less Omoshow's fee, less its part of any discount), split the same way, so the shares add up to their net for the order.
  */
 export function organizerTicketShare(o: { unitCents: number; quantity: number; discountCents: number }, feeMode: FeeMode, ticketId: string) {
   const net = Math.max(0, organizerNet(o.unitCents, feeMode, config.organizerFeePermille) * o.quantity - o.discountCents);
@@ -155,7 +155,7 @@ export const refundableShare = (o: { totalCents: number; refundedCents: number; 
 
 /**
  * The organizer's part of a refund of `amountCents` on this ticket (ORGANIZER claims): their share of the ticket,
- * scaled down if the refund was capped. Eventro covers the rest (its fee and any ticket protection).
+ * scaled down if the refund was capped. Omoshow covers the rest (its fee and any ticket protection).
  */
 export function organizerPart(o: { totalCents: number; unitCents: number; quantity: number; discountCents: number; donationCents?: number }, feeMode: FeeMode, ticketId: string, amountCents: number) {
   const share = ticketShare(o, ticketId);
@@ -170,7 +170,7 @@ export { organizerPaidOut };
 export type NotCovered = 'FREE' | 'COMP' | 'REFUNDED';
 
 /**
- * Whether a ticket is covered, and who pays. Resale tickets: Eventro. Other tickets from a paid order: the organizer.
+ * Whether a ticket is covered, and who pays. Resale tickets: Omoshow. Other tickets from a paid order: the organizer.
  * Comps and free tickets ($0 pay what you want too) aren't; a donation on the order doesn't make a free ticket paid.
  * A ticket with a claim stays covered (its order may be refunded since).
  */
@@ -182,7 +182,7 @@ export function coverage(
   if (o.kind === 'COMP') return { covered: false, payer: null, notCovered: 'COMP' };
   if (ticketTotal(o) <= 0) return { covered: false, payer: null, notCovered: 'FREE' };
   if (!COVERED_ORDERS.includes(o.status)) return { covered: false, payer: null, notCovered: 'REFUNDED' };
-  return { covered: true, payer: t.resaleGuarantee ? 'EVENTRO' : 'ORGANIZER', notCovered: null };
+  return { covered: true, payer: t.resaleGuarantee ? 'OMOSHOW' : 'ORGANIZER', notCovered: null };
 }
 
 /** "8:14 PM on Sat, Nov 28": a real moment on the venue's clock. */
@@ -372,8 +372,8 @@ export class GuaranteeService {
     if (t.resoldAt) throw new BadRequestException('You sold this ticket on resale, so there’s nothing to claim.');
     if (t.event.status === 'CANCELLED') throw new BadRequestException('This event was cancelled, so your order is refunded in full automatically.');
     const cover = coverage(t, t.order);
-    if (cover.notCovered === 'COMP') throw new BadRequestException('This is a complimentary ticket, so there’s nothing to refund. The Eventro Guarantee covers paid tickets.');
-    if (cover.notCovered === 'FREE') throw new BadRequestException('This ticket was free, so there’s nothing to refund. The Eventro Guarantee covers paid tickets.');
+    if (cover.notCovered === 'COMP') throw new BadRequestException('This is a complimentary ticket, so there’s nothing to refund. The Omoshow Guarantee covers paid tickets.');
+    if (cover.notCovered === 'FREE') throw new BadRequestException('This ticket was free, so there’s nothing to refund. The Omoshow Guarantee covers paid tickets.');
     if (!cover.covered) throw new BadRequestException('This order has already been cancelled or refunded, so there’s nothing to claim.');
     if (t.status === 'VOID') throw new BadRequestException('This ticket has been cancelled, so there’s nothing to claim.');
     if (t.status === 'TRANSFER_PENDING') throw new BadRequestException('This ticket is being transferred. Cancel the transfer to make a claim.');
@@ -445,7 +445,7 @@ export class GuaranteeService {
   }
 
   /**
-   * Refunds an approved claim back through the order's provider. Resale orders (one ticket, Eventro pays) are refunded
+   * Refunds an approved claim back through the order's provider. Resale orders (one ticket, Omoshow pays) are refunded
    * whole with the seller's payout left alone; any other order refunds just this ticket's share and voids just this
    * ticket, and the organizer's part is recorded (owed, if they'd already been paid for the order). Only one call can
    * move NONE/FAILED → PENDING, so double clicks refund once.
@@ -465,7 +465,7 @@ export class GuaranteeService {
     const organizer = c.payer === 'ORGANIZER';
     const organizerCents = organizer ? organizerPart(c.order, c.event.feeMode, c.ticketId, amount) : 0;
     const organizerOwedCents = organizer && organizerPaidOut(c.order, c.event.org) ? organizerCents : 0;
-    const why = `Eventro Guarantee claim ${claimId}`;
+    const why = `Omoshow Guarantee claim ${claimId}`;
     const refundKey = `guarantee-${claimId}`;
     try {
       if (c.order.resaleListingId) await this.admin.refundOrder(c.orderId, amount, actor, why, { keepSellerPayout: true, refundKey });
@@ -556,8 +556,8 @@ export class GuaranteeService {
       counts,
       costs: costs.map((c) => ({ currency: c.currency, cents: c._sum.amountCents ?? 0, claims: c._count._all })),
       // Refunded claims by who paid: `cents` went back to fans, `organizerCents` came out of organizers' payouts,
-      // `eventroCents` was Eventro's (resale claims in full; its fee and protection on organizer claims), and
-      // `owedCents` is what organizers who'd already been paid owe Eventro.
+      // `eventroCents` was Omoshow's (resale claims in full; its fee and protection on organizer claims), and
+      // `owedCents` is what organizers who'd already been paid owe Omoshow.
       costsByPayer: byPayer.map((c) => {
         const cents = c._sum.amountCents ?? 0;
         const organizerCents = c._sum.organizerCents ?? 0;
@@ -617,7 +617,7 @@ export class GuaranteeService {
         currency: r.currency,
         payer: r.payer as GuaranteePayer,
         // The refund split: `refundCents` back to the fan (what approving refunds now, or what it did), of which
-        // `organizerCents` comes out of the organizer's payout and `eventroCents` is Eventro's.
+        // `organizerCents` comes out of the organizer's payout and `eventroCents` is Omoshow's.
         cost: { refundCents: due, organizerCents, eventroCents: due - organizerCents, organizerOwedCents, organizerPaidOut: organizer && organizerPaidOut(r.order, org) },
         refundStatus: r.refundStatus,
         refundError: r.refundError,
@@ -726,7 +726,7 @@ export class GuaranteeService {
             subject: `Refund on its way: ${amount} for ${c.event.title}`,
             heading: 'Your money is on its way back',
             paragraphs: [
-              `Your Eventro Guarantee claim for ${c.event.title} was approved${c.auto ? ': the door’s scan log shows your ticket was turned down' : ''}.`,
+              `Your Omoshow Guarantee claim for ${c.event.title} was approved${c.auto ? ': the door’s scan log shows your ticket was turned down' : ''}.`,
               `We’ve refunded ${amount}, ${what}. ${toCard}`,
               REFUND_TIMING,
               // A multi-day pass refunded for one day still works on its other days.
@@ -739,7 +739,7 @@ export class GuaranteeService {
             subject: `Claim approved: ${c.event.title}`,
             heading: 'Your claim was approved',
             paragraphs: [
-              `Your Eventro Guarantee claim for ${c.event.title} was approved.`,
+              `Your Omoshow Guarantee claim for ${c.event.title} was approved.`,
               `Your refund of ${amount} is being processed by our team. We’ll email you again as soon as it’s sent. ${toCard}`,
             ],
             highlight: { label: 'Refund due', value: amount },
@@ -748,13 +748,13 @@ export class GuaranteeService {
       declined: {
         subject: `About your claim: ${c.event.title}`,
         heading: 'We couldn’t approve your claim',
-        paragraphs: [`We looked at your Eventro Guarantee claim for ${c.event.title}.`, c.decisionNote ?? 'It wasn’t approved.', 'If something doesn’t look right, contact us through the help centre and a person will take another look.'],
+        paragraphs: [`We looked at your Omoshow Guarantee claim for ${c.event.title}.`, c.decisionNote ?? 'It wasn’t approved.', 'If something doesn’t look right, contact us through the help centre and a person will take another look.'],
         push: `${c.event.title}: ${c.decisionNote ?? 'your claim wasn’t approved.'}`,
       },
       refunded: {
         subject: `Refund sent: ${amount} for ${c.event.title}`,
         heading: 'Your refund has been sent',
-        paragraphs: [`We’ve sent your Eventro Guarantee refund for ${c.event.title}: ${amount}, ${what}. ${toCard}`, REFUND_TIMING],
+        paragraphs: [`We’ve sent your Omoshow Guarantee refund for ${c.event.title}: ${amount}, ${what}. ${toCard}`, REFUND_TIMING],
         highlight: { label: 'Refunded', value: amount },
         push: `${c.event.title}: we’ve sent ${amount}. ${REFUND_TIMING}`,
       },
@@ -772,7 +772,7 @@ export class GuaranteeService {
         paragraphs: m.paragraphs,
         ...(m.highlight ? { highlight: m.highlight } : {}),
         cta: { label: 'View my tickets', url: `${config.webUrl}/tickets` },
-        footer: 'You made a claim under the Eventro Guarantee.',
+        footer: 'You made a claim under the Omoshow Guarantee.',
         footerLink: { label: 'Guarantee terms', url: `${config.webUrl}/guarantee` },
       });
       await this.mail.send(`guarantee.${kind}`, { to, subject: m.subject, html, text });
@@ -814,22 +814,22 @@ export class GuaranteeService {
     const checkedIn = c.ticket.checkedInAt ? ` It was checked in at ${venueTime(c.ticket.checkedInAt, c.event.timezone)}, and our team approved the claim after review.` : ' It was never checked in.';
     const eventro = c.amountCents - c.organizerCents;
     const paragraphs = [
-      `A fan’s ticket for ${c.event.title} didn’t get them in, and Eventro approved their claim under the Eventro Guarantee (“if your ticket doesn’t scan, you get your money back”).`,
+      `A fan’s ticket for ${c.event.title} didn’t get them in, and Omoshow approved their claim under the Omoshow Guarantee (“if your ticket doesn’t scan, you get your money back”).`,
       `Ticket ${c.ticketId}: ${c.ticket.ticketType.name}${seat ? `, ${seat}` : ''}.`,
       `What the fan told us: ${REASON_LABEL[c.reason] ?? c.reason}${c.details ? `. “${c.details}”` : '.'}${c.decisionNote ? ` Our reviewer’s note: “${c.decisionNote}”` : ''}`,
       `${evidence}${checkedIn}`,
-      `We refunded the fan ${money(c.amountCents)} for this ticket. Your payout is reduced by ${money(c.organizerCents)}, your share of the ticket${eventro > 0 ? `; Eventro covered the other ${money(eventro)} (its fee and any ticket protection)` : ''}. ${c.ticket.status === 'VOID' ? 'The ticket has been cancelled.' : 'This was one day of a multi-day pass, which still works on its other days.'}`,
+      `We refunded the fan ${money(c.amountCents)} for this ticket. Your payout is reduced by ${money(c.organizerCents)}, your share of the ticket${eventro > 0 ? `; Omoshow covered the other ${money(eventro)} (its fee and any ticket protection)` : ''}. ${c.ticket.status === 'VOID' ? 'The ticket has been cancelled.' : 'This was one day of a multi-day pass, which still works on its other days.'}`,
       ...(c.organizerOwedCents > 0
-        ? [`You’d already been paid for this order, so ${money(c.organizerOwedCents)} is recorded as owed to Eventro. Our team will be in touch about it.`]
+        ? [`You’d already been paid for this order, so ${money(c.organizerOwedCents)} is recorded as owed to Omoshow. Our team will be in touch about it.`]
         : []),
     ];
     const { html, text } = render({
-      preheader: `A ticket for ${c.event.title} was refunded under the Eventro Guarantee.`,
+      preheader: `A ticket for ${c.event.title} was refunded under the Omoshow Guarantee.`,
       heading: 'A guarantee refund on your event',
       paragraphs,
       highlight: { label: 'Payout reduced by', value: money(c.organizerCents) },
       cta: { label: 'See your event', url: `${config.webUrl}/organizer/events/${c.event.id}` },
-      footer: `You’re getting this because you’re an admin of ${c.event.org.name} on Eventro.`,
+      footer: `You’re getting this because you’re an admin of ${c.event.org.name} on Omoshow.`,
       footerLink: { label: 'How the guarantee works', url: `${config.webUrl}/guarantee` },
     });
     const subject = `Guarantee refund: ${money(c.amountCents)} for ${c.event.title}`;
@@ -845,7 +845,7 @@ export class GuaranteeService {
 export class GuaranteeController {
   constructor(private readonly svc: GuaranteeService) {}
 
-  /** Whether this ticket is covered by the Eventro Guarantee (and who pays), its claim window, and its claim (current holder). */
+  /** Whether this ticket is covered by the Omoshow Guarantee (and who pays), its claim window, and its claim (current holder). */
   @Get() status(@Param('id') id: string, @CurrentUser() u: AuthUser) {
     return this.svc.status(id, u);
   }
@@ -862,7 +862,7 @@ export class GuaranteeController {
 export class OrganizerGuaranteeController {
   constructor(private readonly svc: GuaranteeService) {}
 
-  /** Approved Eventro Guarantee claims on this event that the organizer pays for (org admins and managers). */
+  /** Approved Omoshow Guarantee claims on this event that the organizer pays for (org admins and managers). */
   @Get() list(@Param('id') id: string, @CurrentUser() u: AuthUser) {
     return this.svc.organizerRefunds(id, u);
   }

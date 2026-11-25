@@ -87,10 +87,10 @@ export class NewsletterService {
         'One email a week at most. Pick the kinds of events you care about and we’ll skip the rest.',
       ],
       cta: { label: 'Choose what you hear about', url: manage },
-      footer: 'You signed up for drops and presales on Eventro.',
+      footer: 'You signed up for drops and presales on Omoshow.',
       footerLink: { label: 'Unsubscribe', url: manage },
     });
-    void this.mail.send('newsletter.welcome', { to: email, subject: 'You’re on the Eventro list', html, text, unsubscribeUrl: manage });
+    void this.mail.send('newsletter.welcome', { to: email, subject: 'You’re on the Omoshow list', html, text, unsubscribeUrl: manage });
   }
 
   async subscribe(dto: SubscribeDto, clientIp: string | null) {

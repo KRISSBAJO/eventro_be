@@ -2,11 +2,11 @@
  * The venue directory.
  *
  * Venues are added by organizers when they create an event (the same place is reused, see OrganizerService), kept
- * tidy by Eventro admins (edit, verify, hide, merge duplicates), and kept up to date by venue managers: people at
+ * tidy by Omoshow admins (edit, verify, hide, merge duplicates), and kept up to date by venue managers: people at
  * the venue who claimed its page and were approved. Managers and admins can save an official seat layout, which
  * organizers then start from.
  *
- * Venue owners can also add a venue that isn't on Eventro yet (POST /me/venues): it's created hidden with a pending
+ * Venue owners can also add a venue that isn't on Omoshow yet (POST /me/venues): it's created hidden with a pending
  * claim marked `newVenue`, and approving that claim shows it. The claimant hears about decisions by email and push.
  *
  * Public:   GET /venues (?q= to find one to claim), GET /venues/:slug, GET /venues/:slug/layout
@@ -63,7 +63,7 @@ export class ClaimDto {
 
 const PHONE = /^[+\d][\d\s()-]{5,24}$/;
 
-/** POST /me/venues: a venue that isn't on Eventro yet, added by someone who runs it (hidden until approved). */
+/** POST /me/venues: a venue that isn't on Omoshow yet, added by someone who runs it (hidden until approved). */
 export class OnboardVenueDto {
   @ApiProperty() @IsString() @MinLength(2, { message: 'Give the venue’s name.' }) @MaxLength(120) name: string;
   @ApiProperty() @IsString() @MinLength(3, { message: 'Give the street address.' }) @MaxLength(200) address: string;
@@ -202,7 +202,7 @@ export class VenuesService {
     const { layout, _count, events, listing, ...rest } = v;
     return {
       ...rest,
-      /** Terms for hiring the venue on Eventro; null when it isn't taking bookings */
+      /** Terms for hiring the venue on Omoshow; null when it isn't taking bookings */
       listing: publicListing(listing, v),
       verified: !!v.verifiedAt,
       managed: _count.claims > 0,
@@ -245,7 +245,7 @@ export class VenuesService {
   }
 
   /**
-   * Adds a venue that isn't on Eventro yet (POST /me/venues). It's created hidden, in its place's time zone, with a
+   * Adds a venue that isn't on Omoshow yet (POST /me/venues). It's created hidden, in its place's time zone, with a
    * PENDING claim marked `newVenue` for this person; approving the claim shows it. A visible venue with the same
    * name in the same city and country is refused with 409 VENUE_EXISTS, so the person can claim that one instead.
    */
@@ -263,7 +263,7 @@ export class VenuesService {
       throw new ConflictException({
         statusCode: 409,
         code: 'VENUE_EXISTS',
-        message: `${same.name} in ${same.city} is already on Eventro. If it’s yours, claim it instead of adding it again.`,
+        message: `${same.name} in ${same.city} is already on Omoshow. If it’s yours, claim it instead of adding it again.`,
         venue: same,
       });
     }
@@ -293,7 +293,7 @@ export class VenuesService {
           website: dto.website || null,
           imageUrl: dto.imageUrl || null,
           about: dto.about?.trim() || null,
-          // Not public or bookable until Eventro approves the claim below.
+          // Not public or bookable until Omoshow approves the claim below.
           hiddenAt: new Date(),
         },
       });
@@ -326,7 +326,7 @@ export class VenuesService {
           return {
             role: c.role,
             venue: { ...v, verified: !!v.verifiedAt, layout: this.layoutInfo({ layout }) },
-            /** Hiring on Eventro: whether it's listed, and requests waiting for an answer */
+            /** Hiring on Omoshow: whether it's listed, and requests waiting for an answer */
             listing: listing ? { active: listing.active, instantBook: listing.instantBook } : null,
             pendingBookings: pendingOf.get(c.venueId) ?? 0,
           };
@@ -423,7 +423,7 @@ export class VenuesService {
         include: { _count: { select: { events: true, claims: { where: { status: 'APPROVED' } } } } },
       }),
     ]);
-    // Hidden because an owner added them and their claim is still waiting, not hidden by Eventro.
+    // Hidden because an owner added them and their claim is still waiting, not hidden by Omoshow.
     const hiddenIds = rows.filter((v) => v.hiddenAt).map((v) => v.id);
     const awaiting = new Set(
       hiddenIds.length ? (await this.prisma.venueClaim.findMany({ where: { venueId: { in: hiddenIds }, newVenue: true, status: 'PENDING' }, select: { venueId: true } })).map((c) => c.venueId) : [],
@@ -564,7 +564,7 @@ export class VenuesService {
     const status = dto.decision === 'APPROVE' ? 'APPROVED' : dto.decision === 'REJECT' ? 'REJECTED' : 'REVOKED';
     const decidedAt = new Date();
     // A venue the claimant added themselves goes public when their claim is approved; declined, it stays hidden.
-    // Venues hidden by Eventro (no newVenue claim) are left as they are.
+    // Venues hidden by Omoshow (no newVenue claim) are left as they are.
     const show = status === 'APPROVED' && c.newVenue && !!c.venue.hiddenAt;
     const out = await this.prisma.$transaction(async (tx) => {
       const claim = await tx.venueClaim.update({ where: { id }, data: { status, note: dto.note?.trim() || null, decidedBy: admin.id, decidedAt } });
@@ -583,24 +583,24 @@ export class VenuesService {
     const path = approved ? '/venues/manage' : '/venues/list';
     try {
       const { html, text } = render({
-        preheader: approved ? (c.newVenue ? `${name} is now on Eventro, and you manage it.` : `You now manage ${name} on Eventro.`) : `About your request for ${name}.`,
-        heading: approved ? (c.newVenue ? `${name} is on Eventro` : `You now manage ${name}`) : c.newVenue ? `We couldn’t add ${name} yet` : `We couldn’t confirm you manage ${name}`,
+        preheader: approved ? (c.newVenue ? `${name} is now on Omoshow, and you manage it.` : `You now manage ${name} on Omoshow.`) : `About your request for ${name}.`,
+        heading: approved ? (c.newVenue ? `${name} is on Omoshow` : `You now manage ${name}`) : c.newVenue ? `We couldn’t add ${name} yet` : `We couldn’t confirm you manage ${name}`,
         paragraphs: approved
           ? [
-              ...(c.newVenue ? [`We checked your details, so ${name} now has its own page on Eventro and you manage it.`] : []),
+              ...(c.newVenue ? [`We checked your details, so ${name} now has its own page on Omoshow and you manage it.`] : []),
               'You can keep the venue’s details, photo and official seat layout up to date. Organizers booking it will start from your layout.',
               'To get booked by organizers, list it for hire: set your price, opening hours and any blocked-out time. Requests wait up to 48 hours for your answer, and payment is arranged directly between you and the organizer.',
             ]
           : [note || (c.newVenue ? 'We couldn’t check that you run this venue. Reply with something we can verify, like an email at the venue’s domain or a link to its official page.' : 'We couldn’t check that you work at this venue. Reply with something we can verify, like an email at the venue’s domain.')],
         cta: approved ? { label: 'Set up your venue', url: `${config.webUrl}${path}` } : { label: 'Try again', url: `${config.webUrl}${path}` },
-        footer: c.newVenue ? 'You asked to add a venue to Eventro.' : 'You asked to manage a venue page on Eventro.',
+        footer: c.newVenue ? 'You asked to add a venue to Omoshow.' : 'You asked to manage a venue page on Omoshow.',
       });
-      void this.mail.send(kind, { to: c.user.email, subject: approved ? (c.newVenue ? `${name} is on Eventro` : `You now manage ${name}`) : `Your request for ${name}`, html, text });
+      void this.mail.send(kind, { to: c.user.email, subject: approved ? (c.newVenue ? `${name} is on Omoshow` : `You now manage ${name}`) : `Your request for ${name}`, html, text });
       await this.push.send(kind, 'orders', [
         {
           userId: c.user.id,
-          title: approved ? (c.newVenue ? `${name} is on Eventro` : `You now manage ${name}`) : `About your request for ${name}`,
-          body: approved ? 'You’re approved. List it for hire: set your price, hours and blocked-out time.' : (note ?? 'We couldn’t confirm it yet. Open Eventro to see why and try again.'),
+          title: approved ? (c.newVenue ? `${name} is on Omoshow` : `You now manage ${name}`) : `About your request for ${name}`,
+          body: approved ? 'You’re approved. List it for hire: set your price, hours and blocked-out time.' : (note ?? 'We couldn’t confirm it yet. Open Omoshow to see why and try again.'),
           data: { url: `eventro:/${path}`, path, type: kind, claimId: c.id, venueId: c.venueId },
           dedupeKey: `${kind}:${c.id}:${decidedAt.getTime()}`,
         },
@@ -637,7 +637,7 @@ export class VenueDirectoryController {
   @ApiBearerAuth() @Post('venues/:slug/claims') claim(@Param('slug') slug: string, @CurrentUser() u: AuthUser, @Body() dto: ClaimDto) {
     return this.venues.claim(slug, u, dto);
   }
-  /** Add a venue that isn't on Eventro yet: hidden, with a pending claim, until Eventro approves it. */
+  /** Add a venue that isn't on Omoshow yet: hidden, with a pending claim, until Omoshow approves it. */
   @ApiBearerAuth() @Post('me/venues') onboard(@CurrentUser() u: AuthUser, @Body() dto: OnboardVenueDto) {
     return this.venues.onboard(u, dto);
   }

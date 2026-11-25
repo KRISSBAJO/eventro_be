@@ -1,6 +1,6 @@
 /**
- * The Eventro Guarantee ("if your ticket doesn't scan, you get your money back") and the door scan log behind it.
- * Fan resale tickets are refunded at Eventro's cost; every other paid ticket per ticket, at the organizer's.
+ * The Omoshow Guarantee ("if your ticket doesn't scan, you get your money back") and the door scan log behind it.
+ * Fan resale tickets are refunded at Omoshow's cost; every other paid ticket per ticket, at the organizer's.
  * Refunds use the mock provider; one test makes it fail to check that admins can retry.
  */
 import { after, before, test } from 'node:test';
@@ -127,7 +127,7 @@ test('claim window: 3 hours before the start to 48 hours after the end (no end: 
   assert.equal(claimWindow({ startsAt: start, endsAt: null, timezone: 'Africa/Lagos' }).opensAt.toISOString(), '2026-12-05T16:00:00.000Z');
 });
 
-test('coverage and window: every paid ticket is covered (resale: Eventro pays; others: the organizer), free tickets are not', async () => {
+test('coverage and window: every paid ticket is covered (resale: Omoshow pays; others: the organizer), free tickets are not', async () => {
   const admin = await account('admin@test.local', 'Admin');
   const org = await account(`gc-org1-${run}@test.local`, 'Gia Organizer');
   const seller = await account(`gc-seller1-${run}@test.local`, 'Sam Seller');
@@ -161,12 +161,12 @@ test('coverage and window: every paid ticket is covered (resale: Eventro pays; o
   assert.equal(fg.notCovered, 'FREE');
   assert.equal(fg.open, false);
 
-  // The resale buyer's new ticket is covered and recorded as such; Eventro pays.
+  // The resale buyer's new ticket is covered and recorded as such; Omoshow pays.
   assert.equal((await prisma.ticket.findUniqueOrThrow({ where: { id: a.ticketId } })).resaleGuarantee, true);
   const mine = await ok(call('GET', '/me/tickets', undefined, buyer.token));
   const g = mine.tickets.find((t: Json) => t.id === a.ticketId).guarantee;
   assert.equal(g.covered, true);
-  assert.equal(g.payer, 'EVENTRO');
+  assert.equal(g.payer, 'OMOSHOW');
   assert.equal(g.open, false, 'a month before the event the window is shut');
   assert.equal(g.claim, null);
   const early = await call('POST', `/tickets/${a.ticketId}/guarantee-claims`, { reason: 'DID_NOT_SCAN' }, buyer.token);
@@ -273,8 +273,8 @@ test('a rejected scan at the door: held for review with the evidence; approving 
   assert.equal(c.auto, false);
   assert.equal(c.refundStatus, 'REFUNDED');
   assert.equal(c.amountCents, r.price, 'all-in: what they paid for the resale order');
-  assert.equal(c.payer, 'EVENTRO');
-  assert.equal(c.cost.organizerCents, 0, 'resale: Eventro pays, nothing comes out of the organizer’s payout');
+  assert.equal(c.payer, 'OMOSHOW');
+  assert.equal(c.cost.organizerCents, 0, 'resale: Omoshow pays, nothing comes out of the organizer’s payout');
   assert.equal(c.cost.eventroCents, r.price);
   assert.match(c.message, /We’ve refunded/);
 
@@ -284,7 +284,7 @@ test('a rejected scan at the door: held for review with the evidence; approving 
   assert.equal((await prisma.ticket.findUniqueOrThrow({ where: { id: r.ticketId } })).status, 'VOID');
   assert.equal((await call('GET', `/tickets/${r.ticketId}/qr`, undefined, buyer.token)).status, 400, 'its QR stops working');
 
-  // Eventro pays: the seller's payout is untouched.
+  // Omoshow pays: the seller's payout is untouched.
   const listingAfter = await prisma.resaleListing.findUniqueOrThrow({ where: { id: r.listingId } });
   assert.equal(listingAfter.payoutStatus, 'PENDING');
   assert.equal(listingAfter.payoutCents, listingBefore.payoutCents);
@@ -452,7 +452,7 @@ async function promoOrder(ctx: { ev: Json; tt: Json }, fan: { token: string; use
   return { orderId: o.orderId as string, ticketIds: (paid.tickets as Json[]).map((t) => t.id as string).sort() };
 }
 
-test('normal tickets: a claim refunds that ticket’s share only, out of the organizer’s payout (Eventro returns its fee); all three refund the order', async () => {
+test('normal tickets: a claim refunds that ticket’s share only, out of the organizer’s payout (Omoshow returns its fee); all three refund the order', async () => {
   const admin = await account('admin@test.local', 'Admin');
   const org = await account(`gc-org6-${run}@test.local`, 'Gia Organizer');
   const fan = await account(`gc-fan6-${run}@test.local`, 'Fela Fan');
@@ -499,7 +499,7 @@ test('normal tickets: a claim refunds that ticket’s share only, out of the org
   assert.equal(queued.cost.refundCents, shares[0]);
   assert.equal(queued.cost.organizerCents, orgShare);
   assert.equal(queued.cost.eventroCents, shares[0] - orgShare);
-  assert.ok(queued.cost.eventroCents > 0, 'Eventro’s fee and protection on the ticket');
+  assert.ok(queued.cost.eventroCents > 0, 'Omoshow’s fee and protection on the ticket');
   assert.equal(queued.cost.organizerPaidOut, false, 'sold today: not paid out yet');
 
   const a1 = await ok(call('POST', `/admin/guarantee-claims/${c1.id}/decide`, { decision: 'APPROVE', note: 'Gate 2 scanner fault.' }, admin.token));
@@ -516,7 +516,7 @@ test('normal tickets: a claim refunds that ticket’s share only, out of the org
   assert.deepEqual(await statuses(), ['VOID', 'ACTIVE', 'ACTIVE']);
   assert.ok(await prisma.auditLog.findFirst({ where: { action: 'order.partial_refund', entityId: orderId } }));
 
-  // The organizer's payout drops by their share of the ticket only: Eventro returned its fee and protection.
+  // The organizer's payout drops by their share of the ticket only: Omoshow returned its fee and protection.
   assert.equal(await payouts(), orgNet - orgShare);
 
   // The organizer's admins are told, once.
@@ -578,7 +578,7 @@ test('normal tickets: the organizer already paid out for the order owes their sh
   const orgShare = organizerTicketShare(order, 'BUYER', t1);
   assert.equal(a1.cost.organizerPaidOut, true);
   assert.equal(a1.cost.organizerCents, orgShare);
-  assert.equal(a1.cost.organizerOwedCents, orgShare, 'recorded as owed to Eventro');
+  assert.equal(a1.cost.organizerOwedCents, orgShare, 'recorded as owed to Omoshow');
   const stored = await prisma.guaranteeClaim.findUniqueOrThrow({ where: { id: c1.id } });
   assert.equal(stored.organizerOwedCents, orgShare);
   const list = await ok(call('GET', `/organizer/events/${ctx.ev.id}/guarantee-refunds`, undefined, org.token));

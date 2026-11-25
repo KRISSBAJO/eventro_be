@@ -175,7 +175,7 @@ export class AdminConsoleService {
 
     const events = Object.fromEntries(EVENT_STATUSES.map((s) => [s, byStatus.find((b) => b.status === s)?._count._all ?? 0]));
     const mailCounts = Object.fromEntries(['SENT', 'FAILED', 'SKIPPED'].map((s) => [s, emailStats.find((e) => e.status === s)?._count._all ?? 0]));
-    // Eventro Guarantee claims waiting for a decision (the console's "Guarantee claims" queue).
+    // Omoshow Guarantee claims waiting for a decision (the console's "Guarantee claims" queue).
     const openGuaranteeClaims = await this.prisma.guaranteeClaim.count({ where: { status: 'PENDING' } });
     return {
       counts: { users, suspendedUsers, organizers, orgs, verifiedOrgs, suspendedOrgs, events, upcomingPublished: upcoming, ordersPaid: currencies.reduce((s, c) => s + c.orders, 0), ticketsSold, subscribers, priceWatchers: watchers, openRefunds, openFraud, openGuaranteeClaims, venues, openVenueClaims },
@@ -221,7 +221,7 @@ export class AdminConsoleService {
     }
     if (dto.roles && u.roles.includes('ADMIN') && !dto.roles.includes('ADMIN')) {
       const admins = await this.prisma.user.count({ where: { roles: { has: 'ADMIN' }, suspendedAt: null } });
-      if (admins <= 1) throw new BadRequestException('Eventro needs at least one admin.');
+      if (admins <= 1) throw new BadRequestException('Omoshow needs at least one admin.');
     }
     const reason = reasonFor(dto);
     const note = clean(dto.note);
@@ -503,7 +503,7 @@ export class AdminConsoleService {
   }
 
   async takedown(id: string, me: AuthUser, note: string) {
-    const { count } = await this.prisma.event.updateMany({ where: { id, status: 'PUBLISHED' }, data: { status: 'REJECTED', reviewNote: `Taken down by Eventro: ${note}`, salesPaused: true } });
+    const { count } = await this.prisma.event.updateMany({ where: { id, status: 'PUBLISHED' }, data: { status: 'REJECTED', reviewNote: `Taken down by Omoshow: ${note}`, salesPaused: true } });
     if (!count) throw new NotFoundException('No published event with that id.');
     await this.audit.log(me.id, 'event.takedown', 'Event', id, { note });
     return { status: 'REJECTED' };
@@ -651,7 +651,7 @@ export class AdminConsoleService {
         heading: dto.heading,
         paragraphs,
         cta: dto.ctaLabel && dto.ctaUrl ? { label: dto.ctaLabel, url: dto.ctaUrl } : undefined,
-        footer: dto.test ? 'Test send: only you got this.' : 'You get drops and presales from Eventro.',
+        footer: dto.test ? 'Test send: only you got this.' : 'You get drops and presales from Omoshow.',
         footerLink: { label: 'Change preferences or unsubscribe', url: manage },
       });
       return { to: r.email, subject: dto.test ? `[Test] ${dto.subject}` : dto.subject, html, text, unsubscribeUrl: manage };
@@ -852,7 +852,7 @@ export class AdminConsoleController {
 @Module({
   // VenuesModule: cancelling an event cancels its venue booking too.
   imports: [CheckoutModule, VenuesModule],
-  // The Eventro Guarantee (scan guarantee) lives here too: its refunds go through AdminService (refundOrder, refundTicket).
+  // The Omoshow Guarantee (scan guarantee) lives here too: its refunds go through AdminService (refundOrder, refundTicket).
   controllers: [AdminController, AdminConsoleController, GuaranteeController, OrganizerGuaranteeController, AdminGuaranteeController],
   providers: [AdminService, AdminConsoleService, EventCancellation, GuaranteeService],
   // The organizer module cancels events through the same service, and refunds donations through AdminService.

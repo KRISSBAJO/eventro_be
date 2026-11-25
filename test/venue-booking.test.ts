@@ -1,5 +1,5 @@
 /**
- * Hiring a venue on Eventro: managers keep the listing and blocked times; organizers request a time, which has to
+ * Hiring a venue on Omoshow: managers keep the listing and blocked times; organizers request a time, which has to
  * meet the listing's rules (notice, hours, length, guests, blocked time) and can't overlap another booking's time
  * (including setup and cleanup), even when two requests race; confirming declines overlapping requests; holds expire;
  * either side cancels; messages stay between the two sides; an event held at a booked venue can't be submitted until
@@ -565,10 +565,10 @@ test('cancelling an event cancels its venue booking, and the venue’s managers 
   const retry = await ok(call('POST', `/organizer/events/${ev1.id}/cancel`, { reason: 'The headliner is unwell.', confirmTitle: `Morning Gig ${run}` }, o.token));
   assert.equal(retry.venueBookingCancelled, null);
 
-  // A request still waiting, cancelled by Eventro with the event.
+  // A request still waiting, cancelled by Omoshow with the event.
   const b2 = await ok(request(o.org.id, o.token, { venueId: venue.id, startsAt: at(15, 0, nextDay(5)), endsAt: at(19, 0, nextDay(5)) }));
   const ev2 = await ok(call('POST', `/organizer/orgs/${o.org.id}/events`, show(`Afternoon Gig ${run}`, b2, 16), o.token));
-  const byAdmin = await ok(call('POST', `/admin/events/${ev2.id}/cancel`, { reason: 'Cancelled by Eventro support.' }, admin.token));
+  const byAdmin = await ok(call('POST', `/admin/events/${ev2.id}/cancel`, { reason: 'Cancelled by Omoshow support.' }, admin.token));
   assert.equal(byAdmin.venueBookingCancelled, b2.code);
   assert.equal((await prisma.venueBooking.findUniqueOrThrow({ where: { id: b2.id } })).status, 'CANCELLED');
   await waitFor(() => prisma.notificationLog.findUnique({ where: { dedupeKey: `venue_booking.cancelled:${b2.id}:${mgr.user.id}` } }));

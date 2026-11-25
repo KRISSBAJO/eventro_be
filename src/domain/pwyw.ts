@@ -3,11 +3,11 @@
  *
  * PWYW amounts are base amounts, like an organizer's fixed basePriceCents: the fan picks one between the tier's
  * minimum and maximum (whole minor units), and the event's fee mode applies to it exactly as to a fixed price
- * (BUYER: Eventro's fee goes on top, so the fan pays buyerPrice(amount); ORGANIZER: the fan pays the amount and the
+ * (BUYER: Omoshow's fee goes on top, so the fan pays buyerPrice(amount); ORGANIZER: the fan pays the amount and the
  * fee comes out of the organizer's share). Everyone in an order pays the same amount per ticket (Order.unitCents).
  *
  * Donations carry no fee, discount or ticket protection: they are added to the order total as they are, kept apart
- * from ticket revenue (Order.donationCents) and left out of Eventro Guarantee shares.
+ * from ticket revenue (Order.donationCents) and left out of Omoshow Guarantee shares.
  */
 import { formatMoney } from '../mail/mail.module';
 import { buyerPrice, type FeeMode } from './money';
@@ -20,7 +20,7 @@ export const MAX_QUICK_PICKS = 4;
 export const MAX_DONATION_SUGGESTIONS = 4;
 
 /** Shown wherever organizers set up or are paid donations. */
-export const DONATION_NOTE = "Eventro collects donations on the organizer's behalf; the organizer is responsible for passing them to the cause.";
+export const DONATION_NOTE = "Omoshow collects donations on the organizer's behalf; the organizer is responsible for passing them to the cause.";
 
 export const PROMO_ON_PWYW = 'Promo codes don’t apply to pay-what-you-want tickets: you choose your own price.';
 

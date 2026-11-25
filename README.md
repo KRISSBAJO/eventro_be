@@ -1,6 +1,6 @@
-# Eventro API
+# Omoshow API
 
-Backend for [Eventro](https://github.com/KRISSBAJO/eventro): events, venue seat maps, checkout with seat holds, tickets with rotating QR codes, organizer tools and admin review.
+Backend for [Omoshow](https://github.com/KRISSBAJO/eventro): events, venue seat maps, checkout with seat holds, tickets with rotating QR codes, organizer tools and admin review.
 
 **Stack:** NestJS 11 · Prisma 6 · PostgreSQL · Stripe and Paystack (both optional; a mock provider is used when no key is set).
 
@@ -79,7 +79,7 @@ payouts are in that currency's minor units (kobo for NGN). Fans are always charg
 - **No `STRIPE_SECRET_KEY`:** the *mock* provider is used. `POST /orders` returns `provider: "mock"`, and `POST /orders/:id/pay` completes the payment.
 - **With Stripe (test mode):** `POST /orders` returns a PaymentIntent `clientSecret` for Stripe.js. Stripe calls `POST /api/v1/webhooks/stripe` (signature-checked with `STRIPE_WEBHOOK_SECRET`), and the order is fulfilled there. Locally:
   `stripe listen --forward-to 127.0.0.1:4000/api/v1/webhooks/stripe`
-- **Organizer payouts:** use Stripe Connect. `POST /organizer/orgs/:orgId/payouts/onboarding` returns a Stripe-hosted link where organizers enter their bank details. Eventro never sees or stores account numbers.
+- **Organizer payouts:** use Stripe Connect. `POST /organizer/orgs/:orgId/payouts/onboarding` returns a Stripe-hosted link where organizers enter their bank details. Omoshow never sees or stores account numbers.
 
 Fulfilment can safely run more than once. If a hold expired during payment and the seats were sold in the meantime, the order is cancelled and refunded automatically.
 
@@ -154,7 +154,7 @@ Organizers set the rules per event with `PATCH /organizer/events/:id`: `resaleEn
 `transferCutoffMinutes` (no transfers or new listings this close to the start; default 60).
 
 - **Listing:** `POST /tickets/:id/listing { priceCents }` checks the rules and returns the breakdown: the cap,
-  Eventro's 5% seller fee, the organizer royalty and what the seller receives. `DELETE` takes it down (not while a
+  Omoshow's 5% seller fee, the organizer royalty and what the seller receives. `DELETE` takes it down (not while a
   buyer is holding it). A listed ticket has no QR code.
 - **Buying:** `GET /events/:slug/resale` lists active listings. `POST /resale/:id/hold` holds one for 10 minutes and
   returns a `holdKey`; `POST /resale/:id/orders { holdKey, email, name }` creates the order, which is paid like any
@@ -178,7 +178,7 @@ in the same city, or within about 150 m with a shared word in the name) reuses t
 ### Changing an event's venue
 
 `PUT /organizer/events/:id/venue` (org admins and managers; door staff get 403) moves an in-person event to `{ venueId }`
-(a venue on Eventro) or `{ venue: { name, address, city, country?, region?, postalCode?, lat?, lng? } }` (a new place,
+(a venue on Omoshow) or `{ venue: { name, address, city, country?, region?, postalCode?, lat?, lng? } }` (a new place,
 found again or created with the same rules as creating an event). Optional `timezone` only when the organizer picked the
 zone themselves.
 
@@ -308,7 +308,7 @@ Everything the Expo app needs is additive: the website keeps working unchanged.
 | "Doors open soon" (hour before doors, or start) | holders of ACTIVE tickets | reminders | `/tickets/<ticketId>` | `reminder.doors:<eventId>:<userId>` |
 | New sale ("New sale: …", quantity × type · total) | the org's active admins and managers (not door staff; resales left out) | sales | `/organizer/events/<eventId>` | `order.sale:<orderId>:<userId>` |
 
-  Only people with an Eventro account get pushes. Reminders run every 5 minutes and use the venue's real time
+  Only people with an Omoshow account get pushes. Reminders run every 5 minutes and use the venue's real time
   (event times are stored as wall-clock in the venue zone).
 
 ### Offline tickets (QR seeds)
@@ -359,7 +359,7 @@ Each ticket has a seed; the app can make the same rotating codes as `GET /ticket
 
 `POST /orders` and `POST /resale/:id/orders` take an optional `returnTo: "app"`. Paystack then sends the fan to
 `${WEB_URL}/checkout/return?order=<id>&app=1` instead of the plain return page. The website verifies the payment as
-usual and, once it's paid, opens `eventro://tickets` (and shows an "Open the Eventro app" button, with the web
+usual and, once it's paid, opens `eventro://tickets` (and shows an "Open the Omoshow app" button, with the web
 confirmation underneath in case the app doesn't open). The app opens Paystack in an auth session that waits for
 `eventro://`, so the browser closes itself, and it still calls `POST /orders/:id/verify` afterwards.
 

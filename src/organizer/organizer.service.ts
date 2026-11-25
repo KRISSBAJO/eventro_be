@@ -47,8 +47,8 @@ const ADMIN_ONLY: MemberRole[] = ['ADMIN'];
 
 const DAY = 86_400_000;
 
-/** v1: venue bookings on Eventro are for one-date events. */
-const MULTI_DATE_BOOKING = 'Venue bookings on Eventro are for single-date events for now. Pick the venue for this event instead.';
+/** v1: venue bookings on Omoshow are for one-date events. */
+const MULTI_DATE_BOOKING = 'Venue bookings on Omoshow are for single-date events for now. Pick the venue for this event instead.';
 
 /** Offline sync answers as door scan log results. */
 const SYNC_SCAN_RESULT: Record<string, ScanResult> = {
@@ -229,7 +229,7 @@ export class OrganizerService {
     };
   }
 
-  /** The same place picked again is the venue already on Eventro (see VenueChange.sameVenue). */
+  /** The same place picked again is the venue already on Omoshow (see VenueChange.sameVenue). */
   private sameVenue(v: { name: string; city: string; lat?: number; lng?: number }, country: string | undefined) {
     return this.venues.sameVenue(v, country);
   }
@@ -261,7 +261,7 @@ export class OrganizerService {
     if (planned && dto.venueBookingId) throw new BadRequestException(MULTI_DATE_BOOKING);
     let venueId = dto.venueId ?? null;
     let timezone = dto.timezone ?? 'UTC';
-    // A venue booked on Eventro: the event is held there, in the venue's zone, within the booking's times.
+    // A venue booked on Omoshow: the event is held there, in the venue's zone, within the booking's times.
     const booking = dto.venueBookingId ? await this.bookings.attachable(dto.venueBookingId, orgId) : null;
     if (booking) {
       if (dto.online) throw new BadRequestException('An online event doesn’t need a venue booking.');
@@ -520,7 +520,7 @@ export class OrganizerService {
       promos,
       media: ((ev.media as MediaItem[] | null) ?? []).map(mediaUrls),
       previewToken: previewToken(ev.slug, ev.status),
-      /** The venue booked on Eventro for this event (status, code); the event can't be submitted until it's CONFIRMED */
+      /** The venue booked on Omoshow for this event (status, code); the event can't be submitted until it's CONFIRMED */
       venueBooking: VenueBookingService.eventSummary(booking),
     };
   }
@@ -584,10 +584,10 @@ export class OrganizerService {
   /** Moves an in-person event to another venue; see VenueChange. Admins and managers, like editing. */
   async changeVenue(id: string, user: AuthUser, dto: ChangeVenueDto) {
     const ev = await this.eventFor(id, user, EDIT);
-    // A venue booked on Eventro stays until the booking is cancelled or detached; one that fell through is let go.
+    // A venue booked on Omoshow stays until the booking is cancelled or detached; one that fell through is let go.
     const booking = await this.prisma.venueBooking.findUnique({ where: { eventId: id } });
     if (booking && isLive(booking)) {
-      throw new ConflictException({ statusCode: 409, code: 'VENUE_BOOKED', message: `This event is booked at its venue on Eventro (${booking.code}). Cancel the booking, or detach it from the event, before moving it.` });
+      throw new ConflictException({ statusCode: 409, code: 'VENUE_BOOKED', message: `This event is booked at its venue on Omoshow (${booking.code}). Cancel the booking, or detach it from the event, before moving it.` });
     }
     const out = await this.venues.change(ev, user, dto);
     if (booking) await this.prisma.venueBooking.updateMany({ where: { id: booking.id, eventId: id }, data: { eventId: null } });
@@ -595,7 +595,7 @@ export class OrganizerService {
   }
 
   /**
-   * Holds the event at a venue booked on Eventro (PUT /organizer/events/:id/venue-booking). The event moves to the
+   * Holds the event at a venue booked on Omoshow (PUT /organizer/events/:id/venue-booking). The event moves to the
    * booking's venue (through VenueChange, so ticket holders of a published event hear about it) and has to happen
    * within the booking's times. Events in review or on sale only take a confirmed booking.
    */
@@ -778,7 +778,7 @@ export class OrganizerService {
   /** Suspended organizers can't put events in front of fans. */
   private async notSuspended(orgId: string) {
     const org = await this.prisma.organization.findUnique({ where: { id: orgId }, select: { suspendedAt: true, suspendReason: true } });
-    if (org?.suspendedAt) throw new ForbiddenException(`This organizer account is suspended${org.suspendReason ? `: ${org.suspendReason}` : '.'} Contact Eventro support.`);
+    if (org?.suspendedAt) throw new ForbiddenException(`This organizer account is suspended${org.suspendReason ? `: ${org.suspendReason}` : '.'} Contact Omoshow support.`);
   }
 
   async submit(id: string, user: AuthUser) {
@@ -786,7 +786,7 @@ export class OrganizerService {
     await this.notSuspended(ev.orgId);
     if (ev.status !== 'DRAFT' && ev.status !== 'REJECTED') throw new BadRequestException('Only drafts and rejected events can be submitted.');
     if (ev.dateMode === 'SINGLE' ? ev.startsAt <= new Date() : !nextActive(ev.dates)) throw new BadRequestException(ev.dateMode === 'SINGLE' ? 'The event date is in the past.' : 'Every date of this event is in the past.');
-    // Held at a venue booked on Eventro: only once the venue has confirmed.
+    // Held at a venue booked on Omoshow: only once the venue has confirmed.
     const held = await this.bookings.submitBlock(id);
     if (held) throw new ConflictException(held);
     return this.prisma.event.update({ where: { id }, data: { status: 'IN_REVIEW', reviewNote: null } });
@@ -1130,7 +1130,7 @@ export class OrganizerService {
       return day ? { ...answer, date: dateView(day) } : answer;
     };
     let ticketId = code.trim().toUpperCase();
-    const invalidCode = { result: 'invalid', message: 'Not a valid Eventro code.' };
+    const invalidCode = { result: 'invalid', message: 'Not a valid Omoshow code.' };
     let t: DoorTicket | null = null;
     if (code.includes('.')) {
       // Codes are signed with the ticket's own seed (its qrVersion), so find the ticket first, then check.
@@ -1143,7 +1143,7 @@ export class OrganizerService {
         // Logged against the ticket the code names: a real ticket's code failing is what "it didn't scan" means.
         return logged(v.reason === 'expired' ? 'EXPIRED_CODE' : 'INVALID', t.id, {
           result: v.reason === 'expired' ? 'expired-code' : 'invalid',
-          message: v.reason === 'expired' ? 'This code has expired. Ask them to reopen the ticket.' : 'Not a valid Eventro code.',
+          message: v.reason === 'expired' ? 'This code has expired. Ask them to reopen the ticket.' : 'Not a valid Omoshow code.',
         });
       }
       ticketId = v.ticketId;
@@ -1512,7 +1512,7 @@ export class OrganizerService {
         resaleListing: { select: { royaltyCents: true } },
       },
     });
-    // Donation refunds made after the organizer had been paid for those orders (any time): owed to Eventro.
+    // Donation refunds made after the organizer had been paid for those orders (any time): owed to Omoshow.
     const owed = await this.prisma.order.groupBy({ by: ['currency'], where: { event: { orgId }, donationOwedCents: { gt: 0 } }, _sum: { donationOwedCents: true } });
     // Payouts are shown in the organization's main currency (the one most of its sales are in);
     // sales in other currencies are converted at today's rate and marked as approximate.
@@ -1524,13 +1524,13 @@ export class OrganizerService {
     const donationsByDay = new Map<string, number>();
     for (const o of orders) {
       const k = dayKey(o.paidAt!);
-      // Organizer share of the tickets (protection is Eventro's), after discounts and refunds. A refund comes out of
-      // it in full, except an Eventro Guarantee refund: only the organizer's share of that ticket (`organizerCents`),
-      // as Eventro returns its own fee and protection (see src/guarantee).
+      // Organizer share of the tickets (protection is Omoshow's), after discounts and refunds. A refund comes out of
+      // it in full, except an Omoshow Guarantee refund: only the organizer's share of that ticket (`organizerCents`),
+      // as Omoshow returns its own fee and protection (see src/guarantee).
       const eventroReturned = o.guaranteeClaims.reduce((s, g) => s + (g.amountCents - g.organizerCents), 0);
       // A donation is its own line: paid to the organizer in full (no fee), less any donation refund; ticket refunds
       // don't touch it, and refunds of it don't touch the tickets' share.
-      // A fan-resale order's ticket money is the seller's (paid out by Eventro from the listing): the organizer's part
+      // A fan-resale order's ticket money is the seller's (paid out by Omoshow from the listing): the organizer's part
       // of it is only the event's resale royalty. Its donation, like any, is the organizer's in full.
       const net = o.resaleListing
         ? (o.resaleListing.royaltyCents ?? 0)
@@ -1558,7 +1558,7 @@ export class OrganizerService {
       nextPayoutDonationCents: org.payoutSchedule === 'DAILY' ? donationsOn(yesterday) : history.slice(0, 7).reduce((s, h) => s + h.donationCents, 0),
       donationsCents: [...donationsByDay.values()].reduce((a, b) => a + b, 0),
       donationNote: DONATION_NOTE,
-      // Donations refunded after the organizer had already been paid for them: owed to Eventro (in the payout currency).
+      // Donations refunded after the organizer had already been paid for them: owed to Omoshow (in the payout currency).
       donationOwedCents: owed.reduce((s, g) => s + this.fx.convert(g._sum.donationOwedCents ?? 0, g.currency, currency), 0),
       payoutMethod:
         org.payoutProvider === 'paystack' && org.paystackSubaccount
@@ -1578,7 +1578,7 @@ export class OrganizerService {
   }
 
   /**
-   * Bank details are collected by Stripe Connect, never by Eventro.
+   * Bank details are collected by Stripe Connect, never by Omoshow.
    * Returns a Stripe-hosted onboarding link (or explains that Stripe isn't configured).
    */
   async payoutOnboarding(orgId: string, user: AuthUser, returnUrl: string) {

@@ -125,7 +125,7 @@ export class OrganizerController {
     return this.svc.changeVenue(id, u, dto);
   }
   /**
-   * Holds the event at a venue booked on Eventro (admins and managers). It can't be submitted for review until the
+   * Holds the event at a venue booked on Omoshow (admins and managers). It can't be submitted for review until the
    * venue confirms; events in review or on sale only take a confirmed booking.
    */
   @Put('events/:id/venue-booking') attachBooking(@Param('id') id: string, @CurrentUser() u: AuthUser, @Body() dto: AttachBookingDto) {

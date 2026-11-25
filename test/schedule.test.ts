@@ -421,7 +421,7 @@ test('ticket lifecycle: a transfer keeps the booking; resale, refund, void and a
   assert.ok((await prisma.sessionReservation.findFirstOrThrow({ where: { ticketId: t2 } })).cancelledAt);
   assert.equal(await prisma.sessionReservation.count({ where: { ticketId: bought.tickets[0].id } }), 0);
 
-  // Refund (Eventro admin refunds the order): released.
+  // Refund (Omoshow admin refunds the order): released.
   const paid = await buy(cal, general.id);
   const t3 = paid.tickets[0].id as string;
   await ok(call('POST', `/tickets/${t3}/sessions/${ws.id}`, undefined, cal.token));

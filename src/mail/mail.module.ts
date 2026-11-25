@@ -66,7 +66,7 @@ export class MailService {
       const res = await fetch(`${config.resendUrl}${chunk.length === 1 ? '/emails' : '/emails/batch'}`, {
         method: 'POST',
         headers: { authorization: `Bearer ${config.resendApiKey}`, 'content-type': 'application/json' },
-        body: JSON.stringify(chunk.length === 1 ? body[0] : body),
+        body: JSON.stringify(chunk.length === 1 ? body[0] : config.resendUrl === 'https://api.relykit.com' ? { emails: body } : body),
         signal: AbortSignal.timeout(15_000),
       });
       const json = (await res.json().catch(() => ({}))) as { id?: string; data?: { id: string }[]; message?: string; name?: string };
@@ -101,7 +101,7 @@ export type Template = {
   footerLink?: { label: string; url: string };
 };
 
-/** One plain, mobile-friendly layout for every Eventro email (tables and inline styles for mail clients). */
+/** One plain, mobile-friendly layout for every Omoshow email (tables and inline styles for mail clients). */
 export function render(t: Template): { html: string; text: string } {
   const p = t.paragraphs.map((x) => `<p style="margin:0 0 14px;font-size:15px;line-height:1.55;color:#3f3f46">${esc(x)}</p>`).join('');
   const hl = t.highlight
@@ -120,7 +120,7 @@ export function render(t: Template): { html: string; text: string } {
 <span style="display:none;max-height:0;overflow:hidden;opacity:0">${esc(t.preheader)}</span>
 <table role="presentation" width="100%" style="border-collapse:collapse;background:#f4f4f5"><tr><td align="center" style="padding:28px 14px">
 <table role="presentation" width="100%" style="max-width:560px;border-collapse:collapse">
-<tr><td style="padding:0 6px 16px;font-size:20px;font-weight:800;letter-spacing:-.03em;color:#0a0a0b"><span style="color:#ff4d3d">■</span> eventro</td></tr>
+<tr><td style="padding:0 6px 16px;font-size:20px;font-weight:800;letter-spacing:-.03em;color:#0a0a0b"><span style="color:#ff4d3d">■</span>omoshow</td></tr>
 <tr><td style="padding:28px 26px;border-radius:20px;background:#ffffff">
 <h1 style="margin:0 0 14px;font-size:24px;line-height:1.2;letter-spacing:-.02em;color:#0a0a0b">${esc(t.heading)}</h1>
 ${hl}${p}${cta}

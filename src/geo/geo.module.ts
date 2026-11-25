@@ -31,7 +31,7 @@ type Suggestion = {
   lat: number;
   lng: number;
   timezone: string | null;
-  /** set when this is a venue already on Eventro (shown first, with how many events it has hosted) */
+  /** set when this is a venue already on Omoshow (shown first, with how many events it has hosted) */
   venueId?: string;
   events?: number;
 };
@@ -152,7 +152,7 @@ export class GeoService {
   private readonly log = new Logger('Geo');
   constructor(private readonly prisma: PrismaService) {}
 
-  /** Venues already on Eventro whose name matches, most-used first. */
+  /** Venues already on Omoshow whose name matches, most-used first. */
   async eventroVenues(q: string, country?: string): Promise<Suggestion[]> {
     const text = q.trim();
     if (text.length < 2) return [];
@@ -214,7 +214,7 @@ export class GeoService {
       url.searchParams.set('lon', String(bias.lng));
     }
     try {
-      const res = await fetch(url, { headers: { 'user-agent': 'Eventro/1.0 (event venue search)' }, signal: AbortSignal.timeout(6000) });
+      const res = await fetch(url, { headers: { 'user-agent': 'Omoshow/1.0 (event venue search)' }, signal: AbortSignal.timeout(6000) });
       if (!res.ok) throw new Error(`status ${res.status}`);
       return ((await res.json()) as { features?: PhotonFeature[] }).features ?? [];
     } catch (e) {
@@ -341,7 +341,7 @@ export class GeoController {
     return this.combined(q, cc, Number.isFinite(la) ? la : undefined, Number.isFinite(ln) ? ln : undefined);
   }
 
-  /** Venues already on Eventro first (so organizers reuse them), then new places from the map, without repeats. */
+  /** Venues already on Omoshow first (so organizers reuse them), then new places from the map, without repeats. */
   private async combined(q: string, country?: string, lat?: number, lng?: number) {
     const [mine, map] = await Promise.all([this.geo.eventroVenues(q, country), this.geo.search(q, country, lat, lng)]);
     const key = (s: { name: string | null; city: string | null }) => `${(s.name ?? '').toLowerCase()}|${(s.city ?? '').toLowerCase()}`;

@@ -148,7 +148,7 @@ export class PriceDropService {
         highlight: { label: `${ticketName} · all-in`, value: formatMoney(to, e.currency), was: formatMoney(from, e.currency) },
         paragraphs: [`${when}${where ? ` · ${where}` : ''}.`, 'The new price is the full price: fees are included, and nothing is added at checkout.'],
         cta: { label: 'See tickets', url },
-        footer: a.via === 'watch' ? 'You asked us to tell you when this event got cheaper.' : 'You get drops and presales from Eventro.',
+        footer: a.via === 'watch' ? 'You asked us to tell you when this event got cheaper.' : 'You get drops and presales from Omoshow.',
         footerLink: stop,
       });
       return { to: a.email, subject: `Price drop: ${e.title} is now ${formatMoney(to, e.currency)}`, html, text, unsubscribeUrl: stop.url };

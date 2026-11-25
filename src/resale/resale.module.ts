@@ -7,7 +7,7 @@
  * (POST /resale/:id/orders, in checkout). On payment the seller's ticket is cancelled and the buyer gets a new ticket
  * for the same seat, so an old screenshot or QR is useless.
  *
- * The seller's money (price − Eventro's fee − the organizer's cut) is held until a day after the event, then
+ * The seller's money (price − Omoshow's fee − the organizer's cut) is held until a day after the event, then
  * becomes available; an admin pays it out or holds it (e.g. a dispute).
  *
  *   GET  /events/:slug/resale          active listings for an event (public)
@@ -230,11 +230,11 @@ export class ResaleService {
       heading: 'Your ticket sold',
       highlight: { label: 'You’ll receive', value: formatMoney(l.payoutCents, l.currency) },
       paragraphs: [
-        `${l.event.title}: sold for ${formatMoney(l.priceCents, l.currency)}. After Eventro’s fee${l.royaltyCents ? ' and the organizer’s share' : ''}, you’ll receive ${formatMoney(l.payoutCents, l.currency)}.`,
+        `${l.event.title}: sold for ${formatMoney(l.priceCents, l.currency)}. After Omoshow’s fee${l.royaltyCents ? ' and the organizer’s share' : ''}, you’ll receive ${formatMoney(l.payoutCents, l.currency)}.`,
         'We pay sellers once the event has taken place, so buyers are protected. Your old ticket no longer works; the buyer has a new one.',
       ],
       cta: { label: 'See your sales', url: `${config.webUrl}/tickets` },
-      footer: 'You listed this ticket on Eventro resale.',
+      footer: 'You listed this ticket on Omoshow resale.',
     });
     await this.mail.send('resale.sold', { to: seller.email, subject: `Sold: your ticket for ${l.event.title}`, html, text });
   }

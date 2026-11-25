@@ -79,7 +79,7 @@ export class VenueChange {
 
   /**
    * The same place picked again (same name in the same city, or within ~150 m on the map with a word of the name in
-   * common) is the venue already on Eventro, as when creating an event.
+   * common) is the venue already on Omoshow, as when creating an event.
    */
   async sameVenue(v: { name: string; city: string; lat?: number; lng?: number }, country: string | undefined) {
     const named = await this.prisma.venue.findFirst({
@@ -106,7 +106,7 @@ export class VenueChange {
     const end = ev.endsAt ? wallClockToInstant(ev.endsAt, ev.timezone).getTime() : start;
     if (end <= now) throw new BadRequestException('This event has ended, so its venue can’t be changed.');
     if (start <= now) throw new BadRequestException('This event has already started, so its venue can’t be changed.');
-    if (!dto.venueId === !dto.venue) throw new BadRequestException('Send either venueId (a venue on Eventro) or venue (a new place), not both.');
+    if (!dto.venueId === !dto.venue) throw new BadRequestException('Send either venueId (a venue on Omoshow) or venue (a new place), not both.');
     if (dto.timezone && !isTimeZone(dto.timezone)) throw new BadRequestException(`Unknown time zone "${dto.timezone}". Use an IANA name such as America/Chicago.`);
 
     // Where it's going (nothing is created until every check has passed).
@@ -138,7 +138,7 @@ export class VenueChange {
           statusCode: 409,
           code: 'SEATED_SALES',
           message: seated
-            ? `${seated.toLocaleString('en-US')} ${seated === 1 ? 'ticket is' : 'tickets are'} sold for seats or sections on this event’s seat map, which was drawn for ${old?.name ?? 'the current venue'}. Moving would leave those buyers with seats that may not exist at the new venue. Contact Eventro support to move a seated event.`
+            ? `${seated.toLocaleString('en-US')} ${seated === 1 ? 'ticket is' : 'tickets are'} sold for seats or sections on this event’s seat map, which was drawn for ${old?.name ?? 'the current venue'}. Moving would leave those buyers with seats that may not exist at the new venue. Contact Omoshow support to move a seated event.`
             : 'Fans are checking out with seats from this event’s seat map right now. Pause sales, wait 10 minutes for their holds to end, then try again.',
         });
       }
@@ -230,7 +230,7 @@ export class VenueChange {
         ],
         highlight: { label: 'New venue', value: venue.name },
         cta: { label: 'Open in Maps', url: mapLink(venue) },
-        footer: `You’re getting this because you have tickets to ${ev.title} on Eventro.`,
+        footer: `You’re getting this because you have tickets to ${ev.title} on Omoshow.`,
         footerLink: { label: 'See the event', url: `${config.webUrl}/events/${ev.slug}` },
       }),
     }));

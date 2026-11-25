@@ -26,7 +26,7 @@ export type RateRule = {
 const MIN = 60_000;
 const HOUR = 60 * MIN;
 
-/** The limits Eventro uses. Each one's environment variable overrides the default. */
+/** The limits Omoshow uses. Each one's environment variable overrides the default. */
 export const RATE_RULES = {
   loginPerIpEmail: { bucket: 'login:ip+email', env: 'RATE_LOGIN_PER_IP_EMAIL', limit: 10, windowMs: 15 * MIN, by: 'ip+email' },
   loginPerIp: { bucket: 'login:ip', env: 'RATE_LOGIN_PER_IP', limit: 30, windowMs: 15 * MIN, by: 'ip' },

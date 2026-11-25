@@ -79,7 +79,7 @@ before(async () => {
   await new Promise<void>((r) => resend.listen(0, '127.0.0.1', r));
   process.env.RESEND_API_URL = `http://127.0.0.1:${(resend.address() as AddressInfo).port}`;
   process.env.RESEND_API_KEY = KEY;
-  process.env.MAIL_FROM = 'Eventro Test <hello@test.local>';
+  process.env.MAIL_FROM = 'Omoshow Test <hello@test.local>';
 
   const { createApp } = await import('../src/main');
   const { PrismaService } = await import('../src/prisma.service');

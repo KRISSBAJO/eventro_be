@@ -76,7 +76,7 @@ export class AuthGuard implements CanActivate {
         if (u) req.user = { id: u.id, email: u.email, name: u.name, roles: u.roles as Role[] };
       } catch (e) {
         // A suspended account is refused everywhere, even on public routes, so it can't keep buying.
-        if (e instanceof SuspendedError) throw new ForbiddenException('This account is suspended. Contact Eventro support.');
+        if (e instanceof SuspendedError) throw new ForbiddenException('This account is suspended. Contact Omoshow support.');
         if (!isPublic && !optional) throw new UnauthorizedException('Your session has expired. Please sign in again.');
       }
     }

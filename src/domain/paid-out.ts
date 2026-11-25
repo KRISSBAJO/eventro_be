@@ -6,8 +6,8 @@ const DAY = 86_400_000;
  * Whether the organizer has already been paid for an order, reckoned the way their payouts screen is
  * (OrganizerService.payouts): sales paid through a Paystack subaccount split settle to the organizer at payment;
  * otherwise a day's sales are paid out the next day (DAILY), or within the week (WEEKLY).
- * Used for Eventro Guarantee claims and donation refunds: a refund of money the organizer already has is recorded
- * as owed by them to Eventro.
+ * Used for Omoshow Guarantee claims and donation refunds: a refund of money the organizer already has is recorded
+ * as owed by them to Omoshow.
  */
 export function organizerPaidOut(
   order: { provider: string; paidAt: Date | null },

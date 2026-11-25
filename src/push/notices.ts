@@ -1,5 +1,5 @@
 /**
- * What Eventro tells fans by push, and when. Each method finds who should hear (people with an account), builds
+ * What Omoshow tells fans by push, and when. Each method finds who should hear (people with an account), builds
  * the message with a deep link (`data.url` is `eventro://<path>`, `data.path` the same path as on the website) and
  * hands it to PushService, which checks each person's choices and never sends a deduplicated message twice.
  *
@@ -155,7 +155,7 @@ export class NoticeService implements OnModuleInit, OnModuleDestroy {
         {
           userId: to,
           title: `${first(fromName)} sent you a ticket`,
-          body: `${t.ticketType.name} for ${t.event.title}. Open Eventro to accept it.`,
+          body: `${t.ticketType.name} for ${t.event.title}. Open Omoshow to accept it.`,
           data: link('/tickets', { type: 'ticket.transfer', ticketId }),
           dedupeKey: `ticket.transfer:${ticketId}:${t.transferExpiresAt?.getTime() ?? 0}`,
         },
@@ -221,7 +221,7 @@ export class NoticeService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  /** An Eventro Guarantee claim was received or decided, or its refund went out: to the claimant, opening the ticket. */
+  /** An Omoshow Guarantee claim was received or decided, or its refund went out: to the claimant, opening the ticket. */
   guaranteeClaim(kind: 'received' | 'approved' | 'declined' | 'refunded', m: { userId: string; claimId: string; ticketId: string; title: string; body: string }) {
     return this.guard(`guarantee.${kind} ${m.claimId}`, async () => {
       await this.push.send(`guarantee.${kind}`, 'orders', [

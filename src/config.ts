@@ -46,11 +46,11 @@ export const config = {
   /** mediaEX hosts event photos and videos. Without a key, uploads are switched off. */
   mediaexUrl: (process.env.MEDIAEX_URL || 'http://localhost:3400').replace(/\/$/, ''),
   mediaexApiKey: process.env.MEDIAEX_API_KEY || '',
-  /** Resend (resend.com) sends Eventro's email. Without a key, emails are logged as SKIPPED instead of sent. */
+  /** Resend (resend.com) sends Omoshow's email. Without a key, emails are logged as SKIPPED instead of sent. */
   resendApiKey: process.env.RESEND_API_KEY || '',
   /** Resend API base; only changed by tests, which run a local stand-in. */
   resendUrl: (process.env.RESEND_API_URL || 'https://api.resend.com').replace(/\/$/, ''),
-  mailFrom: process.env.MAIL_FROM || 'Eventro <onboarding@resend.dev>',
+  mailFrom: process.env.MAIL_FROM || 'Omoshow <onboarding@resend.dev>',
   /** Expo's push service (https://docs.expo.dev/push-notifications/sending-notifications/); tests run a local stand-in. */
   expoPushUrl: (process.env.EXPO_PUSH_URL || 'https://exp.host/--/api/v2/push').replace(/\/$/, ''),
   /** Optional: only needed when "enhanced push security" is switched on for the Expo project. */
