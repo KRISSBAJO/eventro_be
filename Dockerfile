@@ -25,7 +25,11 @@ COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/prisma ./prisma
+# A private checkout can leave copied files readable only by root.
+RUN chmod a+r package.json && chmod -R a+rX prisma
 USER node
+RUN test -r package.json && test -r prisma/schema.prisma \
+  && test -r dist/src/main.js && test -x node_modules/.bin/prisma
 EXPOSE 4000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s CMD wget -qO- "http://127.0.0.1:${PORT}/api/v1/health" >/dev/null || exit 1
 CMD ["sh", "-c", "npx prisma migrate deploy && node --enable-source-maps dist/src/main.js"]
