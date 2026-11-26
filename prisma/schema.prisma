@@ -754,6 +754,9 @@ model PriceWatch {
   userId     String?
   token      String    @unique
   clientIp   String?
+  /// The lowest all-in price (minor units) when watching started, so Watching can say the price dropped since.
+  /// Watches already on when this shipped start from that day's price.
+  fromCents  Int?
   notifiedAt DateTime?
   stoppedAt  DateTime?
   createdAt  DateTime  @default(now())

@@ -514,3 +514,60 @@ test('just announced: approval stamps publishedAt once; sort=new lists the newes
   const after = await prisma.event.findUniqueOrThrow({ where: { id: older.ev.id as string } });
   assert.equal(after.publishedAt?.getTime(), before.publishedAt!.getTime());
 });
+
+test('watching: price alerts in one list, with today’s price and whether it dropped since; stop from the list', async () => {
+  const admin = await account('admin@test.local', 'Admin');
+  const org = await account(`wa-org-${run}@test.local`, 'Wura Organizer');
+  const fanEmail = `wa-fan-${run}@test.local`;
+  const fan = await account(fanEmail, 'Femi Watcher');
+  const other = await account(`wa-other-${run}@test.local`, 'Ola Other');
+  const a = await publishedEvent(org.token, admin.token, 'Watched One');
+  const b = await publishedEvent(org.token, admin.token, 'Watched Two');
+
+  assert.equal((await call('GET', '/me/watching')).status, 401, 'signed in only');
+  const empty = await ok(call('GET', '/me/watching', undefined, fan.token));
+  assert.deepEqual(empty.items, []);
+
+  // Watched signed in, and (another event) as a guest with the same email: both are the fan's.
+  await ok(call('POST', `/events/${a.ev.slug}/price-watch`, {}, fan.token));
+  await new Promise((r) => setTimeout(r, 20));
+  await ok(call('POST', `/events/${b.ev.slug}/price-watch`, { email: fanEmail.toUpperCase() }));
+  let list = await ok(call('GET', '/me/watching', undefined, fan.token));
+  assert.deepEqual(list.slugs, [b.ev.slug, a.ev.slug], 'newest watch first');
+  const first = (list.items as Json[]).find((e) => e.slug === a.ev.slug)!;
+  assert.ok((first.fromCents as number) > 0);
+  assert.equal(first.startedFromCents, first.fromCents, 'starts at today’s price');
+  assert.equal(first.dropped, false);
+  assert.ok(first.watchingSince && first.title && first.currency, 'an event card plus when watching started');
+  assert.deepEqual((await ok(call('GET', '/me/watching', undefined, other.token))).items, [], 'nobody else sees it');
+
+  // The organizer cuts the price: the list says so.
+  await ok(call('PATCH', `/organizer/events/${a.ev.id}/ticket-types/${a.tt.id}`, { basePriceCents: 3864 }, org.token));
+  list = await ok(call('GET', '/me/watching', undefined, fan.token));
+  const cut = (list.items as Json[]).find((e) => e.slug === a.ev.slug)!;
+  assert.equal(cut.dropped, true);
+  assert.ok((cut.fromCents as number) < (cut.startedFromCents as number));
+  // Watching again while already watching keeps the starting price.
+  await ok(call('POST', `/events/${a.ev.slug}/price-watch`, {}, fan.token));
+  assert.equal(((await ok(call('GET', '/me/watching', undefined, fan.token))).items as Json[]).find((e) => e.slug === a.ev.slug)!.dropped, true);
+
+  // Stop from the list (by slug or id; twice is fine): no more alerts for it, and the alert link agrees.
+  assert.equal((await ok(call('DELETE', `/me/watching/${a.ev.slug}`, undefined, fan.token))).watching, false);
+  await ok(call('DELETE', `/me/watching/${a.ev.id}`, undefined, fan.token));
+  assert.deepEqual((await ok(call('GET', '/me/watching', undefined, fan.token))).slugs, [b.ev.slug]);
+  const stopped = await prisma.priceWatch.findMany({ where: { eventId: a.ev.id as string } });
+  assert.ok(stopped.length && stopped.every((w) => w.stoppedAt), 'every watch on it stopped');
+  // Another fan can't stop someone else's watch.
+  await ok(call('DELETE', `/me/watching/${b.ev.slug}`, undefined, other.token));
+  assert.deepEqual((await ok(call('GET', '/me/watching', undefined, fan.token))).slugs, [b.ev.slug]);
+
+  // Watching again later starts from the price then.
+  await ok(call('POST', `/events/${a.ev.slug}/price-watch`, {}, fan.token));
+  const again = ((await ok(call('GET', '/me/watching', undefined, fan.token))).items as Json[]).find((e) => e.slug === a.ev.slug)!;
+  assert.equal(again.dropped, false);
+  assert.equal(again.startedFromCents, again.fromCents);
+
+  // Events that are no longer on sale drop off the list.
+  await ok(call('POST', `/admin/events/${b.ev.id}/takedown`, { note: 'Checking the listing details' }, admin.token));
+  assert.deepEqual((await ok(call('GET', '/me/watching', undefined, fan.token))).slugs, [a.ev.slug]);
+});
