@@ -626,3 +626,27 @@ test('admin console publish: refused, like review approval, while the venue book
   assert.equal((await prisma.event.findUniqueOrThrow({ where: { id: t.ev.id } })).status, 'REJECTED');
 });
 
+
+test('marketplace search: instant-book filter, your city first, and cheapest shortest booking first across currencies', async () => {
+  const tag = `Mkt ${run}`;
+  const make = async (name: string, city: string, country: string, listing: Record<string, unknown>, verified = false) => {
+    const v = await prisma.venue.create({ data: { slug: `mkt-${name.toLowerCase().replace(/\W+/g, '-')}-${run}`, name: `${tag} ${name}`, address: '1 Test Road', city, country, capacity: 300, imageUrl: 'https://images.unsplash.com/photo-1519167758481-83f550bb49b3?w=900', verifiedAt: verified ? new Date() : null } });
+    await prisma.venueListing.create({ data: { venueId: v.id, active: true, noticeDays: 1, ...listing } });
+    return v;
+  };
+  const hourly = await make('Hourly Hall', 'Lagos', 'NG', { priceMode: 'HOUR', priceCents: 10_000_00, currency: 'NGN', minHours: 4 });
+  const daily = await make('Daily Barn', 'London', 'GB', { priceMode: 'DAY', priceCents: 900_00, currency: 'GBP', instantBook: true }, true);
+  const quote = await make('Quote House', 'Lagos', 'NG', { priceMode: 'QUOTE', priceCents: null, currency: 'NGN' }, true);
+  const q = `q=${encodeURIComponent(tag)}`;
+  const slugs = (r: Json) => (r as Json[]).map((x) => x.venue.slug as string);
+
+  // Default: verified first; with near=Lagos, Lagos venues first (verified ones among them first).
+  assert.deepEqual(slugs(await ok(call('GET', `/venue-listings?${q}`))).slice(0, 2).sort(), [daily.slug, quote.slug].sort());
+  assert.deepEqual(slugs(await ok(call('GET', `/venue-listings?${q}&near=lagos`))), [quote.slug, hourly.slug, daily.slug]);
+  // Only venues that confirm by themselves.
+  assert.deepEqual(slugs(await ok(call('GET', `/venue-listings?${q}&instant=1`))), [daily.slug]);
+  // Cheapest shortest booking first (4 h × ₦10,000 is far below £900 a day), quotes last.
+  assert.deepEqual(slugs(await ok(call('GET', `/venue-listings?${q}&sort=price`))), [hourly.slug, daily.slug, quote.slug]);
+
+  await prisma.venue.deleteMany({ where: { id: { in: [hourly.id, daily.id, quote.id] } } });
+});

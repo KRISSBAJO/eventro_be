@@ -63,6 +63,7 @@ import { CurrentUser, Public, type AuthUser } from '../common/auth';
 import { config } from '../config';
 import { MailService, formatMoney, render } from '../mail/mail.module';
 import { PushService } from '../push/push.service';
+import { FxService } from '../fx/fx.module';
 import { bookingCode } from '../domain/codes';
 import { CURRENCY_CODES, currencyForCountry, type Currency } from '../domain/currency';
 import { instantToWallClock, wallClockLabel, wallClockToInstant } from '../domain/wallclock';
@@ -231,6 +232,7 @@ export class VenueBookingService implements OnModuleInit, OnModuleDestroy {
     private readonly audit: AuditService,
     private readonly mail: MailService,
     private readonly push: PushService,
+    private readonly fx: FxService,
   ) {}
 
   /** Requests past their hold expire within 5 minutes (tests call `expireDue` directly). */
@@ -377,8 +379,12 @@ export class VenueBookingService implements OnModuleInit, OnModuleDestroy {
 
   /* ----- public ----- */
 
-  /** Venues taking bookings: by name, city, country, guests, and open (and far enough ahead) on a date. */
-  async search(q: { q?: string; city?: string; country?: string; guests?: string; date?: string }) {
+  /**
+   * Venues taking bookings: by name, city, country, guests, and open (and far enough ahead) on a date; `instant`
+   * only those that confirm by themselves. Sorted for the marketplace: `near` (a city) first, then verified venues and
+   * venues with a photo; or `sort=price`, cheapest shortest booking first (compared in US dollars), quotes last.
+   */
+  async search(q: { q?: string; city?: string; country?: string; guests?: string; date?: string; instant?: string; near?: string; sort?: string }) {
     const s = (q.q ?? '').trim().slice(0, 80);
     const city = (q.city ?? '').trim().slice(0, 80);
     const country = (q.country ?? '').trim().toUpperCase();
@@ -414,9 +420,23 @@ export class VenueBookingService implements OnModuleInit, OnModuleDestroy {
         const dayEnd = wallClockToInstant(new Date(date.getTime() + DAY_MS), venueZone(l.venue)).getTime();
         if (dayEnd - now < l.noticeDays * DAY_MS) return false;
       }
+      if (q.instant === '1' && !l.instantBook) return false;
       return true;
     });
-    out.sort((a, b) => Number(!!b.venue.verifiedAt) - Number(!!a.venue.verifiedAt) || a.venue.city.localeCompare(b.venue.city) || a.venue.name.localeCompare(b.venue.name));
+    const near = (q.near ?? '').trim().toLowerCase();
+    const here = (l: (typeof out)[number]) => Number(!!near && l.venue.city.toLowerCase() === near);
+    // What the shortest booking costs, in USD cents, to compare venues priced per hour or per day in any currency.
+    const cost = (l: (typeof out)[number]) =>
+      l.priceMode === 'QUOTE' || l.priceCents === null ? Infinity : this.fx.convert(l.priceMode === 'HOUR' ? l.priceCents * Math.max(1, l.minHours) : l.priceCents, l.currency, 'USD');
+    out.sort(
+      (a, b) =>
+        (q.sort === 'price' ? cost(a) - cost(b) || 0 : 0) ||
+        here(b) - here(a) ||
+        Number(!!b.venue.verifiedAt) - Number(!!a.venue.verifiedAt) ||
+        Number(!!b.venue.imageUrl) - Number(!!a.venue.imageUrl) ||
+        a.venue.city.localeCompare(b.venue.city) ||
+        a.venue.name.localeCompare(b.venue.name),
+    );
     return out.slice(0, 60).map((l) => ({
       venue: { id: l.venue.id, slug: l.venue.slug, name: l.venue.name, address: l.venue.address, city: l.venue.city, region: l.venue.region, country: l.venue.country, imageUrl: l.venue.imageUrl, verified: !!l.venue.verifiedAt, capacity: l.venue.capacity, timezone: venueZone(l.venue) },
       listing: publicListing(l, l.venue)!,
@@ -1138,10 +1158,22 @@ export class VenueBookingPublicController {
   @ApiQuery({ name: 'country', required: false })
   @ApiQuery({ name: 'guests', required: false })
   @ApiQuery({ name: 'date', required: false, description: 'YYYY-MM-DD' })
+  @ApiQuery({ name: 'instant', required: false, description: '1: only venues that confirm by themselves' })
+  @ApiQuery({ name: 'near', required: false, description: 'A city to list first' })
+  @ApiQuery({ name: 'sort', required: false, enum: ['recommended', 'price'] })
   @Public()
   @Get('venue-listings')
-  search(@Query('q') q?: string, @Query('city') city?: string, @Query('country') country?: string, @Query('guests') guests?: string, @Query('date') date?: string) {
-    return this.svc.search({ q, city, country, guests, date });
+  search(
+    @Query('q') q?: string,
+    @Query('city') city?: string,
+    @Query('country') country?: string,
+    @Query('guests') guests?: string,
+    @Query('date') date?: string,
+    @Query('instant') instant?: string,
+    @Query('near') near?: string,
+    @Query('sort') sort?: string,
+  ) {
+    return this.svc.search({ q, city, country, guests, date, instant, near, sort });
   }
 
   @ApiQuery({ name: 'from', required: false, description: 'YYYY-MM-DD (venue time); default today' })
