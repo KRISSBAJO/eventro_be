@@ -153,6 +153,7 @@ model User {
   sessions       Session[]
   pushDevices    PushDevice[]
   savedEvents    SavedEvent[]
+  follows        Follow[]
   /// Push notification choices, e.g. { "priceDrops": false }. Missing keys mean on.
   notifyPrefs    Json?
   consents       ConsentRecord[]
@@ -229,6 +230,8 @@ model PasswordReset {
 model Organization {
   id             String         @id @default(cuid())
   name           String
+  /// The public organizer page, /organizers/<slug>. Set when the org is made and kept when it's renamed.
+  slug           String?        @unique
   website        String?
   supportEmail   String
   about          String?
@@ -257,6 +260,7 @@ model Organization {
   members OrganizationMember[]
   events  Event[]
   venueBookings VenueBooking[]
+  followers Follow[]
 }
 
 model OrganizationMember {
@@ -309,6 +313,7 @@ model Venue {
   listing   VenueListing?
   blackouts VenueBlackout[]
   bookings  VenueBooking[]
+  followers Follow[]
 }
 
 /// Someone asking to manage a venue's page. Approved claims make that person a manager of the venue.
@@ -878,6 +883,25 @@ model VenueBookingMessage {
 }
 
 /// An event a fan hearted. Kept on the server so saves follow them between the website and the app.
+/// A fan following an organizer or a venue (exactly one of orgId, venueId): their new events show up in Following,
+/// and the fan gets a push when one goes on sale.
+model Follow {
+  id        String   @id @default(cuid())
+  userId    String
+  orgId     String?
+  venueId   String?
+  createdAt DateTime @default(now())
+
+  user  User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  org   Organization? @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  venue Venue?        @relation(fields: [venueId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, orgId])
+  @@unique([userId, venueId])
+  @@index([orgId])
+  @@index([venueId])
+}
+
 model SavedEvent {
   id        String   @id @default(cuid())
   userId    String

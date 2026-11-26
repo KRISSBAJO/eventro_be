@@ -143,6 +143,8 @@ export class OrganizerService {
     const org = await this.prisma.organization.create({
       data: {
         name: dto.name.trim(),
+        // The public organizer page's address; it stays the same if the org is renamed.
+        slug: `${slugify(dto.name) || 'organizer'}-${randomSuffix()}`,
         supportEmail: dto.supportEmail ?? user.email,
         members: { create: { userId: user.id, email: user.email, role: 'ADMIN', status: 'ACTIVE' } },
       },

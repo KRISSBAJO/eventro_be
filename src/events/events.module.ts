@@ -219,7 +219,7 @@ export class EventsService {
   async detail(slug: string, preview?: string, dateId?: string) {
     const e = await this.prisma.event.findUnique({
       where: { slug },
-      include: { venue: true, org: { select: { name: true } }, ticketTypes: { orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }] }, dates: { orderBy: { startsAt: 'asc' } } },
+      include: { venue: true, org: { select: { name: true, slug: true, verifiedAt: true } }, ticketTypes: { orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }] }, dates: { orderBy: { startsAt: 'asc' } } },
     });
     const cancelled = e?.status === 'CANCELLED';
     if (!e || (e.status !== 'PUBLISHED' && !cancelled && !previewOk(e.slug, preview))) throw new NotFoundException('Event not found.');
@@ -274,6 +274,8 @@ export class EventsService {
       salesPaused: e.salesPaused,
       ...(cancelled ? { status: e.status, cancelledAt: e.cancelledAt, cancelReason: e.cancelReason } : e.status !== 'PUBLISHED' ? { preview: true, status: e.status } : {}),
       presentedBy: e.org.name,
+      // The organizer's public page (GET /organizers/:slug), to follow them.
+      organizer: { slug: e.org.slug, name: e.org.name, verified: !!e.org.verifiedAt },
       venue: e.venue && { slug: e.venue.slug, name: e.venue.name, address: e.venue.address, city: e.venue.city, region: e.venue.region, country: e.venue.country, postalCode: e.venue.postalCode, timezone: e.venue.timezone, lat: e.venue.lat, lng: e.venue.lng },
       ticketTypes: e.ticketTypes.map((t) => ({
         id: t.id,

@@ -194,7 +194,7 @@ export class VenuesService {
           orderBy: { startsAt: 'asc' },
           select: { slug: true, title: true, subtitle: true, startsAt: true, imageUrl: true, category: true, currency: true, dateMode: true, dates: { where: { status: 'ACTIVE' }, orderBy: { startsAt: 'asc' } }, ticketTypes: { where: LIVE_TYPE, select: { priceCents: true } } },
         },
-        _count: { select: { claims: { where: { status: 'APPROVED' } }, events: true } },
+        _count: { select: { claims: { where: { status: 'APPROVED' } }, events: true, followers: true } },
         listing: true,
       },
     });
@@ -207,6 +207,7 @@ export class VenuesService {
       verified: !!v.verifiedAt,
       managed: _count.claims > 0,
       eventsHosted: _count.events,
+      followers: _count.followers,
       layout: this.layoutInfo({ layout }),
       // Multiple dates: the next date and how many are still to come ("+N more dates"), like event list items.
       events: events.map(({ ticketTypes, dates, ...e }) => {

@@ -120,6 +120,7 @@ async function main() {
     org = await prisma.organization.create({
       data: {
         name: 'Eventro Live',
+        slug: 'eventro-live',
         supportEmail: 'organizer@eventro.test',
         members: { create: { userId: organizer.id, email: organizer.email, role: 'ADMIN', status: 'ACTIVE' } },
       },

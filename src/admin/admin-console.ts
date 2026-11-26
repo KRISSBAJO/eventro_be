@@ -23,6 +23,7 @@ import { EventCancellation } from './cancel-event';
 // Capacity and sales shown leave out the tier copies of a cancelled date (LIVE_TYPE).
 import { LIVE_TYPE, dateRangeWhere, dateView } from '../domain/event-dates';
 import { CancelDateDto } from '../organizer/organizer.dto';
+import { NoticeService } from '../push/notices';
 import { AdminGuaranteeController, GuaranteeController, GuaranteeService, OrganizerGuaranteeController } from '../guarantee/guarantee';
 
 const PAGE = 25;
@@ -109,6 +110,7 @@ export class AdminConsoleService {
     private readonly fx: FxService,
     private readonly mail: MailService,
     private readonly admin: AdminService,
+    private readonly notices: NoticeService,
   ) {}
 
   private usd = (cents: number, currency: string) => this.fx.convert(cents, currency, 'USD');
@@ -525,6 +527,8 @@ export class AdminConsoleService {
     await this.admin.assertVenueBookingConfirmed(id, 'Leave it unpublished so the organizer can pick another venue.');
     await this.prisma.event.update({ where: { id }, data: { status: 'PUBLISHED', reviewNote: null, salesPaused: false, publishedAt: e.publishedAt ?? new Date() } });
     await this.audit.log(me.id, 'event.publish', 'Event', id);
+    // First time on sale (not a taken-down event put back): tell its followers.
+    if (!e.publishedAt) void this.notices.newEvent(id);
     return { status: 'PUBLISHED' };
   }
 

@@ -9,6 +9,7 @@
  *   gift.delivered           recipient             tickets     gift.delivered:<giftId>
  *   resale.sold              seller                orders      resale.sold:<listingId>
  *   price_drop               watchers              priceDrops  price_drop:<dropId>:<userId>
+ *   follow.new_event         followers             following   follow.new_event:<eventId>:<userId>
  *   event.cancelled          ticket holders        orders      event.cancelled:<eventId>:<userId>
  *   event.date_cancelled     the date's holders   orders      event.date_cancelled:<dateId>:<userId>
  *   event.venue              ticket holders        orders      event.venue:<eventId>:<changeId>:<userId>
@@ -255,6 +256,38 @@ export class NoticeService implements OnModuleInit, OnModuleDestroy {
           body: `${ticketName} is now ${formatMoney(toCents, e.currency)} (${percentOff}% off).`,
           data: link(`/events/${e.slug}`, { type: 'price_drop', eventId: e.id }),
           dedupeKey: `price_drop:${dropId}:${userId}`,
+        })),
+      );
+    });
+  }
+
+  /**
+   * An event went on sale for the first time: to fans following its organizer or its venue (once each, and only for
+   * public events). Followers of the organizer hear "New from <organizer>", the venue's "New at <venue>".
+   */
+  newEvent(eventId: string) {
+    return this.guard(`follow.new_event ${eventId}`, async () => {
+      const e = await this.prisma.event.findUnique({
+        where: { id: eventId },
+        select: { id: true, slug: true, title: true, status: true, visibility: true, startsAt: true, orgId: true, venueId: true, org: { select: { name: true } }, venue: { select: { name: true, city: true } } },
+      });
+      if (!e || e.status !== 'PUBLISHED' || e.visibility !== 'PUBLIC') return;
+      const rows = await this.prisma.follow.findMany({
+        where: { OR: [{ orgId: e.orgId }, ...(e.venueId ? [{ venueId: e.venueId }] : [])] },
+        select: { userId: true, orgId: true },
+      });
+      const viaOrg = new Map<string, boolean>();
+      for (const r of rows) viaOrg.set(r.userId, viaOrg.get(r.userId) || !!r.orgId);
+      const where = e.venue ? ` · ${e.venue.city || e.venue.name}` : '';
+      await this.push.send(
+        'follow.new_event',
+        'following',
+        [...viaOrg].map(([userId, org]) => ({
+          userId,
+          title: org || !e.venue ? `New from ${e.org.name}` : `New at ${e.venue.name}`,
+          body: `${e.title}, ${wallClockLabel(e.startsAt, { weekday: 'short', month: 'short', day: 'numeric' })}${where}. Tickets are on sale now.`,
+          data: link(`/events/${e.slug}`, { type: 'follow.new_event', eventId: e.id }),
+          dedupeKey: `follow.new_event:${e.id}:${userId}`,
         })),
       );
     });

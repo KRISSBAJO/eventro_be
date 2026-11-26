@@ -1,4 +1,5 @@
 import { previewToken } from '../events/preview';
+import { NoticeService } from '../push/notices';
 import { BadRequestException, Body, ConflictException, Controller, Get, HttpCode, Injectable, NotFoundException, Param, Post, Query } from '@nestjs/common';
 import { effectiveStatus } from '../venues/booking-rules';
 import { ApiBearerAuth, ApiProperty, ApiPropertyOptional, ApiQuery, ApiTags } from '@nestjs/swagger';
@@ -34,6 +35,7 @@ export class AdminService {
     private readonly audit: AuditService,
     private readonly payments: Payments,
     private readonly mail: MailService,
+    private readonly notices: NoticeService,
   ) {}
 
   /** Automatic flags shown next to each event in the review queue. */
@@ -75,9 +77,11 @@ export class AdminService {
     const { count } = await this.prisma.event.updateMany({ where: { id, status: 'IN_REVIEW' }, data: { status: 'PUBLISHED', reviewNote: null } });
     if (!count) throw new NotFoundException('No event waiting for review with that id.');
     // First time on sale: "Just announced" counts from here (approving an edit later doesn't move it).
-    await this.prisma.event.updateMany({ where: { id, publishedAt: null }, data: { publishedAt: new Date() } });
+    const first = await this.prisma.event.updateMany({ where: { id, publishedAt: null }, data: { publishedAt: new Date() } });
     await this.audit.log(admin.id, 'event.approve', 'Event', id);
     await this.notifyDecision(id, admin, 'approved');
+    // New on sale: fans following the organizer or the venue hear about it (not when an edit is approved later).
+    if (first.count) void this.notices.newEvent(id);
     return { status: 'PUBLISHED' };
   }
 

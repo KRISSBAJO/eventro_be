@@ -25,6 +25,7 @@ import { VenuesModule } from './venues/venues.module';
 import { ResaleModule } from './resale/resale.module';
 import { PushModule } from './push/push.module';
 import { SavedModule } from './saved/saved.module';
+import { FollowingModule } from './following/following.module';
 import { ScheduleModule } from './schedule/schedule.module';
 import { ConsentModule } from './consent/consent.module';
 import { Payments } from './checkout/payments';
@@ -71,6 +72,7 @@ class CoreModule {}
     VenuesModule,
     ResaleModule,
     SavedModule,
+    FollowingModule,
     ScheduleModule,
     ConsentModule,
   ],

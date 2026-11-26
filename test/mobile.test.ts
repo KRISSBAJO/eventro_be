@@ -352,9 +352,9 @@ test('push devices and notification choices', async () => {
   await ok(call('POST', '/me/push-devices', { token }, b.token));
   assert.equal((await prisma.pushDevice.findUniqueOrThrow({ where: { token } })).disabledAt, null);
 
-  assert.deepEqual(await ok(call('GET', '/me/notify-prefs', undefined, a.token)), { orders: true, tickets: true, priceDrops: true, reminders: true, marketing: false, sales: true });
-  assert.deepEqual(await ok(call('PATCH', '/me/notify-prefs', { marketing: true, priceDrops: false }, a.token)), { orders: true, tickets: true, priceDrops: false, reminders: true, marketing: true, sales: true });
-  assert.deepEqual(await ok(call('PATCH', '/me/notify-prefs', { marketing: false }, a.token)), { orders: true, tickets: true, priceDrops: false, reminders: true, marketing: false, sales: true });
+  assert.deepEqual(await ok(call('GET', '/me/notify-prefs', undefined, a.token)), { orders: true, tickets: true, priceDrops: true, reminders: true, marketing: false, sales: true, following: true });
+  assert.deepEqual(await ok(call('PATCH', '/me/notify-prefs', { marketing: true, priceDrops: false }, a.token)), { orders: true, tickets: true, priceDrops: false, reminders: true, marketing: true, sales: true, following: true });
+  assert.deepEqual(await ok(call('PATCH', '/me/notify-prefs', { marketing: false }, a.token)), { orders: true, tickets: true, priceDrops: false, reminders: true, marketing: false, sales: true, following: true });
   assert.equal((await call('PATCH', '/me/notify-prefs', { orders: 'yes' }, a.token)).status, 400);
   assert.equal((await call('PATCH', '/me/notify-prefs', { sms: true }, a.token)).status, 400);
 });

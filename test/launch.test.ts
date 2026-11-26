@@ -571,3 +571,84 @@ test('watching: price alerts in one list, with today’s price and whether it dr
   await ok(call('POST', `/admin/events/${b.ev.id}/takedown`, { note: 'Checking the listing details' }, admin.token));
   assert.deepEqual((await ok(call('GET', '/me/watching', undefined, fan.token))).slugs, [a.ev.slug]);
 });
+
+test('following: organizer pages, follow organizers and venues, their new events in one list and a push when one goes on sale', async () => {
+  const admin = await account('admin@test.local', 'Admin');
+  const org = await account(`fo-org-${run}@test.local`, 'Funmi Organizer');
+  const fan = await account(`fo-fan-${run}@test.local`, 'Fola Follower');
+  const other = await account(`fo-other-${run}@test.local`, 'Ola Other');
+  const a = await publishedEvent(org.token, admin.token, 'Followed');
+  const page = await ok(call('GET', `/events/${a.ev.slug}`));
+  const orgSlug = page.organizer.slug as string;
+  const venueSlug = page.venue.slug as string;
+  assert.ok(orgSlug && page.organizer.name === a.org.name, 'event pages link to the organizer');
+
+  // The organizer's public page.
+  const op = await ok(call('GET', `/organizers/${orgSlug}`));
+  assert.equal(op.name, a.org.name);
+  assert.equal(op.followers, 0);
+  assert.deepEqual((op.events as Json[]).map((e) => e.slug), [a.ev.slug]);
+  // An organizer with nothing on sale yet has no page.
+  const fresh = await ok(call('POST', '/organizer/orgs', { name: `Quiet Org ${run}` }, org.token));
+  assert.ok(fresh.slug);
+  assert.equal((await call('GET', `/organizers/${fresh.slug}`)).status, 404);
+  assert.equal((await call('PUT', `/me/following/organizers/${fresh.slug}`, undefined, fan.token)).status, 404);
+
+  assert.equal((await call('GET', '/me/following')).status, 401, 'signed in only');
+  assert.equal((await call('PUT', `/me/following/organizers/${orgSlug}`)).status, 401);
+  assert.equal((await call('PUT', `/me/following/people/${orgSlug}`, undefined, fan.token)).status, 404);
+  const none = await ok(call('GET', '/me/following', undefined, fan.token));
+  assert.deepEqual([none.organizers, none.venues, none.events], [[], [], []]);
+
+  // Follow the organizer (twice is fine) and the venue.
+  assert.equal((await ok(call('PUT', `/me/following/organizers/${orgSlug}`, undefined, fan.token))).followers, 1);
+  assert.equal((await ok(call('PUT', `/me/following/organizers/${orgSlug}`, undefined, fan.token))).followers, 1);
+  assert.equal((await ok(call('GET', `/organizers/${orgSlug}`))).followers, 1);
+  await ok(call('PUT', `/me/following/venues/${venueSlug}`, undefined, fan.token));
+  assert.ok(((await ok(call('GET', `/venues/${venueSlug}`))).followers as number) >= 1, 'venue pages count followers');
+
+  let f = await ok(call('GET', '/me/following', undefined, fan.token));
+  assert.deepEqual((f.organizers as Json[]).map((o) => [o.slug, o.upcoming]), [[orgSlug, 1]]);
+  assert.deepEqual((f.venues as Json[]).map((v) => v.slug), [venueSlug]);
+  const mine = (f.events as Json[]).find((e) => e.slug === a.ev.slug)!;
+  assert.deepEqual(mine.via, { kind: 'organizer', slug: orgSlug, name: a.org.name }, 'the organizer wins over the venue');
+  assert.ok(mine.title && mine.fromCents, 'an event card');
+  assert.deepEqual((await ok(call('GET', '/me/following', undefined, other.token))).organizers, [], 'nobody else sees it');
+
+  // The organizer puts a new event on sale: followers get a push (once), others don't.
+  const ev2 = await ok(
+    call('POST', `/organizer/orgs/${a.org.id}/events`, {
+      title: `Followed Encore ${run}`,
+      category: 'COMEDY',
+      startsAt: new Date(Date.now() + 40 * 86_400_000).toISOString(),
+      venue: { name: `Encore Hall ${run}`, address: '9 Test Street', city: 'Austin', country: 'US', region: 'Texas' },
+      ticketTypes: [{ name: 'General', basePriceCents: 2500, capacity: 50 }],
+    }, org.token),
+  );
+  await ok(call('POST', `/organizer/events/${ev2.id}/submit`, undefined, org.token));
+  await ok(call('POST', `/admin/events/${ev2.id}/approve`, undefined, admin.token));
+  const key = `follow.new_event:${ev2.id}:${fan.user.id}`;
+  let log = null;
+  for (let i = 0; i < 80 && !log; i++) {
+    log = await prisma.notificationLog.findFirst({ where: { dedupeKey: key, status: { not: 'PENDING' } } });
+    if (!log) await new Promise((r) => setTimeout(r, 50));
+  }
+  assert.ok(log, 'followers hear about it');
+  assert.equal(log!.title, `New from ${a.org.name}`);
+  assert.equal(log!.kind, 'follow.new_event');
+  assert.equal(await prisma.notificationLog.count({ where: { dedupeKey: `follow.new_event:${ev2.id}:${other.user.id}` } }), 0);
+  f = await ok(call('GET', '/me/following', undefined, fan.token));
+  assert.equal((f.organizers as Json[])[0].upcoming, 2);
+  assert.ok((f.events as Json[]).some((e) => e.slug === ev2.slug));
+
+  // Unfollow the organizer: its event at the followed venue stays, now because of the venue; the other one goes.
+  assert.equal((await ok(call('DELETE', `/me/following/organizers/${orgSlug}`, undefined, fan.token))).following, false);
+  await ok(call('DELETE', `/me/following/organizers/${orgSlug}`, undefined, fan.token));
+  await ok(call('DELETE', `/me/following/organizers/no-such-${run}`, undefined, fan.token));
+  f = await ok(call('GET', '/me/following', undefined, fan.token));
+  assert.deepEqual(f.organizers, []);
+  assert.equal((f.events as Json[]).find((e) => e.slug === a.ev.slug)?.via.kind, 'venue');
+  assert.ok(!(f.events as Json[]).some((e) => e.slug === ev2.slug));
+  await ok(call('DELETE', `/me/following/venues/${venueSlug}`, undefined, fan.token));
+  assert.deepEqual((await ok(call('GET', '/me/following', undefined, fan.token))).venues, []);
+});
