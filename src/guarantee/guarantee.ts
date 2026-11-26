@@ -291,7 +291,7 @@ const ADMIN_INCLUDE = {
       dateMode: true,
       dates: true,
       venue: { select: { name: true, city: true } },
-      org: { select: { id: true, name: true, payoutSchedule: true, payoutProvider: true, paystackSubaccount: true } },
+      org: { select: { id: true, name: true, payoutSchedule: true, payoutProvider: true, paystackSubaccount: true, stripeAccountId: true } },
     },
   },
   order: {
@@ -455,7 +455,7 @@ export class GuaranteeService {
     if (!count) return;
     const c = await this.prisma.guaranteeClaim.findUniqueOrThrow({
       where: { id: claimId },
-      include: { order: true, ticket: { select: { ticketType: { select: { validDateIds: true } } } }, event: { select: { feeMode: true, dateMode: true, org: { select: { payoutSchedule: true, payoutProvider: true, paystackSubaccount: true } } } } },
+      include: { order: true, ticket: { select: { ticketType: { select: { validDateIds: true } } } }, event: { select: { feeMode: true, dateMode: true, org: { select: { payoutSchedule: true, payoutProvider: true, paystackSubaccount: true, stripeAccountId: true } } } } },
     });
     // A multi-day pass refunded for one of several days keeps working on the others.
     const keepTicket = c.event.dateMode === 'DAYS' && !!c.eventDateId && c.ticket.ticketType.validDateIds.length > 1;

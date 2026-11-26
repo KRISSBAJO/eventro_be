@@ -246,7 +246,8 @@ export class AdminService {
     const remaining = o.totalCents - o.refundedCents;
     // `recordOwed` (an event or date cancelled or moved): if the organizer was already paid for this order, their share
     // of the refund is recorded as owed by them to Omoshow, so the money isn't silently Omoshow's loss.
-    const owed = opts.recordOwed ? await this.owedOnRefund(o, Math.min(amountCents, remaining)) : 0;
+    const debt = opts.recordOwed ? await this.owedOnRefund(o, Math.min(amountCents, remaining)) : null;
+    const owed = debt?.cents ?? 0;
     if (amountCents > remaining) throw new BadRequestException(`At most ${remaining} cents can still be refunded.`);
     // `refundKey`: a retried refund is a no-op at providers that support idempotency (Stripe), so a retry after a
     // database failure can't refund twice.
@@ -264,6 +265,8 @@ export class AdminService {
         where: { id: orderId },
         data: { refundedCents: { increment: amountCents }, donationRefundedCents, status: full ? 'REFUNDED' : 'PARTIALLY_REFUNDED', ...(owed ? { refundOwedCents: { increment: owed } } : {}) },
       });
+      // What they owe comes out of their next payouts (OrganizerService.payouts).
+      if (debt && owed) await tx.organizerDebt.create({ data: { orgId: debt.orgId, orderId, kind: 'REFUND', cents: owed, refundedCents: amountCents, currency: o.currency } });
       if (ticketsDone) {
         const { count } = await tx.ticket.updateMany({ where: { orderId, status: { not: 'VOID' } }, data: { status: 'VOID', listCents: null, transferTo: null } });
         // Session places booked with these tickets go back.
@@ -279,15 +282,15 @@ export class AdminService {
 
   /** The organizer's share of a refund of `amountCents` from `o`, if they'd already been paid for the order; else 0. */
   private async owedOnRefund(o: Order, amountCents: number) {
-    if (amountCents <= 0 || o.kind !== 'SALE') return 0;
+    if (amountCents <= 0 || o.kind !== 'SALE') return null;
     const e = await this.prisma.event.findUnique({
       where: { id: o.eventId },
-      select: { feeMode: true, org: { select: { payoutSchedule: true, payoutProvider: true, paystackSubaccount: true } } },
+      select: { orgId: true, feeMode: true, org: { select: { payoutSchedule: true, payoutProvider: true, paystackSubaccount: true, stripeAccountId: true } } },
     });
-    if (!e || !organizerPaidOut(o, e.org)) return 0;
+    if (!e || !organizerPaidOut(o, e.org)) return null;
     const listing = o.resaleListingId ? await this.prisma.resaleListing.findUnique({ where: { id: o.resaleListingId }, select: { royaltyCents: true } }) : null;
     const ticketNet = o.resaleListingId ? (listing?.royaltyCents ?? 0) : organizerNet(o.unitCents, e.feeMode, config.organizerFeePermille) * o.quantity - o.discountCents - ticketRefunded(o);
-    return organizerShareOf(o, amountCents, ticketNet);
+    return { orgId: e.orgId, cents: organizerShareOf(o, amountCents, ticketNet) };
   }
 
   /**
@@ -330,7 +333,7 @@ export class AdminService {
    * by it either way (they count donationCents − donationRefundedCents). The buyer gets an email.
    */
   async refundDonation(orderId: string, admin: Pick<AuthUser, 'id'>, reason: string, opts: { by?: 'eventro' | 'organizer' } = {}) {
-    const o = await this.prisma.order.findUnique({ where: { id: orderId }, include: { event: { select: { title: true, org: { select: { name: true, payoutSchedule: true, payoutProvider: true, paystackSubaccount: true } } } } } });
+    const o = await this.prisma.order.findUnique({ where: { id: orderId }, include: { event: { select: { title: true, orgId: true, org: { select: { name: true, payoutSchedule: true, payoutProvider: true, paystackSubaccount: true, stripeAccountId: true } } } } } });
     if (!o) throw new NotFoundException('Order not found.');
     if (!['PAID', 'PARTIALLY_REFUNDED'].includes(o.status)) throw new BadRequestException('Only paid orders can be refunded.');
     const amount = Math.min(donationLeft(o), o.totalCents - o.refundedCents);
@@ -353,6 +356,7 @@ export class AdminService {
     const status = live === 0 && after.refundedCents >= after.totalCents ? 'REFUNDED' : 'PARTIALLY_REFUNDED';
     const owed = organizerPaidOut(o, o.event.org) ? amount : 0;
     await this.prisma.order.update({ where: { id: orderId }, data: { status, ...(owed ? { donationOwedCents: { increment: owed } } : {}) } });
+    if (owed) await this.prisma.organizerDebt.create({ data: { orgId: o.event.orgId, orderId, kind: 'DONATION', cents: owed, refundedCents: owed, currency: o.currency } });
     await this.audit.log(admin.id, 'order.donation_refund', 'Order', orderId, { amountCents: amount, currency: o.currency, cause: o.donationCause, reason, by: opts.by ?? 'eventro', organizerOwedCents: owed });
     void this.donationRefundEmail(o, amount).catch(() => undefined);
     const view = await this.prisma.order.findUniqueOrThrow({

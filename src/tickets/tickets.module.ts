@@ -1,5 +1,5 @@
 import { BadRequestException, Body, Controller, Delete, Get, Header, HttpCode, Injectable, Module, NotFoundException, Param, Post } from '@nestjs/common';
-import { dateChangeView } from '../domain/date-changes';
+import { dateChangeView, moveRefund, ticketIdsOf } from '../domain/date-changes';
 import { ApiBearerAuth, ApiProperty, ApiTags } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import { IsEmail, IsInt, Min } from 'class-validator';
@@ -115,13 +115,23 @@ export class TicketsService {
     const sessions = await this.schedule.sessionsByTicket(rows.map((r) => r.id));
     // A live event moved since the ticket was bought: when, why, and whether the buyer can still take a refund.
     const changes = await this.prisma.dateChange.findMany({ where: { eventId: { in: [...new Set(rows.map((r) => r.eventId))] } } });
+    // Refunds already taken for a change (a multi-day pass keeps its status, so the audit trail says which).
+    const took = changes.length
+      ? await this.prisma.auditLog.findMany({ where: { entity: 'Order', action: 'order.date_change_refund', entityId: { in: [...new Set(rows.map((r) => r.orderId))] } }, select: { entityId: true, data: true } })
+      : [];
+    const taken = new Set(took.map((a) => `${a.entityId}:${(a.data as { dateChangeId?: string } | null)?.dateChangeId ?? ''}`));
     const tickets = rows.map(({ event: { seatMap, streamUrl, dates, ...event }, guaranteeClaim, order: { email: buyerEmail, buyerId, ...order }, ...t }) => {
       const dateChange = dateChangeView(
         changes.filter((c) => c.eventId === t.eventId),
         event.dateMode,
         t.ticketType,
         order,
-        { isBuyer: buyerId === user.id || buyerEmail === user.email, used: t.status === 'CHECKED_IN' },
+        {
+          isBuyer: buyerId === user.id || buyerEmail === user.email,
+          used: t.status === 'CHECKED_IN',
+          taken: (changeId) => taken.has(`${order.id}:${changeId}`),
+          refund: (c) => moveRefund(order, event.dateMode, t.ticketType, dates, c, ticketIdsOf(order.id, order.quantity)),
+        },
       );
       const s = (seatMap as SeatMap | null)?.sections.find((x) => x.id === t.section);
       const watch = event.online && (t.status === 'ACTIVE' || t.status === 'CHECKED_IN') ? streamUrl : null;

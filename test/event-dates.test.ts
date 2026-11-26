@@ -100,7 +100,8 @@ test('domain: summary times, the door’s default date, and date checks', () => 
   // Lagos is UTC+1: 23:30Z on the 12th is already the 13th there.
   assert.equal(doorDate(dates, 'Africa/Lagos', new Date('2026-12-12T23:30:00Z'))?.id, 'b');
 
-  const future = new Date(Date.now() + 10 * DAY).toISOString();
+  // Noon, so an hour later is still the same calendar day whenever the test runs.
+  const future = new Date(new Date(Date.now() + 10 * DAY).setUTCHours(12, 0, 0, 0)).toISOString();
   assert.throws(() => planDates('DAYS', [{ startsAt: future }, { startsAt: new Date(new Date(future).getTime() + HOUR).toISOString() }]), /Two days fall on/);
   assert.throws(() => planDates('DATES', [{ startsAt: new Date(Date.now() - DAY).toISOString() }]), /is in the past/);
   assert.throws(() => planDates('DATES', [{ startsAt: future, doorsAt: new Date(new Date(future).getTime() + HOUR).toISOString() }]), /doors can’t open after the start/);

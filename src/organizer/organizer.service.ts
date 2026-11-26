@@ -1581,10 +1581,20 @@ export class OrganizerService {
   async payouts(orgId: string, user: AuthUser) {
     const m = await this.member(orgId, user, ADMIN_ONLY);
     const org = await this.prisma.organization.findUniqueOrThrow({ where: { id: m.orgId } });
-    const since = new Date(Date.now() - 31 * DAY);
+    // What they owe Omoshow (refunds of orders they'd already been paid for), oldest first: it comes out of their
+    // payouts from the day it was recorded on, so sales from then on are loaded too.
+    const debts = await this.prisma.organizerDebt.findMany({ where: { orgId }, orderBy: { createdAt: 'asc' } });
+    const window = new Date(Date.now() - 31 * DAY);
+    const since = debts.length && debts[0].createdAt < window ? new Date(`${dayKey(debts[0].createdAt)}T00:00:00.000Z`) : window;
     const orders = await this.prisma.order.findMany({
-      where: { event: { orgId }, status: { in: ['PAID', 'PARTIALLY_REFUNDED'] }, paidAt: { gte: since } },
+      where: {
+        event: { orgId },
+        paidAt: { gte: since },
+        // Refunded after being paid out: still part of the day they were paid for (the refund is a debt, taken later).
+        OR: [{ status: { in: ['PAID', 'PARTIALLY_REFUNDED'] } }, { status: 'REFUNDED', OR: [{ refundOwedCents: { gt: 0 } }, { donationOwedCents: { gt: 0 } }] }],
+      },
       select: {
+        id: true,
         paidAt: true,
         quantity: true,
         unitCents: true,
@@ -1608,6 +1618,15 @@ export class OrganizerService {
     for (const o of orders) counts.set(o.currency, (counts.get(o.currency) ?? 0) + 1);
     const latest = await this.prisma.event.findFirst({ where: { orgId }, orderBy: { createdAt: 'desc' }, select: { currency: true } });
     const currency = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? latest?.currency ?? 'USD';
+    // What was refunded on each order after it had been paid out (it's a debt now, so its day keeps what was paid).
+    const after = new Map<string, { refund: number; donation: number }>();
+    for (const d of debts) {
+      if (!d.orderId) continue;
+      const a = after.get(d.orderId) ?? { refund: 0, donation: 0 };
+      if (d.kind === 'DONATION') a.donation += d.refundedCents;
+      else a.refund += d.refundedCents;
+      after.set(d.orderId, a);
+    }
     const byDay = new Map<string, number>();
     const donationsByDay = new Map<string, number>();
     for (const o of orders) {
@@ -1620,35 +1639,67 @@ export class OrganizerService {
       // don't touch it, and refunds of it don't touch the tickets' share.
       // A fan-resale order's ticket money is the seller's (paid out by Omoshow from the listing): the organizer's part
       // of it is only the event's resale royalty. Its donation, like any, is the organizer's in full.
+      // Refunds made after this day was paid out (`refundOwedCents`, `donationOwedCents`) stay in it: they were paid,
+      // and come back as debts from the payouts after (below).
+      const late = after.get(o.id) ?? { refund: 0, donation: 0 };
+      const refunded = ticketRefunded(o);
+      const lateTickets = Math.min(late.refund, refunded);
       const net = o.resaleListing
         ? (o.resaleListing.royaltyCents ?? 0)
-        : organizerNet(o.unitCents, o.event.feeMode, config.organizerFeePermille) * o.quantity - o.discountCents - (ticketRefunded(o) - eventroReturned);
+        : organizerNet(o.unitCents, o.event.feeMode, config.organizerFeePermille) * o.quantity - o.discountCents - (refunded - lateTickets - eventroReturned);
       const ticketCents = Math.max(0, this.fx.convert(net, o.currency, currency));
-      const donationCents = Math.max(0, this.fx.convert(donationLeft(o), o.currency, currency));
+      const donationCents = Math.max(0, this.fx.convert(donationLeft(o) + (late.refund - lateTickets) + late.donation, o.currency, currency));
       byDay.set(k, (byDay.get(k) ?? 0) + ticketCents + donationCents);
       donationsByDay.set(k, (donationsByDay.get(k) ?? 0) + donationCents);
     }
-    const donationsOn = (k: string) => donationsByDay.get(k) ?? 0;
     const today = dayKey(new Date());
-    const history = [...byDay.entries()]
-      .filter(([d]) => d < today)
-      .sort((a, b) => b[0].localeCompare(a[0]))
-      .map(([date, cents]) => ({ salesDate: date, amountCents: cents, ticketCents: cents - donationsOn(date), donationCents: donationsOn(date), status: 'PAID' as const }));
+    // Debts come out of each day's payout from the day they were recorded on, oldest debt first, never below zero.
+    const takenByDay = new Map<string, number>();
+    const days = [...byDay.keys()].sort();
+    let outstanding = 0;
+    for (const d of debts) {
+      let left = this.fx.convert(d.cents, d.currency, currency);
+      for (const k of days) {
+        if (left <= 0) break;
+        if (k < dayKey(d.createdAt)) continue;
+        const room = (byDay.get(k) ?? 0) - (takenByDay.get(k) ?? 0);
+        const take = Math.min(room, left);
+        if (take > 0) {
+          takenByDay.set(k, (takenByDay.get(k) ?? 0) + take);
+          left -= take;
+        }
+      }
+      outstanding += Math.max(0, left);
+    }
+    const net = (k: string) => (byDay.get(k) ?? 0) - (takenByDay.get(k) ?? 0);
+    const taken = (k: string) => takenByDay.get(k) ?? 0;
+    const donationsOn = (k: string) => donationsByDay.get(k) ?? 0;
+    const shown = dayKey(window);
+    const history = [...byDay.keys()]
+      .filter((d) => d < today && d >= shown)
+      .sort((a, b) => b.localeCompare(a))
+      .map((date) => ({ salesDate: date, amountCents: net(date), ticketCents: (byDay.get(date) ?? 0) - donationsOn(date), donationCents: donationsOn(date), owedCents: taken(date), status: 'PAID' as const }));
     const yesterday = dayKey(new Date(Date.now() - DAY));
+    const recent = history.slice(0, 7);
     return {
       currency,
       converted: counts.size > 1,
       schedule: org.payoutSchedule,
-      pendingCents: byDay.get(today) ?? 0,
-      nextPayoutCents: org.payoutSchedule === 'DAILY' ? (byDay.get(yesterday) ?? 0) : history.slice(0, 7).reduce((s, h) => s + h.amountCents, 0),
+      pendingCents: net(today),
+      nextPayoutCents: org.payoutSchedule === 'DAILY' ? net(yesterday) : recent.reduce((s, h) => s + h.amountCents, 0),
       // Donations collected on the organizer's behalf, inside the amounts above and shown as their own line.
       pendingDonationCents: donationsOn(today),
-      nextPayoutDonationCents: org.payoutSchedule === 'DAILY' ? donationsOn(yesterday) : history.slice(0, 7).reduce((s, h) => s + h.donationCents, 0),
-      donationsCents: [...donationsByDay.values()].reduce((a, b) => a + b, 0),
+      nextPayoutDonationCents: org.payoutSchedule === 'DAILY' ? donationsOn(yesterday) : recent.reduce((s, h) => s + h.donationCents, 0),
+      donationsCents: [...donationsByDay.entries()].filter(([d]) => d >= shown).reduce((a, [, b]) => a + b, 0),
       donationNote: DONATION_NOTE,
       // Donations refunded after the organizer had already been paid for them: owed to Omoshow (in the payout currency).
       donationOwedCents: owed.reduce((s, g) => s + this.fx.convert(g._sum.donationOwedCents ?? 0, g.currency, currency), 0),
       refundOwedCents: refundOwed.reduce((s, g) => s + this.fx.convert(g._sum.refundOwedCents ?? 0, g.currency, currency), 0),
+      // Owed to Omoshow: what's coming out of today's and the next payouts (`pendingOwedCents`, `nextPayoutOwedCents`),
+      // and what's still owed after every sale so far (it comes out of future sales).
+      pendingOwedCents: taken(today),
+      nextPayoutOwedCents: org.payoutSchedule === 'DAILY' ? taken(yesterday) : recent.reduce((s, h) => s + h.owedCents, 0),
+      owedOutstandingCents: outstanding,
       payoutMethod:
         org.payoutProvider === 'paystack' && org.paystackSubaccount
           ? { provider: 'paystack', bankLast4: org.bankLast4, bankName: org.bankName, accountName: org.bankAccountName, country: org.bankCountry, updatedAt: org.payoutUpdatedAt }

@@ -698,6 +698,7 @@ test('organizer donation refund: org admins only (door 403, strangers 404), emai
   // first, it's recorded as owed by the organizer, and the organizer's own refund then finds nothing left.
   const { order: old } = await buy(fan, tier(ev, 'General').id, 1, {}, { donationCents: 400 });
   await prisma.order.update({ where: { id: old.id }, data: { paidAt: new Date(Date.now() - 3 * 86_400_000) } });
+  await prisma.organization.update({ where: { id: o.id }, data: { stripeAccountId: `acct_test_${run}` } });
   const byAdmin = await ok(call('POST', `/admin/orders/${old.id}/refund-donation`, { reason: 'Fan asked for it back' }, admin.token));
   assert.equal(byAdmin.donationRefundedCents, 400);
   assert.equal(byAdmin.donationOwedCents, 400);

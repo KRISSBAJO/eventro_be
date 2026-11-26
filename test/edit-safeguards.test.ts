@@ -136,6 +136,7 @@ test('cancelling: organizers only before it starts; Omoshow after; refunds of or
   // It started an hour ago; the order was paid (and paid out, DAILY) three days ago.
   await prisma.event.update({ where: { id: ev.id }, data: { startsAt: new Date(Date.now() - 3_600_000), endsAt: new Date(Date.now() + 3_600_000) } });
   await prisma.order.update({ where: { id: orderId }, data: { paidAt: new Date(Date.now() - 3 * DAY) } });
+  await prisma.organization.update({ where: { id: o.id }, data: { stripeAccountId: `acct_test_safe_${run}` } });
   const refused = await call('POST', `/organizer/events/${ev.id}/cancel`, { reason: 'Storm warning for the whole area', confirmTitle: ev.title }, org.token);
   assert.equal(refused.status, 409);
   assert.equal(refused.body.code, 'EVENT_STARTED');
@@ -146,6 +147,19 @@ test('cancelling: organizers only before it starts; Omoshow after; refunds of or
   assert.ok(after.refundOwedCents > 0 && after.refundOwedCents < after.totalCents, 'the organizer’s share, not the fee');
   const payouts = await ok(call('GET', `/organizer/orgs/${o.id}/payouts`, undefined, org.token));
   assert.equal(payouts.refundOwedCents, after.refundOwedCents);
+  // The day it was paid out still shows what was paid; the debt waits for the next sales.
+  const paidDay = (payouts.history as Json[]).find((h) => h.salesDate === new Date(Date.now() - 3 * DAY).toISOString().slice(0, 10));
+  assert.ok(paidDay && paidDay.amountCents >= after.refundOwedCents, 'the paid-out day keeps its amount');
+  assert.equal(payouts.owedOutstandingCents, after.refundOwedCents);
+  assert.ok(await prisma.organizerDebt.findFirst({ where: { orgId: o.id, orderId, kind: 'REFUND', cents: after.refundOwedCents } }));
+  // A sale today: the debt comes out of it (never below zero), and what's left stays outstanding.
+  const { ev: next } = await published(org.token, admin.token, { ...single(`Next ${run}`), ticketTypes: [{ name: 'General', basePriceCents: 1000, capacity: 50 }] });
+  await prisma.event.update({ where: { id: next.id }, data: { orgId: o.id } });
+  await buy(fan, next.ticketTypes[0].id, 1);
+  const later = await ok(call('GET', `/organizer/orgs/${o.id}/payouts`, undefined, org.token));
+  assert.ok(later.pendingOwedCents > 0, 'taken from today’s sales');
+  assert.equal(later.pendingCents, 0, 'today’s payout covers part of the debt');
+  assert.equal(later.owedOutstandingCents, after.refundOwedCents - later.pendingOwedCents);
 });
 
 test('date change: holders hear, buyers can take a full refund until the window closes; later buyers can’t', async () => {
@@ -186,6 +200,36 @@ test('date change: holders hear, buyers can take a full refund until the window 
   await prisma.dateChange.updateMany({ where: { eventId: ev.id }, data: { refundUntil: new Date(Date.now() - 1000) } });
   const xena = await account(`safe-dx-${run}@test.local`, 'Xena Fan');
   assert.equal((await call('POST', `/me/orders/${other}/date-change-refund`, undefined, xena.token)).status, 400);
+});
+
+test('multi-day move: a pass gets the moved day’s share back and keeps working; once', async () => {
+  const admin = await account('admin@test.local', 'Admin');
+  const org = await account(`safe-mv-${run}@test.local`, 'Mavi Organizer');
+  const fan = await account(`safe-mvf-${run}@test.local`, 'Mira Fan');
+  const { ev } = await published(org.token, admin.token, {
+    title: `Moving Fest ${run}`,
+    dateMode: 'DAYS',
+    dates: [{ startsAt: at(40, 14) }, { startsAt: at(41, 14) }, { startsAt: at(42, 14) }],
+    ticketTypes: [{ name: 'Weekend pass', basePriceCents: 9000, capacity: 50, validDates: ['0', '1', '2'] }],
+  });
+  const full = await ok(call('GET', `/organizer/events/${ev.id}`, undefined, org.token));
+  const orderId = await buy(fan, (full.ticketTypes as Json[])[0].id, 1);
+  await prisma.order.update({ where: { id: orderId }, data: { paidAt: new Date(Date.now() - DAY), createdAt: new Date(Date.now() - DAY) } });
+  const dates = (full.dates as Json[]).map((d, i) => ({ id: d.id, startsAt: i === 1 ? at(41, 19) : d.startsAt }));
+  const moved = await ok(call('PATCH', `/organizer/events/${ev.id}`, { dates }, org.token));
+  assert.equal(moved.dateChanges.length, 1);
+  const t = ((await ok(call('GET', '/me/tickets', undefined, fan.token))).tickets as Json[]).find((x) => x.orderId === orderId)!;
+  assert.equal(t.dateChange.whole, false);
+  const o = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
+  assert.ok(Math.abs(t.dateChange.refundCents - Math.round(o.totalCents / 3)) <= 1, 'a third of the pass');
+  const r = await ok(call('POST', `/me/orders/${orderId}/date-change-refund`, undefined, fan.token));
+  assert.equal(r.whole, false);
+  const after = await prisma.order.findUniqueOrThrow({ where: { id: orderId }, include: { tickets: true } });
+  assert.equal(after.status, 'PARTIALLY_REFUNDED');
+  assert.ok(after.tickets.every((x) => x.status === 'ACTIVE'), 'the pass still works');
+  assert.equal((await call('POST', `/me/orders/${orderId}/date-change-refund`, undefined, fan.token)).status, 400);
+  const again = ((await ok(call('GET', '/me/tickets', undefined, fan.token))).tickets as Json[]).find((x) => x.orderId === orderId)!;
+  assert.equal(again.dateChange.refundable, false, 'no second refund for the same change');
 });
 
 test('live edits: title and cover wait for Omoshow; the description goes live; approve, reject, withdraw', async () => {

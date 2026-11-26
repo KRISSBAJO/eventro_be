@@ -261,6 +261,7 @@ model Organization {
   suspendReason  String?
   createdAt      DateTime       @default(now())
 
+  debts   OrganizerDebt[]
   members OrganizationMember[]
   events  Event[]
   venueBookings VenueBooking[]
@@ -442,6 +443,27 @@ model Event {
 /// times. A cancelled date stays (its tickets were refunded and voided) so holders can see what happened.
 /// A live event (or one date or day of it) moved to a new time after tickets were sold. Ticket holders are told,
 /// and buyers can get a full refund until `refundUntil` (the earlier of 14 days after the change and the new start).
+/// Money an organizer owes Omoshow: their share of a refund (an event or date cancelled or moved: REFUND) or a refunded
+/// donation (DONATION) on an order they'd already been paid for. It comes out of their next payouts, oldest first
+/// (OrganizerService.payouts).
+model OrganizerDebt {
+  id        String   @id @default(cuid())
+  orgId     String
+  orderId   String?
+  /// REFUND or DONATION
+  kind      String
+  /// what they owe: their share of the refund
+  cents     Int
+  /// the whole amount refunded to the fan (fees included), so the paid-out day still shows what was paid
+  refundedCents Int    @default(0)
+  currency  String
+  createdAt DateTime @default(now())
+
+  org Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@index([orgId, createdAt])
+}
+
 model DateChange {
   id           String   @id @default(cuid())
   eventId      String

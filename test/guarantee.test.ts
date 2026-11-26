@@ -568,8 +568,9 @@ test('normal tickets: the organizer already paid out for the order owes their sh
   await ok(call('POST', `/organizer/events/${ctx.ev.id}/promos`, { code: 'FIVEOFF', percent: 5 }, org.token));
   const { orderId, ticketIds } = await promoOrder(ctx, fan, 3, 'FIVEOFF');
   const [t1, t2, t3] = ticketIds;
-  // Sold ten days ago: on a daily schedule the organizer has been paid for it.
+  // Sold ten days ago: on a daily schedule (with a payout account) the organizer has been paid for it.
   await prisma.order.update({ where: { id: orderId }, data: { paidAt: new Date(Date.now() - 10 * 86_400_000) } });
+  await prisma.organization.update({ where: { id: ctx.org.id }, data: { stripeAccountId: `acct_test_${run}` } });
   await setTimes(ctx.ev.id, new Date(Date.now() - HOUR));
 
   const c1 = await ok(call('POST', `/tickets/${t1}/guarantee-claims`, { reason: 'DID_NOT_SCAN' }, fan.token));

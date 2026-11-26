@@ -15,7 +15,7 @@
 import { BadRequestException, ConflictException, Controller, HttpCode, Injectable, Logger, NotFoundException, Param, Post } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { DateChange, Prisma } from '@prisma/client';
-import { MIN_MOVE_MS, REFUND_WINDOW_MS, dateChangeView, ticketsMoved, type Move } from '../domain/date-changes';
+import { MIN_MOVE_MS, REFUND_WINDOW_MS, dateChangeView, moveRefund, ticketsMoved, type Move } from '../domain/date-changes';
 
 export type { Move } from '../domain/date-changes';
 import { PrismaService } from '../prisma.service';
@@ -70,14 +70,21 @@ export class DateChangeService {
 
   /** One email per buyer (with the refund offer), one per other holder (the ticket still works), a push to holders. */
   private async tell(
-    e: { id: string; slug: string; title: string; online: boolean; org: { name: string }; venue: { name: string; city: string } | null },
+    e: { id: string; slug: string; title: string; dateMode: string; online: boolean; org: { name: string }; venue: { name: string; city: string } | null },
     c: DateChange,
     where: Prisma.TicketWhereInput,
   ) {
     const tickets = await this.prisma.ticket.findMany({
       where: { ...where, status: { not: 'VOID' } },
-      select: { ownerId: true, holderEmail: true, holderName: true, order: { select: { id: true, email: true, buyerName: true, kind: true, status: true, totalCents: true, refundedCents: true, currency: true } } },
+      select: {
+        id: true,
+        ownerId: true,
+        holderEmail: true,
+        holderName: true,
+        order: { select: { id: true, email: true, buyerName: true, kind: true, status: true, totalCents: true, refundedCents: true, quantity: true, donationCents: true, donationRefundedCents: true, currency: true, ticketType: { select: { validDateIds: true } } } },
+      },
     });
+    const dates = await this.prisma.eventDate.findMany({ where: { eventId: e.id }, select: { id: true, startsAt: true, status: true } });
     // Event times are wall-clock times at the venue (see domain/wallclock).
     const label = (d: Date) => wallClockLabel(d, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
     const from = label(c.fromStartsAt);
@@ -93,7 +100,8 @@ export class DateChangeService {
       const o = t.order;
       if (told.has(`o:${o.id}`)) continue;
       const left = o.totalCents - o.refundedCents;
-      if (o.kind === 'SALE' && (o.status === 'PAID' || o.status === 'PARTIALLY_REFUNDED') && left > 0) {
+      const back = moveRefund(o, e.dateMode, o.ticketType, dates, c, tickets.filter((x) => x.order.id === o.id).map((x) => x.id));
+      if (o.kind === 'SALE' && (o.status === 'PAID' || o.status === 'PARTIALLY_REFUNDED') && left > 0 && back.cents > 0) {
         told.add(`o:${o.id}`);
         told.add(o.email.toLowerCase());
         mails.push({
@@ -106,7 +114,9 @@ export class DateChangeService {
               `Hi ${first(o.buyerName)}, ${e.org.name} has moved ${e.title}${where_}.`,
               ...why,
               'Your tickets still work for the new time, so there’s nothing you need to do.',
-              `Can’t make it? You can get a full refund of ${formatMoney(left, o.currency)} for order ${o.id}, fees included, until ${until}. Open your tickets and choose “Get a refund”.`,
+              back.whole
+                ? `Can’t make it? You can get a full refund of ${formatMoney(back.cents, o.currency)} for order ${o.id}, fees included, until ${until}. Open your tickets and choose “Get a refund”.`
+                : `Can’t make that day? You can get that day’s share of your pass back, ${formatMoney(back.cents, o.currency)}, until ${until}, and keep the pass for the other days. Open your tickets and choose “Get a refund”.`,
             ],
             highlight: { label: `Was ${from}`, value: `Now ${to}` },
             cta: { label: 'View my tickets', url: `${config.webUrl}/tickets` },
@@ -153,10 +163,19 @@ export class DateChangeService {
     }
   }
 
+  /** Whether this order already took the refund for this change (a multi-day pass keeps its status, so the audit trail says). */
+  private async taken(orderId: string, changeId: string) {
+    return !!(await this.prisma.auditLog.findFirst({ where: { entity: 'Order', entityId: orderId, action: 'order.date_change_refund', data: { path: ['dateChangeId'], equals: changeId } } }));
+  }
+
   private async runRefund(orderId: string, user: AuthUser) {
     const o = await this.prisma.order.findUnique({
       where: { id: orderId },
-      include: { event: { select: { id: true, title: true, dateMode: true, status: true } }, ticketType: { select: { eventDateId: true, validDateIds: true } }, tickets: { select: { id: true, status: true } } },
+      include: {
+        event: { select: { id: true, title: true, dateMode: true, status: true, dates: { select: { id: true, startsAt: true, status: true } } } },
+        ticketType: { select: { eventDateId: true, validDateIds: true } },
+        tickets: { select: { id: true, status: true } },
+      },
     });
     if (!o || (o.buyerId !== user.id && o.email !== user.email)) throw new NotFoundException('Order not found.');
     if (o.kind !== 'SALE') throw new BadRequestException('This is a complimentary ticket, so there’s nothing to refund.');
@@ -166,27 +185,37 @@ export class DateChangeService {
     const view = dateChangeView(changes, o.event.dateMode, o.ticketType, o, { isBuyer: true, used: false });
     if (!view) throw new BadRequestException('The date of this order hasn’t changed since you bought it, so it can’t be refunded this way. You can still ask for a refund.');
     if (view.refundUntil.getTime() <= Date.now()) throw new BadRequestException('The time to get a refund for this date change has passed.');
-    const used = o.tickets.some((t) => t.status === 'CHECKED_IN') || (await this.prisma.ticketCheckIn.count({ where: { ticketId: { in: o.tickets.map((t) => t.id) } } })) > 0;
-    if (used) throw new BadRequestException('A ticket on this order has already been used, so it can’t be refunded.');
-    const left = o.totalCents - o.refundedCents;
-    if (left <= 0) throw new BadRequestException('This order has already been refunded.');
-    await this.admin.refundOrder(o.id, left, user, `Date changed (${view.toStartsAt.toISOString()}): the buyer chose a refund`, { recordOwed: true, refundKey: `datechange-${o.id}-${view.id}` });
-    await this.audit.log(user.id, 'order.date_change_refund', 'Order', o.id, { amountCents: left, currency: o.currency, dateChangeId: view.id });
+    if (await this.taken(o.id, view.id)) throw new BadRequestException('You’ve already had the refund for this change.');
+    const live = o.tickets.filter((t) => t.status !== 'VOID');
+    const change = changes.find((c) => c.id === view.id)!;
+    const refund = moveRefund(o, o.event.dateMode, o.ticketType, o.event.dates, change, live.map((t) => t.id));
+    // The whole order: nothing on it used yet. A pass's day: nobody came in on that day yet.
+    const used = refund.whole
+      ? o.tickets.some((t) => t.status === 'CHECKED_IN') || (await this.prisma.ticketCheckIn.count({ where: { ticketId: { in: o.tickets.map((t) => t.id) } } })) > 0
+      : (await this.prisma.ticketCheckIn.count({ where: { ticketId: { in: live.map((t) => t.id) }, eventDateId: change.eventDateId } })) > 0;
+    if (used) throw new BadRequestException(refund.whole ? 'A ticket on this order has already been used, so it can’t be refunded.' : 'A ticket on this order was already used on that day, so it can’t be refunded for it.');
+    if (refund.cents <= 0) throw new BadRequestException('There’s nothing left to refund on this order.');
+    const amount = formatMoney(refund.cents, o.currency);
+    await this.admin.refundOrder(o.id, refund.cents, user, `Date changed (${view.toStartsAt.toISOString()}): the buyer chose a refund`, { recordOwed: true, refundKey: `datechange-${o.id}-${view.id}` });
+    await this.audit.log(user.id, 'order.date_change_refund', 'Order', o.id, { amountCents: refund.cents, currency: o.currency, dateChangeId: view.id, whole: refund.whole });
     void this.mail
       .send('order.date_change_refund', {
         to: o.email,
         subject: `Refunded: ${o.event.title}`,
         ...render({
-          preheader: `We’ve refunded ${formatMoney(left, o.currency)} for order ${o.id}.`,
+          preheader: `We’ve refunded ${amount} for order ${o.id}.`,
           heading: 'Your refund is on its way',
-          paragraphs: [`We’ve refunded ${formatMoney(left, o.currency)} for order ${o.id} (${o.event.title}) to your original payment method. It can take 5–10 business days to show up, depending on your bank.`, 'Your tickets for it have been cancelled.'],
-          highlight: { label: 'Refunded', value: formatMoney(left, o.currency) },
-          cta: { label: 'Find another event', url: `${config.webUrl}/events` },
+          paragraphs: [
+            `We’ve refunded ${amount} for order ${o.id} (${o.event.title}) to your original payment method. It can take 5–10 business days to show up, depending on your bank.`,
+            refund.whole ? 'Your tickets for it have been cancelled.' : 'That was the moved day’s share of your pass. It still works on the other days, so keep it.',
+          ],
+          highlight: { label: 'Refunded', value: amount },
+          cta: refund.whole ? { label: 'Find another event', url: `${config.webUrl}/events` } : { label: 'View my tickets', url: `${config.webUrl}/tickets` },
           footer: `You’re getting this because you asked for a refund of order ${o.id} on Omoshow.`,
         }),
       })
       .catch(() => undefined);
-    return { orderId: o.id, status: 'REFUNDED' as const, refundedCents: left, currency: o.currency };
+    return { orderId: o.id, status: refund.whole ? ('REFUNDED' as const) : ('PARTIALLY_REFUNDED' as const), refundedCents: refund.cents, whole: refund.whole, currency: o.currency };
   }
 }
 

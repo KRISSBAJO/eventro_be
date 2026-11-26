@@ -11,10 +11,12 @@ const DAY = 86_400_000;
  */
 export function organizerPaidOut(
   order: { provider: string; paidAt: Date | null },
-  org: { payoutSchedule: PayoutSchedule; payoutProvider: string | null; paystackSubaccount: string | null },
+  org: { payoutSchedule: PayoutSchedule; payoutProvider: string | null; paystackSubaccount: string | null; stripeAccountId?: string | null },
   now = new Date(),
 ) {
   if (order.provider === 'paystack' && org.payoutProvider === 'paystack' && org.paystackSubaccount) return true;
+  // No payout account connected (when the caller says): nothing has been paid to them yet.
+  if (org.stripeAccountId !== undefined && !org.stripeAccountId && !org.paystackSubaccount) return false;
   if (!order.paidAt) return false;
   const day = (d: Date) => d.toISOString().slice(0, 10);
   return day(order.paidAt) < day(new Date(now.getTime() - (org.payoutSchedule === 'DAILY' ? 1 : 7) * DAY));
