@@ -79,6 +79,10 @@ export class SalesDto {
   @ApiProperty() @IsBoolean() paused: boolean;
 }
 
+export class SpotlightDto {
+  @ApiProperty({ description: 'true: this event is the home page spotlight (replacing any other); false: not any more' }) @IsBoolean() on: boolean;
+}
+
 export class AdminRefundDto {
   @ApiPropertyOptional({ description: 'Minor units; leave out for a full refund of what is left' }) @IsOptional() @IsInt() @Min(1) amountCents?: number;
   @ApiProperty() @IsString() @MinLength(5) @MaxLength(300) reason: string;
@@ -508,6 +512,7 @@ export class AdminConsoleService {
         priceDrops: e._count.priceDrops,
         createdAt: e.createdAt,
         publishedAt: e.publishedAt,
+        spotlight: !!e.spotlightAt,
       })),
     };
   }
@@ -538,6 +543,20 @@ export class AdminConsoleService {
     await this.prisma.event.update({ where: { id }, data: { salesPaused: paused } });
     await this.audit.log(me.id, paused ? 'event.admin_pause' : 'event.admin_resume', 'Event', id);
     return { salesPaused: paused };
+  }
+
+  /** Puts a published, public event in the home page spotlight (one at a time), or takes it out. */
+  async setSpotlight(id: string, me: AuthUser, on: boolean) {
+    const e = await this.prisma.event.findUnique({ where: { id }, select: { status: true, visibility: true, imageUrl: true } });
+    if (!e) throw new NotFoundException('Event not found.');
+    if (on && (e.status !== 'PUBLISHED' || e.visibility !== 'PUBLIC')) throw new BadRequestException('Only published, public events can be in the spotlight.');
+    if (on && !e.imageUrl) throw new BadRequestException('The spotlight needs a photo. Ask the organizer to add one first.');
+    await this.prisma.$transaction([
+      ...(on ? [this.prisma.event.updateMany({ where: { spotlightAt: { not: null }, id: { not: id } }, data: { spotlightAt: null } })] : []),
+      this.prisma.event.update({ where: { id }, data: { spotlightAt: on ? new Date() : null } }),
+    ]);
+    await this.audit.log(me.id, on ? 'event.spotlight_on' : 'event.spotlight_off', 'Event', id);
+    return { spotlight: on };
   }
 
   /* ----- orders ----- */
@@ -800,6 +819,9 @@ export class AdminConsoleController {
   }
   @Post('events/:id/publish') @HttpCode(200) publish(@Param('id') id: string, @CurrentUser() u: AuthUser) {
     return this.svc.publish(id, u);
+  }
+  @Post('events/:id/spotlight') @HttpCode(200) spotlight(@Param('id') id: string, @CurrentUser() u: AuthUser, @Body() dto: SpotlightDto) {
+    return this.svc.setSpotlight(id, u, dto.on);
   }
   /** What cancelling would refund (paid orders and totals per currency). */
   @Get('events/:id/cancel-preview') cancelPreview(@Param('id') id: string) {

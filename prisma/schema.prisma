@@ -378,6 +378,8 @@ model Event {
   /// When the event first went on sale (its first publish); later re-publishing doesn't move it. "Just announced"
   /// (GET /events?sort=new) ranks by it. Null for events never published.
   publishedAt DateTime?
+  /// Picked by Omoshow for the home page spotlight (GET /events/spotlight). One event at a time: a new pick clears it.
+  spotlightAt DateTime?
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
 

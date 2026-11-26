@@ -212,6 +212,40 @@ export class EventsService {
   }
 
   /**
+   * The home page spotlight: the event Omoshow picked while it's on sale, else the upcoming event with a photo that
+   * sold the most tickets lately (ties: soonest), else null. Adds the event's zone (the card's times are wall-clock),
+   * its venue's address and up to 8 names from its schedule.
+   */
+  async spotlight() {
+    const where: Prisma.EventWhereInput = { status: 'PUBLISHED', visibility: 'PUBLIC', salesPaused: false, imageUrl: { not: null }, ...dateRangeWhere(new Date()) };
+    const include = { venue: true, ticketTypes: { where: LIVE_TYPE, select: { priceCents: true } } } as const;
+    const pickedRow = await this.prisma.event.findFirst({ where: { ...where, spotlightAt: { not: null } }, include, orderBy: { spotlightAt: 'desc' } });
+    let row = pickedRow?.ticketTypes.length ? pickedRow : null;
+    let card: EventCardDto | undefined;
+    if (row) [card] = await this.cards([row]);
+    else {
+      const rows = (await this.prisma.event.findMany({ where, include, orderBy: { startsAt: 'asc' }, take: 200 })).filter((e) => e.ticketTypes.length);
+      const cards = await this.cards(rows);
+      const when = (c: EventCardDto) => (c.nextDate?.startsAt ?? c.startsAt).getTime();
+      card = cards.sort((a, b) => b.soldRecent - a.soldRecent || when(a) - when(b))[0];
+      row = card ? rows.find((e) => e.slug === card!.slug)! : null;
+    }
+    if (!row || !card) return { spotlight: null };
+    const items = await this.prisma.scheduleItem.findMany({ where: { eventId: row.id, cancelledAt: null }, select: { people: true }, orderBy: { startsAt: 'asc' } });
+    const people = [...new Set(items.flatMap((i) => i.people).map((p) => p.trim()).filter(Boolean))];
+    return {
+      spotlight: {
+        ...card,
+        picked: row === pickedRow,
+        timezone: row.timezone,
+        address: row.venue?.address ?? null,
+        lineup: people.slice(0, 8),
+        lineupMore: Math.max(0, people.length - 8),
+      },
+    };
+  }
+
+  /**
    * A published event; a cancelled one (with `status: 'CANCELLED'` and the reason, so ticket holders who follow
    * an old link learn what happened; it has nothing on sale); or, with a valid preview token, one that isn't
    * published yet (flagged `preview`).
@@ -369,6 +403,13 @@ export class EventsController {
   @Get()
   search(@Query() q: EventQueryDto) {
     return this.events.search(q);
+  }
+
+  /** The home page spotlight, or { spotlight: null } when nothing is on sale. */
+  @Public()
+  @Get('spotlight')
+  spotlight() {
+    return this.events.spotlight();
   }
 
   @OptionalAuth()

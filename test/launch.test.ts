@@ -652,3 +652,47 @@ test('following: organizer pages, follow organizers and venues, their new events
   await ok(call('DELETE', `/me/following/venues/${venueSlug}`, undefined, fan.token));
   assert.deepEqual((await ok(call('GET', '/me/following', undefined, fan.token))).venues, []);
 });
+
+test('spotlight: Omoshow picks one event for the home page; otherwise the top seller with a photo; never a hidden one', async () => {
+  const admin = await account('admin@test.local', 'Admin');
+  const org = await account(`sp-org-${run}@test.local`, 'Sola Spotlight');
+  const fan = await account(`sp-fan-${run}@test.local`, 'Femi Fan');
+  const a = await publishedEvent(org.token, admin.token, 'Spotlight One');
+  const b = await publishedEvent(org.token, admin.token, 'Spotlight Two');
+  for (const e of [a, b]) await prisma.event.update({ where: { id: e.ev.id as string }, data: { imageUrl: 'https://images.unsplash.com/photo-1501386761578-eac5c94b800a?w=900' } });
+
+  // Without a pick it's still something on sale (or nothing at all), never a pick.
+  const auto = (await ok(call('GET', '/events/spotlight'))).spotlight;
+  if (auto) assert.equal(auto.picked, false);
+
+  assert.equal((await call('POST', `/admin/events/${a.ev.id}/spotlight`, { on: true }, fan.token)).status, 403, 'staff only');
+  await ok(call('POST', `/admin/events/${a.ev.id}/spotlight`, { on: true }, admin.token));
+  let s = (await ok(call('GET', '/events/spotlight'))).spotlight;
+  assert.equal(s.slug, a.ev.slug);
+  assert.equal(s.picked, true);
+  assert.ok(s.title && s.fromCents && s.timezone && s.imageUrl, 'an event card with its zone and photo');
+  assert.ok(Array.isArray(s.lineup) && typeof s.lineupMore === 'number');
+  assert.equal((await ok(call('GET', '/admin/events?q=Spotlight One', undefined, admin.token))).items.find((e: Json) => e.id === a.ev.id).spotlight, true);
+
+  // One at a time: picking another replaces it.
+  await ok(call('POST', `/admin/events/${b.ev.id}/spotlight`, { on: true }, admin.token));
+  assert.equal((await ok(call('GET', '/events/spotlight'))).spotlight.slug, b.ev.slug);
+  assert.equal((await prisma.event.findUnique({ where: { id: a.ev.id as string } }))!.spotlightAt, null);
+
+  // Paused or taken down, the pick isn't shown; and only live, public events with a photo can be picked.
+  await ok(call('POST', `/admin/events/${b.ev.id}/sales`, { paused: true }, admin.token));
+  assert.notEqual((await ok(call('GET', '/events/spotlight'))).spotlight?.slug, b.ev.slug);
+  await ok(call('POST', `/admin/events/${b.ev.id}/sales`, { paused: false }, admin.token));
+  assert.equal((await ok(call('GET', '/events/spotlight'))).spotlight.slug, b.ev.slug);
+  await ok(call('POST', `/admin/events/${b.ev.id}/takedown`, { note: 'Checking the listing details' }, admin.token));
+  assert.notEqual((await ok(call('GET', '/events/spotlight'))).spotlight?.slug, b.ev.slug);
+  assert.equal((await call('POST', `/admin/events/${b.ev.id}/spotlight`, { on: true }, admin.token)).status, 400);
+  await prisma.event.update({ where: { id: a.ev.id as string }, data: { imageUrl: null } });
+  assert.equal((await call('POST', `/admin/events/${a.ev.id}/spotlight`, { on: true }, admin.token)).status, 400, 'needs a photo');
+
+  // Taken out: back to the automatic choice.
+  await ok(call('POST', `/admin/events/${b.ev.id}/spotlight`, { on: false }, admin.token));
+  assert.equal((await prisma.event.count({ where: { spotlightAt: { not: null } } })), 0);
+  const after = (await ok(call('GET', '/events/spotlight'))).spotlight;
+  if (after) assert.equal(after.picked, false);
+});
