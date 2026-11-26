@@ -429,3 +429,88 @@ test('admin cancel: needs ADMIN and a reason; drafts with no sales cancel cleanl
   // Organizers can't resume sales on it.
   assert.equal((await call('POST', `/organizer/events/${ev.id}/resume`, undefined, org.token)).status, 400);
 });
+
+/* ---------- can't find my order ---------- */
+
+test('can’t find my order: same answer either way; the list goes only to an email with orders, at most 3 an hour, 5 asks per IP', async () => {
+  const { rateLimiter } = await import('../src/common/rate-limit');
+  const saved = process.env.RATE_FIND_ORDERS_PER_IP;
+  rateLimiter.reset();
+  process.env.RATE_FIND_ORDERS_PER_IP = '50';
+  try {
+    const admin = await account('admin@test.local', 'Admin');
+    const org = await account(`fo-org-${run}@test.local`, 'Finn Organizer');
+    const { ev, tt } = await publishedEvent(org.token, admin.token, 'Lost Order');
+    const guest = `fo-guest-${run}@example.com`;
+    await buy(tt.id, 2, guest, 'Gail Guest');
+
+    // Unknown and known emails get the identical answer; only the one with orders gets mail.
+    const none = await ok(call('POST', '/orders/find', { email: `fo-nobody-${run}@example.com` }));
+    const some = await ok(call('POST', '/orders/find', { email: guest.toUpperCase() }));
+    assert.deepEqual(none, some);
+    const m = await waitFor(() => outbox.find((x) => x.to === guest && x.subject === 'Your Omoshow orders'));
+    assert.ok(m.html.includes(ev.title as string), 'lists the event');
+    assert.match(m.html, /2 × General/);
+    assert.ok(m.html.includes('/signin?next=%2Ftickets'), 'links to sign in');
+    assert.match(m.html, /Sign up with this same email/, 'a guest is told to sign up with the same email');
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(outbox.filter((x) => x.to === `fo-nobody-${run}@example.com`).length, 0);
+
+    // With an account on that email, the email says to sign in.
+    const fan = `fo-fan-${run}@test.local`;
+    const f = await account(fan, 'Fola Fan');
+    await buy(tt.id, 1, fan, 'Fola Fan', f.token);
+    await ok(call('POST', '/orders/find', { email: fan }));
+    assert.match((await waitFor(() => outbox.find((x) => x.to === fan && x.subject === 'Your Omoshow orders'))).html, /Sign in with this email/);
+
+    // Two more for the guest: both sent (3 this hour), then a fourth is quietly not sent, with the same answer.
+    await ok(call('POST', '/orders/find', { email: guest }));
+    await ok(call('POST', '/orders/find', { email: guest }));
+    await waitFor(() => (outbox.filter((x) => x.to === guest && x.subject === 'Your Omoshow orders').length >= 3 ? true : undefined));
+    assert.deepEqual(await ok(call('POST', '/orders/find', { email: guest })), some);
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(outbox.filter((x) => x.to === guest && x.subject === 'Your Omoshow orders').length, 3);
+
+    assert.equal((await call('POST', '/orders/find', { email: 'not-an-email' })).status, 400);
+
+    // The per-IP limit.
+    rateLimiter.reset();
+    process.env.RATE_FIND_ORDERS_PER_IP = '2';
+    await ok(call('POST', '/orders/find', { email: `fo-x-${run}@example.com` }));
+    await ok(call('POST', '/orders/find', { email: `fo-y-${run}@example.com` }));
+    assert.equal((await call('POST', '/orders/find', { email: `fo-z-${run}@example.com` })).status, 429);
+  } finally {
+    process.env.RATE_FIND_ORDERS_PER_IP = saved;
+    rateLimiter.reset();
+  }
+});
+
+/* ---------- just announced ---------- */
+
+test('just announced: approval stamps publishedAt once; sort=new lists the newest first', async () => {
+  const admin = await account('admin@test.local', 'Admin');
+  const org = await account(`ja-org-${run}@test.local`, 'Jade Organizer');
+  const older = await publishedEvent(org.token, admin.token, 'Announced First');
+  const before = await prisma.event.findUniqueOrThrow({ where: { id: older.ev.id as string } });
+  assert.ok(before.publishedAt, 'approval sets publishedAt');
+  await new Promise((r) => setTimeout(r, 20));
+  const newer = await publishedEvent(org.token, admin.token, 'Announced Second');
+
+  const page = await ok(call('GET', '/events?sort=new&pageSize=100'));
+  const slugs = (page.items as Json[]).map((e) => e.slug as string);
+  assert.ok(slugs.indexOf(newer.ev.slug as string) < slugs.indexOf(older.ev.slug as string), 'newest first');
+  const card = (page.items as Json[]).find((e) => e.slug === newer.ev.slug)!;
+  assert.ok(card.publishedAt, 'cards carry publishedAt');
+
+  // Organizers and admins see it too.
+  const mine = (await ok(call('GET', `/organizer/orgs/${older.org.id}/events`, undefined, org.token))) as unknown as Json[];
+  assert.ok(mine.find((e) => e.id === older.ev.id)?.publishedAt, 'organizer list has publishedAt');
+  const adminList = await ok(call('GET', `/admin/events?q=${encodeURIComponent(older.ev.title as string)}`, undefined, admin.token));
+  assert.ok((adminList.items as Json[])[0].publishedAt, 'admin list has publishedAt');
+
+  // Taken down and published again from the admin console: the first date stays.
+  await ok(call('POST', `/admin/events/${older.ev.id}/takedown`, { note: 'Checking the listing details' }, admin.token));
+  await ok(call('POST', `/admin/events/${older.ev.id}/publish`, undefined, admin.token));
+  const after = await prisma.event.findUniqueOrThrow({ where: { id: older.ev.id as string } });
+  assert.equal(after.publishedAt?.getTime(), before.publishedAt!.getTime());
+});

@@ -74,6 +74,8 @@ export class AdminService {
     await this.assertVenueBookingConfirmed(id);
     const { count } = await this.prisma.event.updateMany({ where: { id, status: 'IN_REVIEW' }, data: { status: 'PUBLISHED', reviewNote: null } });
     if (!count) throw new NotFoundException('No event waiting for review with that id.');
+    // First time on sale: "Just announced" counts from here (approving an edit later doesn't move it).
+    await this.prisma.event.updateMany({ where: { id, publishedAt: null }, data: { publishedAt: new Date() } });
     await this.audit.log(admin.id, 'event.approve', 'Event', id);
     await this.notifyDecision(id, admin, 'approved');
     return { status: 'PUBLISHED' };

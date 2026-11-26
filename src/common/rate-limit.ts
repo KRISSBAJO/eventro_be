@@ -37,6 +37,8 @@ export const RATE_RULES = {
   /** cookie consent records from the website (one per choice; many visitors can share an IP) */
   consent: { bucket: 'consent:ip', env: 'RATE_CONSENT_PER_IP', limit: 60, windowMs: HOUR, by: 'ip' },
   forgotPassword: { bucket: 'forgot:ip', env: 'RATE_FORGOT_PER_IP', limit: 5, windowMs: HOUR, by: 'ip' },
+  /** "Can't find my order?" (each request may email someone) */
+  findOrders: { bucket: 'find-orders:ip', env: 'RATE_FIND_ORDERS_PER_IP', limit: 5, windowMs: HOUR, by: 'ip' },
   /** resetting (and checking a reset link) and changing a password */
   password: { bucket: 'password:ip', env: 'RATE_PASSWORD_PER_IP', limit: 10, windowMs: HOUR, by: 'ip' },
   /** holds and orders, including resale orders */

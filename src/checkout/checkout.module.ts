@@ -95,6 +95,10 @@ export class QuoteDto extends PriceExtrasDto {
   @ApiPropertyOptional() @IsOptional() @IsString() @Matches(/^[A-Za-z0-9]{3,15}$/) promoCode?: string;
 }
 
+export class FindOrdersDto {
+  @ApiProperty({ description: 'The email used at checkout' }) @Transform(lower) @IsEmail() @MaxLength(254) email: string;
+}
+
 export class RefundRequestDto {
   @ApiProperty() @IsString() @MinLength(10) @MaxLength(1000) reason: string;
 }
@@ -159,6 +163,19 @@ export class CheckoutController {
   @Get('orders/:id')
   get(@Param('id') id: string, @CurrentUser() user: AuthUser | null, @Query('email') email?: string) {
     return this.checkout.getOrder(id, user, email);
+  }
+
+  /**
+   * "Can't find my order?": emails the orders bought with this address and a link to sign in, or to sign up with the
+   * same email (which brings guest tickets into the new account). Always answers the same way and does the work after
+   * replying, so neither the answer nor its timing tells whether that email has bought anything.
+   */
+  @Public()
+  @Post('orders/find')
+  @HttpCode(200)
+  @RateLimit(RATE_RULES.findOrders)
+  find(@Body() dto: FindOrdersDto) {
+    return this.checkout.findOrders(dto.email);
   }
 
   /** Order history: the signed-in fan's paid, refunded and cancelled-after-payment orders, newest first. */

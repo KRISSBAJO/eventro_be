@@ -368,6 +368,8 @@ export class OrganizerService {
       description: e.description,
       category: e.category,
       status: e.status,
+      /** when it first went on sale (null until approved) */
+      publishedAt: e.publishedAt,
       previewToken: previewToken(e.slug, e.status),
       reviewNote: e.reviewNote,
       salesPaused: e.salesPaused,

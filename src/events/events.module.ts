@@ -57,11 +57,11 @@ export class EventQueryDto {
   @IsIn(CURRENCY_CODES)
   currency?: string;
   @ApiPropertyOptional({
-    enum: ['date', 'price-asc', 'price-desc', 'distance', 'popular'],
-    description: `distance needs near (the default when near is given); popular = most paid tickets in the last ${TRENDING_DAYS} days, then soonest`,
+    enum: ['date', 'price-asc', 'price-desc', 'distance', 'popular', 'new'],
+    description: `distance needs near (the default when near is given); popular = most paid tickets in the last ${TRENDING_DAYS} days, then soonest; new = most recently put on sale first`,
   })
   @IsOptional()
-  @IsIn(['date', 'price-asc', 'price-desc', 'distance', 'popular'])
+  @IsIn(['date', 'price-asc', 'price-desc', 'distance', 'popular', 'new'])
   sort?: string;
   @ApiPropertyOptional({ default: 1 }) @IsOptional() @Type(() => Number) @IsInt() @Min(1) page?: number;
   @ApiPropertyOptional({ default: 24 }) @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100) pageSize?: number;
@@ -83,6 +83,7 @@ export class EventCardDto {
   @ApiProperty({ nullable: true }) lng: number | null;
   @ApiPropertyOptional({ nullable: true, description: 'With near: straight-line km from the visitor (null for online events)' }) distanceKm?: number | null;
   @ApiProperty({ description: `Paid tickets sold in the last ${TRENDING_DAYS} days` }) soldRecent: number;
+  @ApiProperty({ nullable: true, description: 'When the event first went on sale (what sort=new ranks by)' }) publishedAt: Date | null;
   @ApiProperty({ description: 'Fan-resale listings on sale now (0 when resale is off or has closed for the event)' }) resaleCount: number;
   @ApiPropertyOptional({ description: 'With currency: fromCents converted to that currency (approximate, for display)', example: { currency: 'USD', cents: 1613 } })
   fromCentsIn?: { currency: string; cents: number };
@@ -149,6 +150,7 @@ export class EventsService {
       currency: e.currency,
       fromCents: e.ticketTypes.length ? Math.min(...e.ticketTypes.map((t) => t.priceCents)) : 0,
       soldRecent: recent.get(e.id) ?? 0,
+      publishedAt: e.publishedAt,
       resaleCount: resale.get(e.id) ?? 0,
       dateMode: e.dateMode,
       nextDate: nextDateView(e.dateMode, datesOf.get(e.id) ?? [], now),
@@ -202,6 +204,8 @@ export class EventsService {
     if (q.sort === 'price-desc') cards.sort((a, b) => b.fromCents - a.fromCents);
     // Trending: most tickets sold lately, ties soonest first (the list is already soonest first, and sort is stable).
     if (q.sort === 'popular') cards.sort((a, b) => b.soldRecent - a.soldRecent);
+    // Just announced: most recently put on sale first (older events without a date last).
+    if (q.sort === 'new') cards.sort((a, b) => (b.publishedAt?.getTime() ?? 0) - (a.publishedAt?.getTime() ?? 0));
     const page = q.page ?? 1;
     const size = q.pageSize ?? 24;
     return { total: cards.length, page, pageSize: size, items: cards.slice((page - 1) * size, page * size) };

@@ -162,6 +162,7 @@ async function main() {
         imageUrl: c.image,
         startsAt: new Date(`${c.startsAt}Z`),
         status: 'PUBLISHED',
+        publishedAt: new Date(),
         ticketTypes: {
           create: plan.map((t, i) => ({ name: t.name, description: t.note, priceCents: t.priceCents, capacity: t.capacity, sold: t.sold, sortOrder: i })),
         },

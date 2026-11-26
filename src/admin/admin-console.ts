@@ -505,6 +505,7 @@ export class AdminConsoleService {
         priceWatchers: e._count.priceWatches,
         priceDrops: e._count.priceDrops,
         createdAt: e.createdAt,
+        publishedAt: e.publishedAt,
       })),
     };
   }
@@ -522,7 +523,7 @@ export class AdminConsoleService {
     if (e.org.suspendedAt) throw new BadRequestException('The organizer is suspended. Lift the suspension first.');
     // Same rule as review approval: held at a booked venue, only with the booking confirmed.
     await this.admin.assertVenueBookingConfirmed(id, 'Leave it unpublished so the organizer can pick another venue.');
-    await this.prisma.event.update({ where: { id }, data: { status: 'PUBLISHED', reviewNote: null, salesPaused: false } });
+    await this.prisma.event.update({ where: { id }, data: { status: 'PUBLISHED', reviewNote: null, salesPaused: false, publishedAt: e.publishedAt ?? new Date() } });
     await this.audit.log(me.id, 'event.publish', 'Event', id);
     return { status: 'PUBLISHED' };
   }

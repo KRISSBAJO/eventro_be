@@ -370,6 +370,9 @@ model Event {
   /// SINGLE (default), DATES or DAYS. For DATES and DAYS, startsAt/doorsAt/endsAt are a summary kept in sync with the
   /// ACTIVE dates: the earliest date's start and doors, the latest date's end (or start).
   dateMode    DateMode    @default(SINGLE)
+  /// When the event first went on sale (its first publish); later re-publishing doesn't move it. "Just announced"
+  /// (GET /events?sort=new) ranks by it. Null for events never published.
+  publishedAt DateTime?
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
 

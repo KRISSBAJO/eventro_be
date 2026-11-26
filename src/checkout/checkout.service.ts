@@ -52,6 +52,9 @@ const buyerFee = (unitCents: number, quantity: number, feeMode: 'BUYER' | 'ORGAN
 /** Serializes inventory changes per ticket type (row lock for the rest of the transaction). */
 const lockTicketType = (tx: Tx, id: string) => tx.$queryRaw`SELECT id FROM "TicketType" WHERE id = ${id} FOR UPDATE`;
 
+/** "Can't find my order?" emails per address per hour. */
+const FIND_PER_EMAIL_PER_HOUR = 3;
+
 @Injectable()
 export class CheckoutService {
   private readonly log = new Logger('Checkout');
@@ -624,6 +627,62 @@ export class CheckoutService {
       if (result.order.resaleListingId) void this.notices.resaleSold(result.order.resaleListingId);
     }
     return this.orderView(orderId);
+  }
+
+  /** The one answer to "Can't find my order?", whatever the email. */
+  static readonly FIND_REPLY = { message: 'If we have orders for that email, we’ve sent the list there. Check your inbox, and your spam folder too.' };
+  /** Order lists sent per email in the last hour (in this process), so the form can't be used to flood an inbox. */
+  private readonly findSent = new Map<string, number[]>();
+
+  findOrders(email: string) {
+    void this.sendOrderList(email).catch((e) => this.log.warn(`Order list email: ${(e as Error).message}`));
+    return CheckoutService.FIND_REPLY;
+  }
+
+  private async sendOrderList(email: string) {
+    const now = Date.now();
+    const recent = (this.findSent.get(email) ?? []).filter((t) => now - t < 3600_000);
+    if (recent.length >= FIND_PER_EMAIL_PER_HOUR) return;
+    const orders = await this.prisma.order.findMany({
+      where: { email, OR: [{ status: { in: ['PAID', 'REFUNDED', 'PARTIALLY_REFUNDED'] } }, { status: 'CANCELLED', paidAt: { not: null } }] },
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+      select: {
+        id: true,
+        status: true,
+        quantity: true,
+        event: { select: { title: true, startsAt: true, online: true, dateMode: true, dates: true, venue: { select: { name: true, city: true } } } },
+        ticketType: { select: { name: true, eventDateId: true, validDateIds: true } },
+      },
+    });
+    if (!orders.length) return;
+    recent.push(now);
+    this.findSent.set(email, recent);
+    if (this.findSent.size > 5000) for (const [k, v] of this.findSent) if (v.every((t) => now - t >= 3600_000)) this.findSent.delete(k);
+
+    const account = await this.prisma.user.findUnique({ where: { email }, select: { suspendedAt: true } });
+    const status = (s: string) => (s === 'REFUNDED' ? ' · refunded' : s === 'PARTIALLY_REFUNDED' ? ' · partly refunded' : s === 'CANCELLED' ? ' · cancelled' : '');
+    const lines = orders.map((o) => {
+      const where = o.event.online ? 'Online' : o.event.venue ? o.event.venue.city : '';
+      return `${o.event.title}: ${o.quantity} × ${o.ticketType.name}, ${whenText(o.event.dateMode, o.event, o.ticketType, o.event.dates)}${where ? ` · ${where}` : ''}. Order ${o.id}${status(o.status)}.`;
+    });
+    const has = account && !account.suspendedAt;
+    const { html, text } = render({
+      preheader: `${orders.length} ${orders.length === 1 ? 'order' : 'orders'} bought with ${email}.`,
+      heading: 'Your Omoshow orders',
+      paragraphs: [
+        `Here ${orders.length === 1 ? 'is the order' : `are the ${orders.length} orders`} bought with ${email}${orders.length === 20 ? ' (the 20 newest)' : ''}:`,
+        ...lines,
+        has
+          ? 'Sign in with this email to see your tickets and show the QR code at the door.'
+          : `Sign up with this same email (${email}) and your tickets move into your new account, ready for the door.`,
+        'If you didn’t ask for this list, you can ignore this email.',
+      ],
+      cta: { label: has ? 'Sign in to see my tickets' : 'Get my tickets', url: `${config.webUrl}/signin?next=%2Ftickets` },
+      footer: 'You’re getting this because someone asked Omoshow to resend the orders for this email. Need help?',
+      footerLink: { label: 'Visit the help centre', url: `${config.webUrl}/help` },
+    });
+    await this.mail.send('order.lookup', { to: email, subject: 'Your Omoshow orders', html, text });
   }
 
   private async sendReceipt(orderId: string) {
