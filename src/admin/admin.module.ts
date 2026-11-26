@@ -10,8 +10,11 @@ import { Payments } from '../checkout/payments';
 import { MailService, formatMoney, render } from '../mail/mail.module';
 import { config } from '../config';
 import { CurrentUser, Roles, type AuthUser } from '../common/auth';
-import { donationLeft, ticketLeft, ticketTotal } from '../domain/pwyw';
-import { organizerPaidOut } from '../domain/paid-out';
+import { donationLeft, ticketLeft, ticketRefunded, ticketTotal } from '../domain/pwyw';
+import { organizerPaidOut, organizerShareOf } from '../domain/paid-out';
+import { organizerNet } from '../domain/money';
+import { Prisma, type Order } from '@prisma/client';
+import { readPendingEdit } from '../domain/pending-edit';
 import { LIVE_TYPE, dateView } from '../domain/event-dates';
 import { releaseReservations } from '../schedule/release';
 
@@ -93,6 +96,86 @@ export class AdminService {
     return { status: 'REJECTED' };
   }
 
+  /* ---------- edits to live events ---------- */
+
+  /** Live events with a title, subtitle, cover or photo change waiting (Event.pendingEdit), oldest first. */
+  async pendingEdits() {
+    const rows = await this.prisma.event.findMany({
+      where: { pendingEdit: { not: Prisma.DbNull } },
+      select: { id: true, slug: true, title: true, subtitle: true, imageUrl: true, status: true, pendingEdit: true, org: { select: { id: true, name: true, verifiedAt: true } } },
+      orderBy: { updatedAt: 'asc' },
+      take: 200,
+    });
+    return rows
+      .map((e) => ({ ...e, pendingEdit: readPendingEdit(e.pendingEdit) }))
+      .filter((e) => e.pendingEdit)
+      .sort((a, b) => a.pendingEdit!.submittedAt.localeCompare(b.pendingEdit!.submittedAt));
+  }
+
+  /** Puts a waiting edit live (only what's still waiting; the organizer may have withdrawn it). */
+  async approveEdit(id: string, admin: AuthUser) {
+    const e = await this.prisma.event.findUnique({ where: { id }, select: { pendingEdit: true, updatedAt: true } });
+    const pe = readPendingEdit(e?.pendingEdit);
+    if (!e || !pe) throw new NotFoundException('No change waiting for review on this event.');
+    // Only the version the admin looked at: if the organizer changed it since, they look again.
+    const { count } = await this.prisma.event.updateMany({
+      where: { id, updatedAt: e.updatedAt },
+      data: {
+        ...(pe.title !== undefined ? { title: pe.title } : {}),
+        ...(pe.subtitle !== undefined ? { subtitle: pe.subtitle } : {}),
+        ...(pe.imageUrl !== undefined ? { imageUrl: pe.imageUrl } : {}),
+        ...(pe.media !== undefined ? { media: pe.media as Prisma.InputJsonValue } : {}),
+        pendingEdit: Prisma.DbNull,
+        pendingEditNote: null,
+      },
+    });
+    if (!count) throw new ConflictException('The organizer changed this edit a moment ago. Refresh and look again.');
+    await this.audit.log(admin.id, 'event.edit_approve', 'Event', id, { fields: Object.keys(pe).filter((k) => k !== 'submittedAt' && k !== 'by') });
+    void this.notifyEdit(id, 'approved');
+    return { approved: true };
+  }
+
+  /** Turns a waiting edit down: fans keep seeing the approved version, and the organizer gets the note. */
+  async rejectEdit(id: string, admin: AuthUser, note: string) {
+    const e = await this.prisma.event.findUnique({ where: { id }, select: { pendingEdit: true } });
+    if (!e || !readPendingEdit(e.pendingEdit)) throw new NotFoundException('No change waiting for review on this event.');
+    await this.prisma.event.update({ where: { id }, data: { pendingEdit: Prisma.DbNull, pendingEditNote: note.trim() } });
+    await this.audit.log(admin.id, 'event.edit_reject', 'Event', id, { note });
+    void this.notifyEdit(id, 'rejected', note.trim());
+    return { approved: false };
+  }
+
+  /** "Your changes to X are live" / "weren't approved", to the organizer's admins and managers. */
+  private async notifyEdit(id: string, decision: 'approved' | 'rejected', note?: string) {
+    try {
+      const e = await this.prisma.event.findUnique({
+        where: { id },
+        select: { id: true, slug: true, title: true, org: { select: { name: true, supportEmail: true, members: { where: { status: 'ACTIVE', role: { in: ['ADMIN', 'MANAGER'] } }, select: { email: true } } } } },
+      });
+      if (!e) return;
+      const to = [...new Set([e.org.supportEmail, ...e.org.members.map((m) => m.email)].filter(Boolean).map((x) => x.trim().toLowerCase()))];
+      const copy =
+        decision === 'approved'
+          ? render({
+              preheader: `Your changes to ${e.title} are live.`,
+              heading: 'Your changes are live',
+              paragraphs: [`Omoshow checked your changes to ${e.title}, and fans now see them.`],
+              cta: { label: 'See your event', url: `${config.webUrl}/events/${e.slug}` },
+              footer: `You’re getting this because you manage ${e.org.name} on Omoshow.`,
+            })
+          : render({
+              preheader: `Your changes to ${e.title} weren’t approved.`,
+              heading: 'Your changes weren’t approved',
+              paragraphs: [`Omoshow didn’t approve your changes to ${e.title}, so fans still see the version that was live before. The note from the team:`, `“${note ?? ''}”`, 'You can make new changes any time.'],
+              cta: { label: 'Edit the event', url: `${config.webUrl}/organizer/events/${e.id}` },
+              footer: `You’re getting this because you manage ${e.org.name} on Omoshow.`,
+            });
+      await this.mail.sendMany(`event.edit_${decision}`, to.map((x) => ({ to: x, subject: decision === 'approved' ? `Live: your changes to ${e.title}` : `Not approved: your changes to ${e.title}`, ...copy })));
+    } catch {
+      /* the decision stands */
+    }
+  }
+
   /**
    * Tells the organizer about a review decision (their admins and managers, plus the support address), and copies the
    * other Omoshow admins on rejections so the team sees why. Email trouble never undoes the decision.
@@ -157,10 +240,13 @@ export class AdminService {
    * A full refund of a resale order holds the seller's payout for review, except with `keepSellerPayout`: the resale
    * scan guarantee refunds at Omoshow's cost, and the seller (whose ticket was voided at sale) is paid as normal.
    */
-  async refundOrder(orderId: string, amountCents: number, admin: Pick<AuthUser, 'id'> | null, reason: string, opts: { keepSellerPayout?: boolean; refundKey?: string } = {}) {
+  async refundOrder(orderId: string, amountCents: number, admin: Pick<AuthUser, 'id'> | null, reason: string, opts: { keepSellerPayout?: boolean; refundKey?: string; recordOwed?: boolean } = {}) {
     const o = await this.prisma.order.findUnique({ where: { id: orderId } });
     if (!o) throw new NotFoundException('Order not found.');
     const remaining = o.totalCents - o.refundedCents;
+    // `recordOwed` (an event or date cancelled or moved): if the organizer was already paid for this order, their share
+    // of the refund is recorded as owed by them to Omoshow, so the money isn't silently Omoshow's loss.
+    const owed = opts.recordOwed ? await this.owedOnRefund(o, Math.min(amountCents, remaining)) : 0;
     if (amountCents > remaining) throw new BadRequestException(`At most ${remaining} cents can still be refunded.`);
     // `refundKey`: a retried refund is a no-op at providers that support idempotency (Stripe), so a retry after a
     // database failure can't refund twice.
@@ -176,7 +262,7 @@ export class AdminService {
     await this.prisma.$transaction(async (tx) => {
       await tx.order.update({
         where: { id: orderId },
-        data: { refundedCents: { increment: amountCents }, donationRefundedCents, status: full ? 'REFUNDED' : 'PARTIALLY_REFUNDED' },
+        data: { refundedCents: { increment: amountCents }, donationRefundedCents, status: full ? 'REFUNDED' : 'PARTIALLY_REFUNDED', ...(owed ? { refundOwedCents: { increment: owed } } : {}) },
       });
       if (ticketsDone) {
         const { count } = await tx.ticket.updateMany({ where: { orderId, status: { not: 'VOID' } }, data: { status: 'VOID', listCents: null, transferTo: null } });
@@ -188,7 +274,20 @@ export class AdminService {
         } else if (count) await tx.ticketType.update({ where: { id: o.ticketTypeId }, data: { sold: { decrement: count } } });
       }
     });
-    await this.audit.log(admin?.id ?? null, full ? 'order.refund' : 'order.partial_refund', 'Order', orderId, { amountCents, currency: o.currency, reason });
+    await this.audit.log(admin?.id ?? null, full ? 'order.refund' : 'order.partial_refund', 'Order', orderId, { amountCents, currency: o.currency, reason, ...(owed ? { organizerOwedCents: owed } : {}) });
+  }
+
+  /** The organizer's share of a refund of `amountCents` from `o`, if they'd already been paid for the order; else 0. */
+  private async owedOnRefund(o: Order, amountCents: number) {
+    if (amountCents <= 0 || o.kind !== 'SALE') return 0;
+    const e = await this.prisma.event.findUnique({
+      where: { id: o.eventId },
+      select: { feeMode: true, org: { select: { payoutSchedule: true, payoutProvider: true, paystackSubaccount: true } } },
+    });
+    if (!e || !organizerPaidOut(o, e.org)) return 0;
+    const listing = o.resaleListingId ? await this.prisma.resaleListing.findUnique({ where: { id: o.resaleListingId }, select: { royaltyCents: true } }) : null;
+    const ticketNet = o.resaleListingId ? (listing?.royaltyCents ?? 0) : organizerNet(o.unitCents, e.feeMode, config.organizerFeePermille) * o.quantity - o.discountCents - ticketRefunded(o);
+    return organizerShareOf(o, amountCents, ticketNet);
   }
 
   /**
@@ -341,6 +440,17 @@ export class AdminController {
   }
   @Post('events/:id/reject') @HttpCode(200) reject(@Param('id') id: string, @CurrentUser() u: AuthUser, @Body() dto: RejectDto) {
     return this.svc.reject(id, u, dto.note);
+  }
+
+  /** Edits to live events waiting for a check (title, subtitle, cover, photos). */
+  @Get('pending-edits') pendingEdits() {
+    return this.svc.pendingEdits();
+  }
+  @Post('events/:id/edit/approve') @HttpCode(200) approveEdit(@Param('id') id: string, @CurrentUser() u: AuthUser) {
+    return this.svc.approveEdit(id, u);
+  }
+  @Post('events/:id/edit/reject') @HttpCode(200) rejectEdit(@Param('id') id: string, @CurrentUser() u: AuthUser, @Body() dto: RejectDto) {
+    return this.svc.rejectEdit(id, u, dto.note);
   }
 
   @ApiQuery({ name: 'status', required: false, enum: ['OPEN', 'APPROVED', 'PARTIAL', 'DENIED'] })

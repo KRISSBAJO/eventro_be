@@ -305,6 +305,30 @@ export class NoticeService implements OnModuleInit, OnModuleDestroy {
     return [...ids];
   }
 
+  /** Accounts holding the tickets `where` picks (owners, or holders by email). */
+  async holdersWhere(where: Prisma.TicketWhereInput) {
+    const rows = await this.prisma.ticket.findMany({ where, select: { ownerId: true, holderEmail: true } });
+    const byEmail = await this.usersByEmail(rows.filter((r) => !r.ownerId).map((r) => r.holderEmail));
+    return [...new Set(rows.map((r) => r.ownerId ?? byEmail.get(r.holderEmail)).filter((x): x is string => !!x))];
+  }
+
+  /** The event (or one date of it) moved: to everyone holding a ticket for it. Once per change and person. */
+  eventMoved(e: { id: string; title: string; orgName: string }, c: { id: string; to: string }, userIds: string[]) {
+    return this.guard(`event.moved ${c.id}`, async () => {
+      await this.push.send(
+        'event.moved',
+        'orders',
+        userIds.map((userId) => ({
+          userId,
+          title: `New time: ${e.title}`,
+          body: `${e.orgName} moved it to ${c.to}. Your tickets still work. Can’t make it? You can get a refund.`,
+          data: link('/tickets', { type: 'event.moved', eventId: e.id }),
+          dedupeKey: `event.moved:${c.id}:${userId}`,
+        })),
+      );
+    });
+  }
+
   /** The event was cancelled: to everyone who held a ticket (collected before the tickets were voided). */
   eventCancelled(e: { id: string; title: string; orgName: string }, userIds: string[]) {
     return this.guard(`event.cancelled ${e.id}`, async () => {

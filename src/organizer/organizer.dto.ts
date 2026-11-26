@@ -270,6 +270,11 @@ export class CreateEventDto extends EventExtrasDto {
 }
 
 export class UpdateEventDto extends EventExtrasDto {
+  @ApiPropertyOptional({ description: 'Why the time or date moved (live events with tickets out): sent to ticket holders', maxLength: 300 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  changeReason?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() @MinLength(3) @MaxLength(120) title?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(120) subtitle?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(5000) description?: string;

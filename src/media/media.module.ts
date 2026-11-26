@@ -10,6 +10,7 @@
  *
  * Images are served by mediaEX's on-the-fly transformer (resized, WebP/AVIF), videos by its HLS player.
  */
+import { holdLiveEdit, pendingEditJson, readPendingEdit } from '../domain/pending-edit';
 import {
   BadRequestException,
   Body,
@@ -214,7 +215,7 @@ export class MediaService {
 
   /** Sets an event's photos and videos (in order). Only media uploaded by the organization's members can be used. */
   async setEventMedia(eventId: string, user: AuthUser, items: MediaItem[]) {
-    const ev = await this.prisma.event.findUnique({ where: { id: eventId }, select: { orgId: true, media: true } });
+    const ev = await this.prisma.event.findUnique({ where: { id: eventId }, select: { orgId: true, media: true, status: true, title: true, subtitle: true, imageUrl: true, pendingEdit: true } });
     if (!ev) throw new NotFoundException('Event not found.');
     const member = await this.prisma.organizationMember.findFirst({ where: { orgId: ev.orgId, userId: user.id, status: 'ACTIVE', role: { in: ['ADMIN', 'MANAGER'] } } });
     if (!member) throw new ForbiddenException('Your role can’t change this event’s media.');
@@ -251,11 +252,22 @@ export class MediaService {
     // The first item is the cover, photo or video (a video's card image is a frame from it).
     const cover = clean[0];
     const imageUrl = cover ? coverUrl(cover.id, cover.kind) : null;
+    const change = { media: clean, ...(imageUrl ? { imageUrl } : {}) };
+    // A live event's new photos and videos wait for Omoshow to check them (see domain/pending-edit); fans keep the
+    // approved ones. Removing or reordering ones already approved happens at once.
+    if (ev.status === 'PUBLISHED' && clean.some((i) => !current.has(i.id))) {
+      const { next } = holdLiveEdit(ev, change, user.id);
+      await this.prisma.event.update({ where: { id: eventId }, data: { pendingEdit: pendingEditJson(next) ?? Prisma.DbNull, pendingEditNote: null } });
+
+      return { media: clean.map(mediaUrls), imageUrl, heldForReview: ['media'] };
+    }
+    const waiting = readPendingEdit(ev.pendingEdit);
+    const next = waiting ? holdLiveEdit({ ...ev, ...change }, change, user.id).next : undefined;
     await this.prisma.event.update({
       where: { id: eventId },
-      data: { media: clean as unknown as Prisma.InputJsonValue, ...(imageUrl ? { imageUrl } : {}) },
+      data: { media: clean as unknown as Prisma.InputJsonValue, ...(imageUrl ? { imageUrl } : {}), ...(waiting ? { pendingEdit: pendingEditJson(next ?? null) ?? Prisma.DbNull } : {}) },
     });
-    return { media: clean.map(mediaUrls), imageUrl };
+    return { media: clean.map(mediaUrls), imageUrl, heldForReview: [] as string[] };
   }
 
   /** A ready video's HLS address, or undefined while it's still processing (or mediaEX can't say). Too-long videos are refused. */

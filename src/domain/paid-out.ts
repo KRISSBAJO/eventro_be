@@ -19,3 +19,25 @@ export function organizerPaidOut(
   const day = (d: Date) => d.toISOString().slice(0, 10);
   return day(order.paidAt) < day(new Date(now.getTime() - (org.payoutSchedule === 'DAILY' ? 1 : 7) * DAY));
 }
+
+/**
+ * The organizer's share of `amountCents` refunded from an order, as their payouts counted it: their net on the tickets
+ * (after the fee, discounts and earlier refunds; a fan-resale order only carries the event's royalty) plus the donation.
+ * A partial refund takes a matching part of the ticket share first, then the donation. Used to record what an organizer
+ * owes back when an order they were already paid for is refunded (Order.refundOwedCents).
+ */
+export function organizerShareOf(
+  o: { quantity: number; unitCents: number; discountCents: number; totalCents: number; refundedCents: number; donationCents: number; donationRefundedCents: number },
+  amountCents: number,
+  ticketNetCents: number,
+) {
+  const ticketTotal = o.totalCents - o.donationCents;
+  const ticketRefunded = Math.max(0, o.refundedCents - o.donationRefundedCents);
+  const ticketLeft = Math.max(0, ticketTotal - ticketRefunded);
+  const donationLeft = Math.max(0, o.donationCents - o.donationRefundedCents);
+  const net = Math.max(0, ticketNetCents);
+  const fromTickets = Math.min(amountCents, ticketLeft);
+  const ticketPart = ticketLeft > 0 ? Math.round((net * fromTickets) / ticketLeft) : 0;
+  const donationPart = Math.min(donationLeft, Math.max(0, amountCents - fromTickets));
+  return Math.min(net, ticketPart) + donationPart;
+}

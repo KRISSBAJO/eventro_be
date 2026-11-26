@@ -1,4 +1,5 @@
 import { BadRequestException, Body, Controller, Delete, Get, Header, HttpCode, Injectable, Module, NotFoundException, Param, Post } from '@nestjs/common';
+import { dateChangeView } from '../domain/date-changes';
 import { ApiBearerAuth, ApiProperty, ApiTags } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import { IsEmail, IsInt, Min } from 'class-validator';
@@ -87,6 +88,9 @@ export class TicketsService {
           select: {
             id: true,
             createdAt: true,
+            paidAt: true,
+            email: true,
+            buyerId: true,
             quantity: true,
             totalCents: true,
             refundedCents: true,
@@ -109,16 +113,25 @@ export class TicketsService {
     // Paid tickets carry the Omoshow Guarantee: cover, who pays, the claim window and any claim (see src/guarantee).
     // Booked sessions (bookable schedule items) go with each ticket.
     const sessions = await this.schedule.sessionsByTicket(rows.map((r) => r.id));
-    const tickets = rows.map(({ event: { seatMap, streamUrl, dates, ...event }, guaranteeClaim, ...t }) => {
+    // A live event moved since the ticket was bought: when, why, and whether the buyer can still take a refund.
+    const changes = await this.prisma.dateChange.findMany({ where: { eventId: { in: [...new Set(rows.map((r) => r.eventId))] } } });
+    const tickets = rows.map(({ event: { seatMap, streamUrl, dates, ...event }, guaranteeClaim, order: { email: buyerEmail, buyerId, ...order }, ...t }) => {
+      const dateChange = dateChangeView(
+        changes.filter((c) => c.eventId === t.eventId),
+        event.dateMode,
+        t.ticketType,
+        order,
+        { isBuyer: buyerId === user.id || buyerEmail === user.email, used: t.status === 'CHECKED_IN' },
+      );
       const s = (seatMap as SeatMap | null)?.sections.find((x) => x.id === t.section);
       const watch = event.online && (t.status === 'ACTIVE' || t.status === 'CHECKED_IN') ? streamUrl : null;
       // Usable tickets carry their QR seed, so the app can show the door code offline (see GET /tickets/:id/qr-seed).
       const seed = this.scannable({ status: t.status, event }) ? { qrSeed: seedFor(t) } : {};
       const dated = { mode: event.dateMode, dates, tt: t.ticketType };
-      const guarantee = guaranteeFor({ id: t.id, resaleGuarantee: t.resaleGuarantee, guaranteeClaim }, t.order, event, Date.now(), dated);
+      const guarantee = guaranteeFor({ id: t.id, resaleGuarantee: t.resaleGuarantee, guaranteeClaim }, order, event, Date.now(), dated);
       // Multiple dates: the ticket's own date (DATES) or the days it admits on (DAYS); the event's dates for context.
       const when = ticketDates(event.dateMode, t.ticketType, dates);
-      return { ...t, ticketType: withLook(t.ticketType), ...seed, event: { ...event, streamUrl: watch, dates: dates.sort(byStart).map(dateView) }, ...when, sectionName: s ? sectionName(s) : null, guarantee, sessions: sessions.get(t.id) ?? [] };
+      return { ...t, order, dateChange, ticketType: withLook(t.ticketType), ...seed, event: { ...event, streamUrl: watch, dates: dates.sort(byStart).map(dateView) }, ...when, sectionName: s ? sectionName(s) : null, guarantee, sessions: sessions.get(t.id) ?? [] };
     });
     const incoming = await this.prisma.ticket.findMany({
       where: { transferTo: user.email, status: 'TRANSFER_PENDING' },

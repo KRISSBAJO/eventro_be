@@ -85,6 +85,8 @@ export class CheckoutService {
       // Multiple dates: a copy of a cancelled date isn't on sale, and each date (or a pass's first day) stops on its own.
       const date = tt.eventDateId ? ev.dates.find((d) => d.id === tt.eventDateId) : null;
       if (date && date.status === 'CANCELLED') throw new BadRequestException('This date was cancelled.');
+      // Multi-day: a ticket whose every day was cancelled has nothing left to admit to.
+      if (ev.dateMode === 'DAYS' && tt.validDateIds.length && !ev.dates.some((d) => tt.validDateIds.includes(d.id) && d.status === 'ACTIVE')) throw new BadRequestException('The day these tickets were for was cancelled.');
       if (ticketTimes(ev.dateMode, ev, tt, ev.dates).first.startsAt <= now) throw new BadRequestException(date ? 'This date has already started.' : 'This event has already started.');
       if ((tt.salesStart && tt.salesStart > now) || (tt.salesEnd && tt.salesEnd < now)) throw new BadRequestException('These tickets are not on sale right now.');
       if (input.quantity > tt.maxPerOrder) throw new BadRequestException(`You can buy up to ${tt.maxPerOrder} of these per order.`);

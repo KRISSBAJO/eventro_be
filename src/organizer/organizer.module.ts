@@ -1,4 +1,5 @@
 import { Body, Controller, Delete, Get, Header, HttpCode, Module, Param, Patch, Post, Put, Query } from '@nestjs/common';
+import { DateChangeController, DateChangeService } from './date-changes';
 import { ApiBearerAuth, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { OrganizerService } from './organizer.service';
 import { VenueChange } from './venue-change';
@@ -147,6 +148,10 @@ export class OrganizerController {
   @Delete('events/:id/ticket-types/:ttId') deleteTicketType(@Param('id') id: string, @Param('ttId') ttId: string, @CurrentUser() u: AuthUser) {
     return this.svc.deleteTicketType(id, ttId, u);
   }
+  /** Withdraws a change to a live event that's waiting for Omoshow's check. */
+  @Delete('events/:id/pending-edit') withdrawEdit(@Param('id') id: string, @CurrentUser() u: AuthUser) {
+    return this.svc.withdrawEdit(id, u);
+  }
   @Post('events/:id/submit') @HttpCode(200) submit(@Param('id') id: string, @CurrentUser() u: AuthUser) {
     return this.svc.submit(id, u);
   }
@@ -243,7 +248,7 @@ export class OrganizerController {
 
 @Module({
   imports: [CheckoutModule, AdminModule, VenuesModule],
-  controllers: [OrganizerController, CompController, GuestListController, DonationController],
-  providers: [OrganizerService, PayoutAccounts, VenueChange, CompService, GuestListService, DonationService, EventDatesService],
+  controllers: [OrganizerController, CompController, GuestListController, DonationController, DateChangeController],
+  providers: [OrganizerService, PayoutAccounts, VenueChange, CompService, GuestListService, DonationService, EventDatesService, DateChangeService],
 })
 export class OrganizerModule {}

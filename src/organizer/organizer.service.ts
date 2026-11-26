@@ -25,7 +25,9 @@ import { VenueBookingService, assertFits } from '../venues/venue-bookings';
 import { isLive } from '../venues/booking-rules';
 import { ScheduleService } from '../schedule/schedule.module';
 import { EventDatesService, planDates, capacitiesFor, daysFor, resolveRef, type TierInput } from './event-dates';
-import { liveType, dateName, dateRangeWhere, dateView, daysList, doorDate, isActive, nextActive, nextDateView, seatTier, ticketDates, ticketTimes, validDays, type DateMode } from '../domain/event-dates';
+import { DateChangeService, type Move } from './date-changes';
+import { holdLiveEdit, pendingEditJson, readPendingEdit } from '../domain/pending-edit';
+import { checkSingleTimes, liveType, dateName, dateRangeWhere, dateView, daysList, doorDate, isActive, nextActive, nextDateView, seatTier, ticketDates, ticketTimes, validDays, type DateMode } from '../domain/event-dates';
 import type {
   AttachBookingDto,
   ChangeVenueDto,
@@ -119,6 +121,7 @@ export class OrganizerService {
     private readonly guests: GuestListService,
     private readonly dates: EventDatesService,
     private readonly schedule: ScheduleService,
+    private readonly dateChanges: DateChangeService,
   ) {}
 
   /* ---------- access ---------- */
@@ -257,6 +260,8 @@ export class OrganizerService {
     const planned = mode === 'SINGLE' ? null : planDates(mode, dto.dates);
     if (mode === 'SINGLE') {
       if (dto.dates?.length) throw new BadRequestException('Set dateMode to DATES or DAYS to give this event more than one date.');
+      // A draft may start in the past (it can't be submitted until it doesn't), but its times have to make sense.
+      checkSingleTimes({ startsAt: new Date(dto.startsAt), doorsAt: dto.doorsAt ? new Date(dto.doorsAt) : null, endsAt: dto.endsAt ? new Date(dto.endsAt) : null }, false);
       const extra = dto.ticketTypes.find((t) => t.capacityByDate || t.validDates);
       if (extra) throw new BadRequestException(`${extra.name.trim()}: capacityByDate and validDates are for events with more than one date.`);
     }
@@ -544,6 +549,14 @@ export class OrganizerService {
       dto.endsAt = undefined;
     }
     if (dto.startsAt || dto.doorsAt || dto.endsAt) {
+      // Switching back to one date: the times sent with it (the old dates' summary doesn't apply).
+      const switching = ev.dateMode !== 'SINGLE';
+      const next = {
+        startsAt: dto.startsAt ? new Date(dto.startsAt) : ev.startsAt,
+        doorsAt: dto.doorsAt ? new Date(dto.doorsAt) : switching ? null : ev.doorsAt,
+        endsAt: dto.endsAt ? new Date(dto.endsAt) : switching ? null : ev.endsAt,
+      };
+      checkSingleTimes(next, next.startsAt.getTime() !== ev.startsAt.getTime());
       // Held at a booked venue: the new times still have to sit within the booking.
       const booking = await this.prisma.venueBooking.findUnique({ where: { eventId: id } });
       if (booking && isLive(booking)) {
@@ -562,6 +575,9 @@ export class OrganizerService {
       ...(dto.startsAt ? { startsAt: new Date(dto.startsAt) } : {}),
       ...(dto.doorsAt ? { doorsAt: new Date(dto.doorsAt) } : {}),
       ...(dto.endsAt ? { endsAt: new Date(dto.endsAt) } : {}),
+      // Back to one date with a new start: the old dates' doors and end go if they no longer fit it.
+      ...(ev.dateMode !== 'SINGLE' && dto.startsAt && !dto.endsAt && ev.endsAt && ev.endsAt <= new Date(dto.startsAt) ? { endsAt: null } : {}),
+      ...(ev.dateMode !== 'SINGLE' && dto.startsAt && !dto.doorsAt && ev.doorsAt && ev.doorsAt > new Date(dto.startsAt) ? { doorsAt: null } : {}),
       ...(dto.visibility ? { visibility: dto.visibility } : {}),
       ...(dto.resaleEnabled !== undefined ? { resaleEnabled: dto.resaleEnabled } : {}),
       ...(dto.resaleCapPercent !== undefined ? { resaleCapPercent: dto.resaleCapPercent } : {}),
@@ -570,6 +586,21 @@ export class OrganizerService {
       ...(dto.transferCutoffMinutes !== undefined ? { transferCutoffMinutes: dto.transferCutoffMinutes } : {}),
       ...(dto.compLimit !== undefined ? { compLimit: dto.compLimit } : {}),
     };
+    // A live event's title, subtitle and cover wait for Omoshow to check them (see domain/pending-edit); fans keep
+    // seeing the approved ones. Before it's live they change at once (the event's own review covers them), and any
+    // older waiting change to the same field is dropped.
+    let heldForReview: string[] = [];
+    const reviewed = { title: dto.title?.trim(), subtitle: dto.subtitle?.trim(), imageUrl: dto.imageUrl };
+    if (Object.values(reviewed).some((v) => v !== undefined)) {
+      const live = ev.status === 'PUBLISHED' ? ev : { ...ev, ...Object.fromEntries(Object.entries(reviewed).filter(([, v]) => v !== undefined)) };
+      const { held, next } = holdLiveEdit(live, reviewed, user.id);
+      if (ev.status === 'PUBLISHED') {
+        heldForReview = held;
+        for (const k of ['title', 'subtitle', 'imageUrl'] as const) delete (data as Record<string, unknown>)[k];
+      }
+      if (next || readPendingEdit(ev.pendingEdit)) data.pendingEdit = pendingEditJson(next) ?? Prisma.DbNull;
+      if (held.length) data.pendingEditNote = null;
+    }
     const donationKeys = ['donationsEnabled', 'donationCause', 'donationDescription', 'donationSuggestedCents', 'donationMinCents'] as const;
     if (donationKeys.some((k) => dto[k] !== undefined)) {
       Object.assign(data, rule(() => cleanDonationSettings(ev, dto)));
@@ -582,7 +613,19 @@ export class OrganizerService {
       else await this.audit.log(user.id, 'event.dates', 'Event', id, { before: before.map((d) => ({ id: d.id, startsAt: d.startsAt.toISOString(), label: d.label })), after: dates.map((d) => ({ id: d.id, startsAt: d.startsAt.toISOString(), label: d.label })) });
     }
     const updated = await this.prisma.event.update({ where: { id }, data, include: { dates: { orderBy: { startsAt: 'asc' } } } });
-    return { ...updated, dates: updated.dates.map(dateView) };
+    // A live event moved after tickets were sold: holders hear, and buyers can take a refund (see DateChangeService).
+    const moves: Move[] =
+      updated.dateMode === 'SINGLE'
+        ? ev.dateMode === 'SINGLE' && updated.startsAt.getTime() !== ev.startsAt.getTime()
+          ? [{ eventDateId: null, from: ev.startsAt, to: updated.startsAt }]
+          : []
+        : updated.dates.flatMap((d) => {
+            const old = ev.dates.find((x) => x.id === d.id);
+            return old && isActive(old) && isActive(d) && old.startsAt.getTime() !== d.startsAt.getTime() ? [{ eventDateId: d.id, from: old.startsAt, to: d.startsAt }] : [];
+          });
+    const dateChanges = moves.length ? await this.dateChanges.record(id, moves, dto.changeReason, user) : [];
+    if (heldForReview.length) await this.audit.log(user.id, 'event.edit_submit', 'Event', id, { fields: heldForReview });
+    return { ...updated, dates: updated.dates.map(dateView), dateChanges, heldForReview };
   }
 
   /** Moves an in-person event to another venue; see VenueChange. Admins and managers, like editing. */
@@ -793,7 +836,27 @@ export class OrganizerService {
     // Held at a venue booked on Omoshow: only once the venue has confirmed.
     const held = await this.bookings.submitBlock(id);
     if (held) throw new ConflictException(held);
-    return this.prisma.event.update({ where: { id }, data: { status: 'IN_REVIEW', reviewNote: null } });
+    // A change that was waiting while it was live (it was taken down since) goes into this full review.
+    const pe = readPendingEdit(ev.pendingEdit);
+    const folded = pe
+      ? {
+          ...(pe.title !== undefined ? { title: pe.title } : {}),
+          ...(pe.subtitle !== undefined ? { subtitle: pe.subtitle } : {}),
+          ...(pe.imageUrl !== undefined ? { imageUrl: pe.imageUrl } : {}),
+          ...(pe.media !== undefined ? { media: pe.media as Prisma.InputJsonValue } : {}),
+          pendingEdit: Prisma.DbNull,
+        }
+      : {};
+    return this.prisma.event.update({ where: { id }, data: { status: 'IN_REVIEW', reviewNote: null, ...folded } });
+  }
+
+  /** Withdraws a change waiting for Omoshow's check (fans keep seeing the live version). */
+  async withdrawEdit(id: string, user: AuthUser) {
+    const ev = await this.eventFor(id, user, EDIT);
+    if (!readPendingEdit(ev.pendingEdit)) throw new NotFoundException('There’s no change waiting for review.');
+    await this.prisma.event.update({ where: { id }, data: { pendingEdit: Prisma.DbNull } });
+    await this.audit.log(user.id, 'event.edit_withdraw', 'Event', id);
+    return { withdrawn: true };
   }
 
   /** What cancelling would refund. Org admins only, like cancelling itself. */
@@ -806,6 +869,20 @@ export class OrganizerService {
   async cancelEvent(id: string, user: AuthUser, reason: string, confirmTitle: string) {
     const ev = await this.eventFor(id, user, ADMIN_ONLY);
     if (confirmTitle.trim() !== ev.title.trim()) throw new BadRequestException('Type the event title exactly as it appears to confirm.');
+    // Once it has started, fans may already have been in: only Omoshow can cancel and refund it then. A retry of an
+    // event already cancelled (refunds that failed) is always allowed.
+    const now = new Date();
+    const started = ev.dateMode === 'SINGLE' ? ev.startsAt <= now : ev.dates.some((d) => isActive(d) && d.startsAt <= now);
+    if (ev.status !== 'CANCELLED' && started) {
+      throw new ConflictException({
+        statusCode: 409,
+        code: 'EVENT_STARTED',
+        message:
+          ev.dateMode === 'SINGLE'
+            ? 'This event has already started, so it can’t be cancelled from here. Contact Omoshow if it needs to be called off and refunded.'
+            : 'Part of this event has already happened, so it can’t be cancelled as a whole. Cancel the dates still to come one at a time, or contact Omoshow.',
+      });
+    }
     return this.cancellation.cancel(id, user, reason, 'organizer');
   }
 
@@ -817,7 +894,11 @@ export class OrganizerService {
 
   /** Cancels one date of a multiple-dates event and refunds its orders (see EventCancellation.cancelDate). Org admins only. */
   async cancelDate(id: string, dateId: string, user: AuthUser, reason: string | undefined) {
-    await this.eventFor(id, user, ADMIN_ONLY);
+    const ev = await this.eventFor(id, user, ADMIN_ONLY);
+    const d = ev.dates.find((x) => x.id === dateId);
+    if (d && isActive(d) && d.startsAt <= new Date()) {
+      throw new ConflictException({ statusCode: 409, code: 'DATE_STARTED', message: `${dateName(d)} has already started, so it can’t be cancelled from here. Contact Omoshow if it needs to be called off and refunded.` });
+    }
     return this.cancellation.cancelDate(id, dateId, user, reason, 'organizer');
   }
 
@@ -1073,6 +1154,7 @@ export class OrganizerService {
     if (eventDateId) {
       const d = ev.dates.find((x) => x.id === eventDateId);
       if (!d) throw new BadRequestException('That date isn’t part of this event.');
+      if (d.status === 'CANCELLED') throw new BadRequestException(`${dateName(d)} was cancelled, so nobody can check in for it.`);
       return d;
     }
     return doorDate(ev.dates, ev.timezone, at);
@@ -1518,6 +1600,8 @@ export class OrganizerService {
     });
     // Donation refunds made after the organizer had been paid for those orders (any time): owed to Omoshow.
     const owed = await this.prisma.order.groupBy({ by: ['currency'], where: { event: { orgId }, donationOwedCents: { gt: 0 } }, _sum: { donationOwedCents: true } });
+    // Refunds (an event or date cancelled or moved) of orders they'd already been paid for: their share, owed to Omoshow.
+    const refundOwed = await this.prisma.order.groupBy({ by: ['currency'], where: { event: { orgId }, refundOwedCents: { gt: 0 } }, _sum: { refundOwedCents: true } });
     // Payouts are shown in the organization's main currency (the one most of its sales are in);
     // sales in other currencies are converted at today's rate and marked as approximate.
     const counts = new Map<string, number>();
@@ -1564,6 +1648,7 @@ export class OrganizerService {
       donationNote: DONATION_NOTE,
       // Donations refunded after the organizer had already been paid for them: owed to Omoshow (in the payout currency).
       donationOwedCents: owed.reduce((s, g) => s + this.fx.convert(g._sum.donationOwedCents ?? 0, g.currency, currency), 0),
+      refundOwedCents: refundOwed.reduce((s, g) => s + this.fx.convert(g._sum.refundOwedCents ?? 0, g.currency, currency), 0),
       payoutMethod:
         org.payoutProvider === 'paystack' && org.paystackSubaccount
           ? { provider: 'paystack', bankLast4: org.bankLast4, bankName: org.bankName, accountName: org.bankAccountName, country: org.bankCountry, updatedAt: org.payoutUpdatedAt }

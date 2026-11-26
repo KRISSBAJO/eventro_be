@@ -20,7 +20,10 @@ import { AdminService } from './admin.module';
 import { NoticeService } from '../push/notices';
 import { VenueBookingService } from '../venues/venue-bookings';
 import { dateName, dateView, summaryTimes, type DateRow } from '../domain/event-dates';
-import { releaseReservations } from '../schedule/release';
+import { releaseReservationIds, releaseReservations } from '../schedule/release';
+import type { EventDate } from '@prisma/client';
+import { dayShare } from '../guarantee/guarantee';
+import { ticketLeft } from '../domain/pwyw';
 
 const REFUNDABLE = ['PAID', 'PARTIALLY_REFUNDED'] as const;
 
@@ -136,7 +139,7 @@ export class EventCancellation {
     for (const o of orders) {
       const left = o.totalCents - o.refundedCents;
       try {
-        await this.admin.refundOrder(o.id, left, actor, `Event cancelled: ${shownReason}`);
+        await this.admin.refundOrder(o.id, left, actor, `Event cancelled: ${shownReason}`, { recordOwed: true });
         refunded.push({ id: o.id, email: o.email, buyerName: o.buyerName, quantity: o.quantity, cents: left, currency: o.currency, donationCents: o.donationCents - o.donationRefundedCents, donationCause: o.donationCause });
       } catch (err) {
         const message = ((err as Error).message || 'Refund failed').slice(0, 300);
@@ -194,7 +197,7 @@ export class EventCancellation {
       include: { dates: { orderBy: { startsAt: 'asc' } }, venue: { select: { name: true, city: true } }, org: { select: { name: true, supportEmail: true } } },
     });
     if (!e) throw new NotFoundException('Event not found.');
-    if (e.dateMode !== 'DATES') throw new BadRequestException('Only events with multiple dates can cancel one date. Cancel the whole event instead.');
+    if (e.dateMode === 'SINGLE') throw new BadRequestException('Only events with multiple dates or days can cancel one of them. Cancel the whole event instead.');
     const d = e.dates.find((x) => x.id === dateId);
     if (!d) throw new NotFoundException('Date not found.');
     return { e, d };
@@ -203,6 +206,7 @@ export class EventCancellation {
   /** What cancelling one date would refund: its paid orders and totals per currency, and whether it's the last one. */
   async previewDate(eventId: string, dateId: string) {
     const { e, d } = await this.dateOf(eventId, dateId);
+    if (e.dateMode === 'DAYS') return this.previewDay(e, d);
     const types = (await this.prisma.ticketType.findMany({ where: { eventDateId: d.id }, select: { id: true } })).map((t) => t.id);
     const orders = await this.prisma.order.findMany({ where: { ticketTypeId: { in: types }, kind: 'SALE', status: { in: [...REFUNDABLE] } }, select: { totalCents: true, refundedCents: true, currency: true } });
     const totals: Record<string, number> = {};
@@ -250,6 +254,7 @@ export class EventCancellation {
 
   private async runDate(eventId: string, dateId: string, actor: AuthUser, reason: string, by: 'organizer' | 'admin') {
     const { e, d } = await this.dateOf(eventId, dateId);
+    if (e.dateMode === 'DAYS') return this.runDay(e, d, actor, reason, by);
     const alreadyCancelled = d.status === 'CANCELLED';
     // A retry (the date is already cancelled) keeps the stored reason and needs none; a first cancel does.
     if (!alreadyCancelled && reason.length < 10) throw new BadRequestException('Give a reason (at least 10 characters): buyers see it in the cancellation email.');
@@ -296,7 +301,7 @@ export class EventCancellation {
     for (const o of orders) {
       const left = o.totalCents - o.refundedCents;
       try {
-        await this.admin.refundOrder(o.id, left, actor, `Date cancelled (${dateName(d)}): ${shownReason}`);
+        await this.admin.refundOrder(o.id, left, actor, `Date cancelled (${dateName(d)}): ${shownReason}`, { recordOwed: true });
         refunded.push({ id: o.id, email: o.email, buyerName: o.buyerName, quantity: o.quantity, cents: left, currency: o.currency, donationCents: o.donationCents - o.donationRefundedCents, donationCause: o.donationCause });
       } catch (err) {
         const message = ((err as Error).message || 'Refund failed').slice(0, 300);
@@ -347,6 +352,254 @@ export class EventCancellation {
       // The event's summary times after the change (the dates left)
       event: after,
     };
+  }
+
+  /* ---------- one day of a multi-day event ---------- */
+
+  /**
+   * What a day costs each order of a multi-day event: a ticket valid only on that day comes back in full (it's void);
+   * a pass for several days gets that day's share back (its all-in price split evenly over its days, as the Omoshow
+   * Guarantee splits it) and keeps working on the others.
+   */
+  private async dayPlan(e: { id: string; dates: EventDate[] }, d: EventDate) {
+    const types = await this.prisma.ticketType.findMany({ where: { eventId: e.id, validDateIds: { has: d.id } }, select: { id: true, name: true, validDateIds: true } });
+    const others = (t: { validDateIds: string[] }) => e.dates.filter((x) => x.id !== d.id && x.status === 'ACTIVE' && t.validDateIds.includes(x.id));
+    const onlyThis = types.filter((t) => !others(t).length).map((t) => t.id);
+    const orders = await this.prisma.order.findMany({
+      where: { ticketTypeId: { in: types.map((t) => t.id) }, kind: 'SALE', status: { in: [...REFUNDABLE] } },
+      select: {
+        id: true,
+        email: true,
+        buyerName: true,
+        quantity: true,
+        totalCents: true,
+        refundedCents: true,
+        currency: true,
+        donationCents: true,
+        donationRefundedCents: true,
+        donationCause: true,
+        ticketTypeId: true,
+        tickets: { where: { status: { not: 'VOID' } }, select: { id: true } },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+    const plan = orders.map((o) => {
+      const whole = onlyThis.includes(o.ticketTypeId);
+      if (whole) return { o, whole, cents: o.totalCents - o.refundedCents };
+      // The pass's days in date order, cancelled ones included: each day's share was fixed when it was bought.
+      const t = types.find((x) => x.id === o.ticketTypeId)!;
+      const days = e.dates
+        .filter((x) => t.validDateIds.includes(x.id))
+        .sort((a, b) => a.startsAt.getTime() - b.startsAt.getTime())
+        .map((x) => x.id);
+      const cents = Math.min(ticketLeft(o), o.tickets.reduce((sum, tk) => sum + dayShare(o, tk.id, days, d.id), 0));
+      return { o, whole, cents };
+    });
+    return { types, onlyThis, plan };
+  }
+
+  private async previewDay(e: { id: string; title: string; dates: EventDate[] }, d: EventDate) {
+    const { onlyThis, plan, types } = await this.dayPlan(e, d);
+    const totals: Record<string, number> = {};
+    for (const p of plan) totals[p.o.currency] = (totals[p.o.currency] ?? 0) + p.cents;
+    const [tickets, listings] = await Promise.all([
+      this.prisma.ticket.count({ where: { ticketTypeId: { in: types.map((t) => t.id) }, status: { not: 'VOID' } } }),
+      this.prisma.resaleListing.count({ where: { ticket: { ticketTypeId: { in: onlyThis } }, status: { in: ['ACTIVE', 'HELD'] } } }),
+    ]);
+    const others = e.dates.filter((x) => x.id !== d.id && x.status === 'ACTIVE').length;
+    return {
+      id: e.id,
+      title: e.title,
+      date: dateView(d),
+      cancelledAt: d.cancelledAt,
+      cancelReason: d.cancelReason,
+      paidOrders: plan.filter((p) => p.cents > 0).length,
+      refundCents: Object.entries(totals).map(([currency, cents]) => ({ currency, cents })),
+      tickets,
+      resaleListings: listings,
+      // Passes for other days too: they keep working and get the day's share back (the rest are refunded in full).
+      partial: plan.filter((p) => !p.whole && p.cents > 0).length,
+      cancelsEvent: d.status === 'ACTIVE' && others === 0,
+    };
+  }
+
+  /**
+   * Cancels one day of a multi-day (DAYS) event: the day stops (no check-in, no sales of tickets for it alone);
+   * tickets valid only that day are refunded in full and voided (comps cancelled); passes for several days get that
+   * day's share back and keep working on the others; holders hear. A retry refunds only orders not yet refunded for
+   * the day. The last active day cancels the whole event.
+   */
+  private async runDay(
+    e: { id: string; title: string; dates: EventDate[]; venue: { name: string; city: string } | null; org: { name: string } },
+    d: EventDate,
+    actor: AuthUser,
+    reason: string,
+    by: 'organizer' | 'admin',
+  ) {
+    const alreadyCancelled = d.status === 'CANCELLED';
+    if (!alreadyCancelled && reason.length < 10) throw new BadRequestException('Give a reason (at least 10 characters): ticket holders see it in the email.');
+    const shownReason = alreadyCancelled ? (d.cancelReason ?? reason) : reason;
+    const cancelledAt = d.cancelledAt ?? new Date();
+    const lastOne = !alreadyCancelled && !e.dates.some((x) => x.id !== d.id && x.status === 'ACTIVE');
+    if (!alreadyCancelled) {
+      await this.prisma.$transaction(async (tx) => {
+        await tx.eventDate.update({ where: { id: d.id }, data: { status: 'CANCELLED', cancelledAt, cancelReason: reason } });
+        const s = summaryTimes((await tx.eventDate.findMany({ where: { eventId: e.id } })) as DateRow[]);
+        if (s) await tx.event.update({ where: { id: e.id }, data: s });
+      });
+    }
+    if (lastOne) {
+      const summary = await this.cancel(e.id, actor, reason, by);
+      await this.audit.log(actor.id, 'event.date_cancel', 'Event', e.id, { by, dateId: d.id, startsAt: d.startsAt.toISOString(), reason, eventCancelled: true });
+      return { ...summary, dateId: d.id, date: dateView({ ...d, status: 'CANCELLED' }), eventCancelled: true };
+    }
+    const dates = e.dates.map((x) => (x.id === d.id ? { ...x, status: 'CANCELLED' as const } : x));
+    const { types, onlyThis, plan } = await this.dayPlan({ id: e.id, dates }, d);
+    const holders = await this.notices.holdersWhere({ ticketTypeId: { in: types.map((t) => t.id) }, status: { not: 'VOID' } }).catch(() => [] as string[]);
+    const [holds, listings] = await Promise.all([
+      this.prisma.hold.updateMany({ where: { ticketTypeId: { in: onlyThis }, status: 'ACTIVE' }, data: { status: 'RELEASED' } }),
+      this.prisma.resaleListing.updateMany({
+        where: { ticket: { ticketTypeId: { in: onlyThis } }, status: { in: ['ACTIVE', 'HELD'] } },
+        data: { status: 'CANCELLED', cancelReason: 'Day cancelled', heldBy: null, heldUntil: null },
+      }),
+    ]);
+    const comps = await this.prisma.order.findMany({
+      where: { ticketTypeId: { in: onlyThis }, kind: 'COMP', status: 'PAID' },
+      select: { id: true, tickets: { where: { status: { not: 'VOID' } }, select: { holderEmail: true, holderName: true } } },
+    });
+    await this.prisma.order.updateMany({ where: { id: { in: comps.map((c) => c.id) } }, data: { status: 'CANCELLED' } });
+
+    const tag = `[day ${d.id}]`;
+    const refunded: { id: string; email: string; buyerName: string; cents: number; currency: string; whole: boolean }[] = [];
+    const failed: { orderId: string; message: string; email: string; buyerName: string; cents: number; currency: string }[] = [];
+    for (const { o, whole, cents } of plan) {
+      if (cents <= 0) continue;
+      // A retry skips orders already refunded for this day (a pass keeps its status, so the audit trail says).
+      const done = await this.prisma.auditLog.findFirst({
+        where: { entity: 'Order', entityId: o.id, action: { in: ['order.refund', 'order.partial_refund'] }, data: { path: ['reason'], string_contains: tag } },
+      });
+      if (done) continue;
+      try {
+        await this.admin.refundOrder(o.id, cents, actor, `Day cancelled (${dateName(d)}) ${tag}: ${shownReason}`, { recordOwed: true, refundKey: `daycancel-${d.id}-${o.id}` });
+        refunded.push({ id: o.id, email: o.email, buyerName: o.buyerName, cents, currency: o.currency, whole });
+      } catch (err) {
+        const message = ((err as Error).message || 'Refund failed').slice(0, 300);
+        this.log.warn(`Refund of ${o.id} for cancelled day ${d.id} failed: ${message}`);
+        failed.push({ orderId: o.id, message, email: o.email, buyerName: o.buyerName, cents, currency: o.currency });
+      }
+    }
+    // Tickets for this day alone can't be used, listed or transferred; passes keep working on their other days.
+    const voided = await this.prisma.ticket.updateMany({ where: { ticketTypeId: { in: onlyThis }, status: { not: 'VOID' } }, data: { status: 'VOID', listCents: null, transferTo: null, transferExpiresAt: null } });
+    // Sessions booked on that day go back.
+    const reservations = await this.prisma.sessionReservation.findMany({ where: { cancelledAt: null, item: { eventDateId: d.id } }, select: { id: true } });
+    await releaseReservationIds(this.prisma, reservations.map((r) => r.id));
+
+    const totalRefundedCents: Record<string, number> = {};
+    for (const r of refunded) totalRefundedCents[r.currency] = (totalRefundedCents[r.currency] ?? 0) + r.cents;
+    await this.audit.log(actor.id, alreadyCancelled ? 'event.date_cancel_retry' : 'event.date_cancel', 'Event', e.id, {
+      by,
+      dateId: d.id,
+      startsAt: d.startsAt.toISOString(),
+      reason: shownReason,
+      refunded: refunded.map((r) => ({ orderId: r.id, cents: r.cents, currency: r.currency, whole: r.whole })),
+      failed: failed.map((f) => ({ orderId: f.orderId, message: f.message })),
+      totalRefundedCents,
+      ticketsVoided: voided.count,
+      listingsCancelled: listings.count,
+      holdsReleased: holds.count,
+    });
+    const compHolders = comps.flatMap((c) => c.tickets.map((t) => ({ email: t.holderEmail, name: t.holderName })));
+    void this.emailDay(e, d, shownReason, refunded, failed, alreadyCancelled, compHolders).catch((err) => this.log.warn(`Day cancellation emails for ${d.id}: ${(err as Error).message}`));
+    if (!alreadyCancelled) void this.notices.dateCancelled({ id: e.id, title: e.title, orgName: e.org.name }, { id: d.id, name: dateName(d) }, holders);
+    const after = await this.prisma.event.findUniqueOrThrow({ where: { id: e.id }, select: { startsAt: true, doorsAt: true, endsAt: true } });
+    return {
+      status: 'CANCELLED' as const,
+      dateId: d.id,
+      date: dateView({ ...d, status: 'CANCELLED' }),
+      eventCancelled: false,
+      alreadyCancelled,
+      cancelledAt,
+      refunded: refunded.length,
+      failed: failed.map(({ orderId, message }) => ({ orderId, message })),
+      totalRefundedCents,
+      ticketsVoided: voided.count,
+      listingsCancelled: listings.count,
+      holdsReleased: holds.count,
+      event: after,
+    };
+  }
+
+  /** Multi-day: buyers hear what came back (the day's share, or everything for a ticket for that day alone). */
+  private async emailDay(
+    e: { title: string; venue: { name: string; city: string } | null; org: { name: string } },
+    d: EventDate,
+    reason: string,
+    refunded: { id: string; email: string; buyerName: string; cents: number; currency: string; whole: boolean }[],
+    failed: { orderId: string; email: string; buyerName: string; cents: number; currency: string }[],
+    retry: boolean,
+    compHolders: { email: string; name: string }[],
+  ) {
+    const day = dateName(d);
+    const where = e.venue ? ` at ${e.venue.name}, ${e.venue.city}` : '';
+    const first = (name: string) => name.split(' ')[0] || 'there';
+    const footer = `You’re getting this because you have tickets to ${e.title} on Omoshow.`;
+    const mails: Mail[] = refunded.map((r) => {
+      const amount = formatMoney(r.cents, r.currency);
+      return {
+        to: r.email,
+        subject: `Cancelled: ${e.title}, ${day} (refund of ${amount} on its way)`,
+        ...render({
+          preheader: r.whole ? `${day} of ${e.title} won’t go ahead. We’ve refunded ${amount}.` : `${day} of ${e.title} won’t go ahead. We’ve refunded that day’s share, ${amount}. Your pass still works on the other days.`,
+          heading: `${day} has been cancelled`,
+          paragraphs: [
+            `Hi ${first(r.buyerName)}, we’re sorry: ${e.org.name} cancelled ${day} of ${e.title}${where}.`,
+            `The reason given: “${reason}”`,
+            r.whole
+              ? `We’ve refunded ${amount} for order ${r.id} to your original payment method, and those tickets have been cancelled.`
+              : `We’ve refunded ${amount} for order ${r.id}, that day’s share of your pass, to your original payment method. Your pass still works on the other days, so keep it.`,
+            'It can take 5–10 business days to show up, depending on your bank.',
+          ],
+          highlight: { label: 'Refunded', value: amount },
+          cta: { label: 'View my tickets', url: `${config.webUrl}/tickets` },
+          footer,
+        }),
+      };
+    });
+    if (!retry) {
+      for (const f of failed) {
+        mails.push({
+          to: f.email,
+          subject: `Cancelled: ${e.title}, ${day}`,
+          ...render({
+            preheader: `${day} of ${e.title} won’t go ahead. Your refund is being processed.`,
+            heading: `${day} has been cancelled`,
+            paragraphs: [
+              `Hi ${first(f.buyerName)}, we’re sorry: ${e.org.name} cancelled ${day} of ${e.title}${where}.`,
+              `The reason given: “${reason}”`,
+              `Your refund of ${formatMoney(f.cents, f.currency)} for order ${f.orderId} is being processed by the Omoshow team. We’ll email you again once it’s sent.`,
+            ],
+            footer,
+          }),
+        });
+      }
+      const seen = new Set<string>();
+      for (const c of compHolders) {
+        const to = c.email.trim().toLowerCase();
+        if (!to || seen.has(to)) continue;
+        seen.add(to);
+        mails.push({
+          to,
+          subject: `Cancelled: ${e.title}, ${day}`,
+          ...render({
+            preheader: `${day} of ${e.title} won’t go ahead.`,
+            heading: `${day} has been cancelled`,
+            paragraphs: [`Hi ${first(c.name)}, ${e.org.name} cancelled ${day} of ${e.title}.`, `The reason given: “${reason}”`, 'Your complimentary ticket for it has been cancelled.'],
+            footer,
+          }),
+        });
+      }
+    }
+    if (mails.length) await this.mail.sendMany('event.date_cancelled', mails);
   }
 
   private async emailBuyers(

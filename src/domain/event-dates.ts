@@ -11,6 +11,7 @@
  * For DATES and DAYS the event's startsAt/doorsAt/endsAt are a summary of the ACTIVE dates (see summaryTimes), so
  * everything that lists, sorts or archives events keeps working. Times are the venue's wall clock stored as UTC.
  */
+import { BadRequestException } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { instantToWallClock, wallClockLabel } from './wallclock';
 
@@ -156,3 +157,14 @@ export function whenText(mode: string, e: { startsAt: Date }, tt: { eventDateId:
 export const LIVE_TYPE: Prisma.TicketTypeWhereInput = { OR: [{ eventDateId: null }, { eventDate: { status: 'ACTIVE' } }] };
 /** The same rule in memory, given the event's dates. */
 export const liveType = (t: { eventDateId: string | null }, dates: { id: string; status: string }[]) => !t.eventDateId || dates.some((d) => d.id === t.eventDateId && d.status === 'ACTIVE');
+
+/**
+ * A single-date event's times: doors no later than the start, the end after it, and a new or moved start in the
+ * future (an unchanged start may already have passed, so other fields of a running event can still be fixed).
+ */
+export function checkSingleTimes(t: { startsAt: Date; doorsAt: Date | null; endsAt: Date | null }, startMoved: boolean, now = new Date()) {
+  if (Number.isNaN(t.startsAt.getTime())) throw new BadRequestException('Give the event a start time.');
+  if (t.doorsAt && t.doorsAt > t.startsAt) throw new BadRequestException('Doors can’t open after the start.');
+  if (t.endsAt && t.endsAt <= t.startsAt) throw new BadRequestException('The end has to be after the start.');
+  if (startMoved && t.startsAt <= now) throw new BadRequestException('The start time is in the past.');
+}
