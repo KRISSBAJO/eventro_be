@@ -299,6 +299,8 @@ model Venue {
   layout    Json?
   about     String?
   imageUrl  String?
+  /// The venue's photos, [{ url, alt? }], first one first (it's also imageUrl, the cover). Up to 10.
+  photos    Json?
   website   String?
   phone     String?
   /// Checked by Eventro (shown as a badge; listed first in search).

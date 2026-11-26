@@ -69,6 +69,7 @@ const newVenue = (extra: Json = {}) => ({
   phone: '+234 801 234 5678',
   website: 'https://harbourlights.example.com',
   about: 'A waterfront hall with a stage and a terrace.',
+  photos: ['https://images.example.com/harbour-hall.jpg', 'https://images.example.com/harbour-terrace.jpg'],
   role: 'owner',
   message: 'I own the venue; email me at the address on our website.',
   ...extra,
@@ -112,6 +113,9 @@ test('add a venue: hidden with a pending claim, checked for duplicates, shown on
   await bad({ phone: 'call me' }, /phone number/);
   await bad({ capacity: 0 }, /at least 1/);
   await bad({ surprise: true }, /surprise/);
+  // A venue page needs a photo: none at all is refused; links must be links.
+  await bad({ photos: [] }, /at least one photo/);
+  await bad({ photos: ['not a link'] }, /photo link/);
 
   // Added: hidden (no page, not in the directory, not bookable), with the place's zone and a pending claim.
   const added = await ok(call('POST', '/me/venues', newVenue(), owner.token));
@@ -122,6 +126,8 @@ test('add a venue: hidden with a pending claim, checked for duplicates, shown on
   assert.equal(v.timezone, 'Africa/Lagos');
   assert.equal(v.country, 'NG');
   assert.equal(v.capacity, 800);
+  assert.equal(v.imageUrl, 'https://images.example.com/harbour-hall.jpg', 'the first photo is the cover');
+  assert.equal((v.photos as Json[]).length, 2);
   assert.equal((await call('GET', `/venues/${v.slug}`)).status, 404);
   assert.ok(!(await ok(call('GET', '/venues'))).some((x: Json) => x.slug === v.slug));
   assert.equal((await call('GET', `/venues/${v.slug}/availability`)).status, 404);
@@ -156,7 +162,9 @@ test('add a venue: hidden with a pending claim, checked for duplicates, shown on
   const decided = await ok(call('POST', `/admin/venue-claims/${added.id}/decide`, { decision: 'APPROVE' }, admin.token));
   assert.equal(decided.venueShown, true);
   assert.equal((await prisma.venue.findUniqueOrThrow({ where: { id: v.id } })).hiddenAt, null);
-  assert.equal((await ok(call('GET', `/venues/${v.slug}`))).managed, true);
+  const page = await ok(call('GET', `/venues/${v.slug}`));
+  assert.equal(page.managed, true);
+  assert.deepEqual((page.photos as Json[]).map((p) => p.url), ['https://images.example.com/harbour-hall.jpg', 'https://images.example.com/harbour-terrace.jpg'], 'the gallery, in order');
   const after = await ok(call('GET', '/me/venues', undefined, owner.token));
   assert.equal(after.managed[0].venue.id, v.id);
   assert.ok(!after.requests.some((r: Json) => r.id === added.id));
@@ -165,6 +173,13 @@ test('add a venue: hidden with a pending claim, checked for duplicates, shown on
   assert.equal((push.data as Json).path, '/venues/manage');
   // Now they can list it for hire.
   await ok(call('PUT', `/me/venues/${v.id}/listing`, { active: true, priceMode: 'QUOTE' }, owner.token));
+  // Managers replace the gallery (no repeats; the first is the new cover); hire-listing photos follow it on the page.
+  await ok(call('PATCH', `/me/venues/${v.id}`, { photos: ['https://images.example.com/new-cover.jpg', 'https://images.example.com/harbour-hall.jpg', 'https://images.example.com/new-cover.jpg'] }, owner.token));
+  await ok(call('PUT', `/me/venues/${v.id}/listing`, { photos: [{ url: 'https://images.example.com/stage.jpg' }, { url: 'https://images.example.com/harbour-hall.jpg' }] }, owner.token));
+  const regallery = await ok(call('GET', `/venues/${v.slug}`));
+  assert.equal(regallery.imageUrl, 'https://images.example.com/new-cover.jpg');
+  assert.deepEqual((regallery.photos as Json[]).map((p) => p.url), ['https://images.example.com/new-cover.jpg', 'https://images.example.com/harbour-hall.jpg', 'https://images.example.com/stage.jpg']);
+  assert.equal((await call('PATCH', `/me/venues/${v.id}`, { photos: Array.from({ length: 11 }, (_, i) => `https://images.example.com/${i}.jpg`) }, owner.token)).status, 400, 'at most 10');
 
   // The same name in the same city and country (any case) is on Omoshow now: claim it instead.
   const other = await account(`vo-other-${run}@test.local`, 'Ike Other');
@@ -211,4 +226,14 @@ test('add a venue: one person can have at most five waiting', async () => {
   assert.equal(sixth.status, 400);
   assert.match(sixth.body.message, /several venues waiting/);
   assert.equal(await prisma.venueClaim.count({ where: { userId: busy.user.id as string, newVenue: true } }), 5);
+});
+
+test('photos: older apps that send one photo link still add a venue (it starts the gallery)', async () => {
+  const legacy = await account(`vo-legacy-${run}@test.local`, 'Lola Legacy');
+  const added = await ok(call('POST', '/me/venues', newVenue({ name: `Old App Hall ${run}`, city: 'Ibadan', region: 'Oyo', photos: undefined, imageUrl: 'https://images.example.com/old-app.jpg' }), legacy.token));
+  const v = await prisma.venue.findUniqueOrThrow({ where: { id: added.venue.id } });
+  assert.equal(v.imageUrl, 'https://images.example.com/old-app.jpg');
+  assert.deepEqual((v.photos as Json[]).map((p) => p.url), ['https://images.example.com/old-app.jpg']);
+  const none = await call('POST', '/me/venues', newVenue({ name: `No Photo Hall ${run}`, city: 'Ibadan', region: 'Oyo', photos: undefined }), legacy.token);
+  assert.equal(none.status, 400);
 });

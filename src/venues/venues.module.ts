@@ -34,8 +34,8 @@ import {
   Query,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiProperty, ApiPropertyOptional, ApiQuery, ApiTags } from '@nestjs/swagger';
-import { IsBoolean, IsIn, IsInt, IsNumber, IsObject, IsOptional, IsString, IsUrl, Matches, Max, MaxLength, Min, MinLength } from 'class-validator';
-import type { Prisma, Venue } from '@prisma/client';
+import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsInt, IsNumber, IsObject, IsOptional, IsString, IsUrl, Matches, Max, MaxLength, Min, MinLength } from 'class-validator';
+import { Prisma, type Venue } from '@prisma/client';
 import { PrismaService } from '../prisma.service';
 import { AuditService } from '../common/audit.service';
 import { config } from '../config';
@@ -64,6 +64,9 @@ export class ClaimDto {
 const PHONE = /^[+\d][\d\s()-]{5,24}$/;
 
 /** POST /me/venues: a venue that isn't on Omoshow yet, added by someone who runs it (hidden until approved). */
+/** Photos per venue (the gallery on its page). */
+export const VENUE_PHOTOS_MAX = 10;
+
 export class OnboardVenueDto {
   @ApiProperty() @IsString() @MinLength(2, { message: 'Give the venue’s name.' }) @MaxLength(120) name: string;
   @ApiProperty() @IsString() @MinLength(3, { message: 'Give the street address.' }) @MaxLength(200) address: string;
@@ -74,7 +77,14 @@ export class OnboardVenueDto {
   @ApiPropertyOptional() @IsOptional() @IsInt() @Min(1, { message: 'Capacity has to be at least 1.' }) @Max(500_000) capacity?: number;
   @ApiPropertyOptional() @IsOptional() @IsString() @Matches(PHONE, { message: 'That phone number doesn’t look right.' }) phone?: string;
   @ApiPropertyOptional() @IsOptional() @IsUrl({ require_protocol: true }, { message: 'The website should start with https://' }) @MaxLength(200) website?: string;
-  @ApiPropertyOptional() @IsOptional() @IsUrl({ require_protocol: true }, { message: 'The photo link should start with https://' }) @MaxLength(500) imageUrl?: string;
+  @ApiPropertyOptional({ description: 'One photo (older apps); use photos' }) @IsOptional() @IsUrl({ require_protocol: true }, { message: 'The photo link should start with https://' }) @MaxLength(500) imageUrl?: string;
+  @ApiPropertyOptional({ type: [String], description: `Photo links, the first is the cover (1 to ${VENUE_PHOTOS_MAX}). At least one photo is needed, here or as imageUrl.` })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(VENUE_PHOTOS_MAX, { message: `Up to ${VENUE_PHOTOS_MAX} photos.` })
+  @IsUrl({ require_protocol: true }, { each: true, message: 'Each photo link should start with https://' })
+  @MaxLength(500, { each: true })
+  photos?: string[];
   @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(2000) about?: string;
   @ApiProperty({ enum: ROLES }) @IsIn(ROLES, { message: 'Say whether you’re the owner, a manager or staff.' }) role: string;
   @ApiProperty({ description: 'Who you are at the venue and how we can check it' })
@@ -84,6 +94,16 @@ export class OnboardVenueDto {
   message: string;
 }
 
+type Photo = { url: string; alt?: string };
+/** A venue's photos: its gallery, else its single cover photo; then its hire listing's photos; no repeats. */
+export function venuePhotos(v: { photos: unknown; imageUrl: string | null }, listing?: { photos: unknown } | null): Photo[] {
+  const own = Array.isArray(v.photos) && v.photos.length ? (v.photos as Photo[]) : v.imageUrl ? [{ url: v.imageUrl }] : [];
+  const extra = Array.isArray(listing?.photos) ? (listing!.photos as Photo[]) : [];
+  const seen = new Set<string>();
+  return [...own, ...extra].filter((p) => p?.url && !seen.has(p.url) && seen.add(p.url));
+}
+const photoRows = (urls: string[]) => [...new Set(urls.map((u) => u.trim()).filter(Boolean))].slice(0, VENUE_PHOTOS_MAX).map((url) => ({ url }));
+
 /** How many venues one person can have waiting for approval at once. */
 const MAX_WAITING_NEW = 5;
 
@@ -91,6 +111,13 @@ const MAX_WAITING_NEW = 5;
 export class ManagerVenueDto {
   @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(2000) about?: string;
   @ApiPropertyOptional() @IsOptional() @IsUrl({ require_protocol: true }) @MaxLength(500) imageUrl?: string;
+  @ApiPropertyOptional({ type: [String], description: 'The whole gallery, in order; the first becomes the cover. [] clears it.' })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(VENUE_PHOTOS_MAX)
+  @IsUrl({ require_protocol: true }, { each: true })
+  @MaxLength(500, { each: true })
+  photos?: string[];
   @ApiPropertyOptional() @IsOptional() @IsUrl({ require_protocol: true }) @MaxLength(200) website?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() @Matches(/^[+\d][\d\s()-]{5,24}$/) phone?: string;
   @ApiPropertyOptional() @IsOptional() @IsInt() @Min(1) @Max(500_000) capacity?: number;
@@ -199,9 +226,11 @@ export class VenuesService {
       },
     });
     if (!v || v.hiddenAt) throw new NotFoundException('Venue not found.');
-    const { layout, _count, events, listing, ...rest } = v;
+    const { layout, _count, events, listing, photos, ...rest } = v;
     return {
       ...rest,
+      /** The venue's photos then its hire listing's ([{ url, alt? }], cover first) */
+      photos: venuePhotos({ photos, imageUrl: v.imageUrl }, listing),
       /** Terms for hiring the venue on Omoshow; null when it isn't taking bookings */
       listing: publicListing(listing, v),
       verified: !!v.verifiedAt,
@@ -277,6 +306,9 @@ export class VenuesService {
     }
     if (waiting.length >= MAX_WAITING_NEW) throw new BadRequestException('You have several venues waiting for approval already. Wait for our team to get back to you first.');
 
+    // A venue page needs at least one photo of the place.
+    const photos = photoRows(dto.photos?.length ? dto.photos : dto.imageUrl ? [dto.imageUrl] : []);
+    if (!photos.length) throw new BadRequestException('Add at least one photo of the venue.');
     const region = dto.region?.trim() || null;
     const { venue, claim } = await this.prisma.$transaction(async (tx) => {
       const venue = await tx.venue.create({
@@ -292,7 +324,8 @@ export class VenuesService {
           capacity: dto.capacity ?? null,
           phone: dto.phone?.trim() || null,
           website: dto.website || null,
-          imageUrl: dto.imageUrl || null,
+          imageUrl: photos[0].url,
+          photos,
           about: dto.about?.trim() || null,
           // Not public or bookable until Omoshow approves the claim below.
           hiddenAt: new Date(),
@@ -360,7 +393,12 @@ export class VenuesService {
   private managerData(dto: ManagerVenueDto): Prisma.VenueUpdateInput {
     return {
       ...(dto.about !== undefined ? { about: dto.about.trim() || null } : {}),
-      ...(dto.imageUrl !== undefined ? { imageUrl: dto.imageUrl || null } : {}),
+      // The gallery wins over a single photo; its first photo is the cover.
+      ...(dto.photos !== undefined
+        ? { photos: dto.photos.length ? photoRows(dto.photos) : Prisma.DbNull, imageUrl: photoRows(dto.photos)[0]?.url ?? null }
+        : dto.imageUrl !== undefined
+          ? { imageUrl: dto.imageUrl || null }
+          : {}),
       ...(dto.website !== undefined ? { website: dto.website || null } : {}),
       ...(dto.phone !== undefined ? { phone: dto.phone.trim() || null } : {}),
       ...(dto.capacity !== undefined ? { capacity: dto.capacity } : {}),

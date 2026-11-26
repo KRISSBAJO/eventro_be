@@ -1,4 +1,4 @@
-// Demo venues for a local or staging database: ten fictional venues with photos, capacity and a few lines about them,
+// Demo venues for a local or staging database: ten fictional venues with a few photos each, capacity and some lines about them,
 // in Lagos, Abuja, Accra, London, Austin and New York. Most take bookings (an active hire listing with a price and
 // opening hours); a few are verified. Safe to run again: venues are matched by slug and updated.
 //
@@ -10,6 +10,20 @@ import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
 const photo = (id) => `https://images.unsplash.com/photo-${id}?auto=format&fit=crop&w=1400&q=72`;
 const WEEK = (open, close, days = [0, 1, 2, 3, 4, 5, 6]) => days.map((day) => ({ day, open, close }));
+
+/** More venue photos (Unsplash licence) for the galleries. */
+const POOL = [
+  '1519167758481-83f550bb49b3',
+  '1505236858219-8359eb29e329',
+  '1464366400600-7168b8af9bc3',
+  '1492684223066-81342ee5ff30',
+  '1540575467063-178a50c2df87',
+  '1507874457470-272b3c8d8ee2',
+  '1514525253161-7a46d19cd819',
+  '1511578314322-379afb476865',
+  '1470229722913-7c0e2dbbafd3',
+  '1459749411175-04bf5292ceea',
+].map(photo);
 
 /** [slug, name, address, city, region, country, timezone, lat, lng, capacity, photo, verified, about, hire] */
 const VENUES = [
@@ -178,7 +192,11 @@ const VENUES = [
 async function add() {
   for (const v of VENUES) {
     const { hire, verified, slug, ...data } = v;
-    const fields = { ...data, verifiedAt: verified ? new Date() : null, hiddenAt: null };
+    // The cover plus three more from the pool, different for each venue, so venue pages show a gallery.
+    const at = VENUES.indexOf(v);
+    const extra = POOL.filter((u) => u !== data.imageUrl);
+    const photos = [data.imageUrl, ...[0, 1, 2].map((k) => extra[(at * 3 + k) % extra.length])].map((url) => ({ url }));
+    const fields = { ...data, photos, verifiedAt: verified ? new Date() : null, hiddenAt: null };
     const venue = await prisma.venue.upsert({ where: { slug }, create: { slug, ...fields }, update: fields });
     if (hire) {
       const { hours, ...rest } = hire;
