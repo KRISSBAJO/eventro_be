@@ -615,6 +615,21 @@ test('following: organizer pages, follow organizers and venues, their new events
   assert.ok(mine.title && mine.fromCents, 'an event card');
   assert.deepEqual((await ok(call('GET', '/me/following', undefined, other.token))).organizers, [], 'nobody else sees it');
 
+  // A logo and a banner: optional, set and removed by the organizer's admins; shown on their page, event pages and Following.
+  const logo = `https://media.example.com/logo-${run}.png`;
+  const banner = `https://media.example.com/banner-${run}.jpg`;
+  assert.equal((await call('PATCH', `/organizer/orgs/${a.org.id}`, { logoUrl: 'not a link' }, org.token)).status, 400);
+  assert.ok((await call('PATCH', `/organizer/orgs/${a.org.id}`, { logoUrl: logo }, fan.token)).status >= 400, 'members only');
+  await ok(call('PATCH', `/organizer/orgs/${a.org.id}`, { logoUrl: logo, coverUrl: banner }, org.token));
+  const withLogo = await ok(call('GET', `/organizers/${orgSlug}`));
+  assert.deepEqual([withLogo.logoUrl, withLogo.coverUrl], [logo, banner]);
+  assert.equal((await ok(call('GET', `/events/${a.ev.slug}`))).organizer.logoUrl, logo);
+  const fo = (await ok(call('GET', '/me/following', undefined, fan.token))).organizers[0];
+  assert.deepEqual([fo.logoUrl, fo.imageUrl], [logo, banner]);
+  await ok(call('PATCH', `/organizer/orgs/${a.org.id}`, { logoUrl: null, coverUrl: null }, org.token));
+  const bare = await ok(call('GET', `/organizers/${orgSlug}`));
+  assert.deepEqual([bare.logoUrl, bare.coverUrl], [null, page.imageUrl ?? null], 'without a banner, the next event’s cover');
+
   // The organizer puts a new event on sale: followers get a push (once), others don't.
   const ev2 = await ok(
     call('POST', `/organizer/orgs/${a.org.id}/events`, {

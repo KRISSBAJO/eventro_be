@@ -42,6 +42,8 @@ export class UpdateOrgDto {
   @ApiPropertyOptional() @IsOptional() @IsUrl({ require_protocol: true }) website?: string;
   @ApiPropertyOptional() @IsOptional() @Transform(lower) @IsEmail() supportEmail?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(2000) about?: string;
+  @ApiPropertyOptional({ nullable: true, description: 'Square logo (an uploaded photo link); null removes it' }) @IsOptional() @IsUrl({ require_protocol: true, protocols: ['https', 'http'] }) @MaxLength(1000) logoUrl?: string | null;
+  @ApiPropertyOptional({ nullable: true, description: 'Wide banner for the organizer page; null removes it' }) @IsOptional() @IsUrl({ require_protocol: true, protocols: ['https', 'http'] }) @MaxLength(1000) coverUrl?: string | null;
 }
 
 export class InviteDto {

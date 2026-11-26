@@ -235,6 +235,10 @@ model Organization {
   website        String?
   supportEmail   String
   about          String?
+  /// Optional square logo (a mediaEX link), shown on the organizer page, event pages and Following.
+  logoUrl        String?
+  /// Optional wide banner for the organizer page; without one, the cover of their next event stands in.
+  coverUrl       String?
   payoutSchedule PayoutSchedule @default(DAILY)
   // Bank details live with the payment provider (e.g. Stripe Connect); only a display hint is stored here.
   stripeAccountId String?

@@ -158,7 +158,7 @@ export class OrganizerService {
   myOrgs(user: AuthUser) {
     return this.prisma.organizationMember.findMany({
       where: { userId: user.id, status: 'ACTIVE' },
-      select: { role: true, org: { select: { id: true, name: true, supportEmail: true, website: true, about: true, payoutSchedule: true, bankLast4: true, bankName: true } } },
+      select: { role: true, org: { select: { id: true, name: true, supportEmail: true, website: true, about: true, logoUrl: true, coverUrl: true, payoutSchedule: true, bankLast4: true, bankName: true } } },
     });
   }
 

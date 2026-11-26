@@ -51,7 +51,7 @@ export class FollowingService {
   async organizerPage(slug: string) {
     const o = await this.prisma.organization.findFirst({
       where: { slug, ...PUBLIC_ORG },
-      select: { id: true, slug: true, name: true, about: true, website: true, verifiedAt: true, createdAt: true, _count: { select: { followers: true } } },
+      select: { id: true, slug: true, name: true, about: true, website: true, logoUrl: true, coverUrl: true, verifiedAt: true, createdAt: true, _count: { select: { followers: true } } },
     });
     if (!o) throw new NotFoundException('Organizer not found.');
     const [{ cards }, hosted] = await Promise.all([
@@ -63,6 +63,9 @@ export class FollowingService {
       name: o.name,
       about: o.about,
       website: o.website,
+      logoUrl: o.logoUrl,
+      // Their banner, else the cover of their next event.
+      coverUrl: o.coverUrl ?? cards.find((c) => c.imageUrl)?.imageUrl ?? null,
       verified: !!o.verifiedAt,
       since: o.createdAt,
       followers: o._count.followers,
@@ -78,7 +81,7 @@ export class FollowingService {
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: FOLLOW_MAX,
       include: {
-        org: { select: { id: true, slug: true, name: true, verifiedAt: true } },
+        org: { select: { id: true, slug: true, name: true, logoUrl: true, coverUrl: true, verifiedAt: true } },
         venue: { select: { id: true, slug: true, name: true, city: true, country: true, imageUrl: true, verifiedAt: true } },
       },
     });
@@ -101,11 +104,19 @@ export class FollowingService {
     const perVenue = count((e) => e.venueId);
     const orgs = rows.flatMap((r) => (r.org ? [{ ...r.org, at: r.createdAt }] : []));
     const venues = rows.flatMap((r) => (r.venue ? [{ ...r.venue, at: r.createdAt }] : []));
+    // A picture for each: an organizer's banner, else the cover of its soonest event; a venue its own photo, else that.
+    const cover = new Map<string, string>();
+    for (const c of cards) {
+      const e = bySlug.get(c.slug)!;
+      if (!c.imageUrl) continue;
+      if (!cover.has(e.orgId)) cover.set(e.orgId, c.imageUrl);
+      if (e.venueId && !cover.has(e.venueId)) cover.set(e.venueId, c.imageUrl);
+    }
     const followedOrg = new Map(orgs.map((o) => [o.id, o]));
     const followedVenue = new Map(venues.map((v) => [v.id, v]));
     return {
-      organizers: orgs.map((o) => ({ slug: o.slug, name: o.name, verified: !!o.verifiedAt, upcoming: perOrg.get(o.id) ?? 0, followedAt: o.at })),
-      venues: venues.map((v) => ({ slug: v.slug, name: v.name, city: v.city, country: v.country, imageUrl: v.imageUrl, verified: !!v.verifiedAt, upcoming: perVenue.get(v.id) ?? 0, followedAt: v.at })),
+      organizers: orgs.map((o) => ({ slug: o.slug, name: o.name, logoUrl: o.logoUrl, imageUrl: o.coverUrl ?? cover.get(o.id) ?? null, verified: !!o.verifiedAt, upcoming: perOrg.get(o.id) ?? 0, followedAt: o.at })),
+      venues: venues.map((v) => ({ slug: v.slug, name: v.name, city: v.city, country: v.country, imageUrl: v.imageUrl ?? cover.get(v.id) ?? null, verified: !!v.verifiedAt, upcoming: perVenue.get(v.id) ?? 0, followedAt: v.at })),
       // Why each event is here: the organizer when the fan follows it, else the venue.
       events: cards.slice(0, FEED_MAX).map((c) => {
         const e = bySlug.get(c.slug)!;
