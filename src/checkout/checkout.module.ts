@@ -83,6 +83,7 @@ export class CartQuoteDto extends CartPriceDto {}
 export class CartOrderDto extends CartPriceDto {
   @ApiProperty() @Transform(lower) @IsEmail() email: string;
   @ApiProperty() @IsString() @MinLength(2) @MaxLength(80) name: string;
+  @ApiPropertyOptional({ type: () => GiftDto, description: 'Buy the whole cart for someone else (one gift email, one claim)' }) @IsOptional() @ValidateNested() @Type(() => GiftDto) gift?: { name: string; email: string; message?: string; sendAt?: string; hidePrice?: boolean };
   @ApiPropertyOptional({ enum: ['app'] }) @IsOptional() @IsIn(['app']) returnTo?: 'app';
   @ApiPropertyOptional({ type: [AnswerDto], description: 'Answers to the event’s checkout questions (GET /holds/:id `questions`)' })
   @IsOptional()

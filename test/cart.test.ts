@@ -227,3 +227,37 @@ test('card declined, then paid: a failed attempt keeps the order; only a cancell
   assert.equal((await prisma.order.findUniqueOrThrow({ where: { id: one.orderId } })).status, 'CANCELLED');
   assert.equal((await prisma.hold.findUniqueOrThrow({ where: { id: h.id } })).status, 'RELEASED');
 });
+
+test('a cart sent as a gift: one email to the recipient, one claim for every ticket type', async () => {
+  const admin = await account('admin@test.local', 'Admin');
+  const org = await account(`cart-o5-${run}@test.local`, 'Cleo Organizer');
+  const fan = await account(`cart-f5-${run}@test.local`, 'Gabe Giver');
+  const friend = await account(`cart-r5-${run}@test.local`, 'Rita Receiver');
+  const { adult, child } = await family(org.token, admin.token);
+  const held = await ok(call('POST', '/holds/cart', { items: [{ ticketTypeId: adult.id, quantity: 2 }, { ticketTypeId: child.id, quantity: 1 }] }, fan.token));
+  const holdIds = (held.holds as Json[]).map((h) => h.id);
+  const who = { holdIds, email: fan.user.email, name: fan.user.name };
+  // A gift goes to someone else.
+  assert.equal((await call('POST', '/orders/cart', { ...who, gift: { name: 'Me', email: fan.user.email } }, fan.token)).status, 400);
+  const created = await ok(call('POST', '/orders/cart', { ...who, gift: { name: 'Rita Receiver', email: friend.user.email, message: 'See you there!' } }, fan.token));
+  const paid = await ok(call('POST', `/orders/${created.groupId}/pay`));
+  assert.equal(paid.tickets.length, 3);
+  // Every order carries the gift; the tickets wait for the recipient; one email goes out.
+  const gifts = await waitFor(async () => {
+    const g = await prisma.gift.findMany({ where: { order: { groupId: created.groupId } }, orderBy: { order: { createdAt: 'asc' } } });
+    return g.length === 2 && g.every((x) => x.sentAt) ? g : null;
+  });
+  assert.ok(gifts, 'both gifts delivered');
+  assert.equal(await prisma.ticket.count({ where: { order: { groupId: created.groupId }, status: 'TRANSFER_PENDING', transferTo: friend.user.email } }), 3);
+  const mails = await prisma.emailLog.findMany({ where: { kind: 'gift.delivered', to: friend.user.email } });
+  assert.equal(mails.length, 1, 'one gift email for the whole cart');
+  // The gift page names the other ticket type; the buyer can't claim it; the recipient gets all three tickets.
+  const page = await ok(call('GET', `/gifts/${gifts![0].token}`));
+  assert.deepEqual([page.quantity, page.also], [2, [{ quantity: 1, name: 'Child' }]]);
+  assert.equal((await call('POST', `/gifts/${gifts![0].token}/claim`, undefined, fan.token)).status, 400);
+  const claimed = await ok(call('POST', `/gifts/${gifts![0].token}/claim`, undefined, friend.token));
+  assert.equal(claimed.tickets, 3);
+  assert.equal(await prisma.ticket.count({ where: { order: { groupId: created.groupId }, status: 'ACTIVE', holderEmail: friend.user.email } }), 3);
+  assert.equal(await prisma.gift.count({ where: { order: { groupId: created.groupId }, claimedBy: friend.user.id } }), 2);
+  assert.equal((await ok(call('GET', '/me/tickets', undefined, friend.token))).tickets.length, 3);
+});

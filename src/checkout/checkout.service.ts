@@ -559,15 +559,19 @@ export class CheckoutService {
   /**
    * Checks out a cart (POST /orders/cart): one order per line, all with the cart's id (`groupId`, CRT-…), paid with a
    * single payment for the total. The cart id stands in for an order id at the payment provider and on
-   * GET /orders/:id, POST /orders/:id/verify and /pay. Gifts are bought one ticket type at a time.
+   * GET /orders/:id, POST /orders/:id/verify and /pay. A cart sent as a gift: every order gets the gift, the recipient
+   * one email, and opening it claims them all (see GiftService).
    */
-  async createCartOrder(input: { holdIds: string[]; email: string; name: string; promoCode?: string; protection?: boolean; donationCents?: number; returnTo?: 'app'; answers?: AnswerInput[] }, user: AuthUser | null, clientIp: string | null) {
+  async createCartOrder(input: { holdIds: string[]; email: string; name: string; promoCode?: string; protection?: boolean; donationCents?: number; returnTo?: 'app'; answers?: AnswerInput[]; gift?: GiftInput }, user: AuthUser | null, clientIp: string | null) {
     const now = new Date();
     const holds = await this.cartHolds(input.holdIds);
     if (holds.some((h) => h.order)) throw new ConflictException('An order already exists for these seats.');
     if (holds.some((h) => h.status !== 'ACTIVE' || h.expiresAt <= now)) throw new ConflictException('Your seats were released. Please pick them again.');
     const { lines, totals, promo } = await this.priceCart(holds, input);
     const event = holds[0].event;
+    // A gift has to arrive before the first of the cart's tickets starts.
+    const giftBy = new Date(Math.min(...holds.map((h) => ticketTimes(event.dateMode, event, h.ticketType, event.dates).first.startsAt.getTime())));
+    if (input.gift) this.gifts.validate(input.gift, input.email, giftBy);
     // The organizer's checkout questions; a per-ticket answer's number counts across the cart's lines, in order.
     const answers = checkAnswers(questionsOf(event.questions), input.answers, holds.map((h) => h.quantity));
     const since = new Date(now.getTime() - 10 * 60_000);
@@ -620,6 +624,8 @@ export class CheckoutService {
             clientIp,
             snapshot: purchaseSnapshot(event, l.hold.ticketType, venue, event.dates, l.q.unitCents),
             ...(answers[i] ? { answers: answers[i]! } : {}),
+            // A gift: each order carries it (its own link), so every ticket waits for the recipient.
+            ...(input.gift ? { gift: { create: this.gifts.validate(input.gift, input.email, giftBy) } } : {}),
           },
         }),
       ),
@@ -703,6 +709,8 @@ export class CheckoutService {
     }
     if (fresh.length) {
       void this.sendCartReceipt(groupId, fresh).catch((e) => this.log.warn(`Receipt for ${groupId}: ${(e as Error).message}`));
+      // A cart sent as a gift: one delivery for all its orders.
+      void this.gifts.afterPaid(fresh[0]).catch((e) => this.log.warn(`Gift for ${groupId}: ${(e as Error).message}`));
       void this.notices.orderPaid(fresh[0]);
       for (const id of fresh) void this.notices.newSale(id);
     }

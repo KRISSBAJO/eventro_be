@@ -88,8 +88,12 @@ export class GiftService implements OnModuleInit, OnModuleDestroy {
   }
 
   async deliverDue() {
-    const due = await this.prisma.gift.findMany({ where: { sentAt: null, sendAt: { lte: new Date() }, order: { status: 'PAID' } }, select: { id: true }, take: 100 });
-    for (const g of due) await this.deliver(g.id);
+    const due = await this.prisma.gift.findMany({ where: { sentAt: null, sendAt: { lte: new Date() }, order: { status: 'PAID' } }, select: { id: true }, orderBy: { createdAt: 'asc' }, take: 100 });
+    for (const g of due) {
+      // A cart's gifts go out together: the first delivers the rest, which are then no longer due.
+      const still = await this.prisma.gift.findUnique({ where: { id: g.id }, select: { sentAt: true } });
+      if (still && !still.sentAt) await this.deliver(g.id);
+    }
   }
 
   /** Points the held tickets at the recipient and sends the gift email. Safe to call again (resend). */
@@ -108,7 +112,15 @@ export class GiftService implements OnModuleInit, OnModuleDestroy {
       this.log.log(`Gift ${id} skipped: the buyer took the tickets back`);
       return false;
     }
-    await this.prisma.ticket.updateMany({ where: { orderId: g.orderId, status: 'TRANSFER_PENDING' }, data: { transferTo: g.recipientEmail } });
+    // A cart sent as a gift: its other orders' gifts go out with this one, in the same email.
+    const siblings = g.order.groupId
+      ? await this.prisma.gift.findMany({ where: { id: { not: id }, claimedAt: null, order: { groupId: g.order.groupId, status: 'PAID' } }, include: { order: { select: { id: true, quantity: true, totalCents: true, createdAt: true, ticketType: { select: { name: true } } } } }, orderBy: { order: { createdAt: 'asc' } } })
+      : [];
+    await this.prisma.ticket.updateMany({ where: { orderId: { in: [g.orderId, ...siblings.map((x) => x.orderId)] }, status: 'TRANSFER_PENDING' }, data: { transferTo: g.recipientEmail } });
+    const lines = [{ quantity: g.order.quantity, name: g.order.ticketType.name, at: g.order.createdAt }, ...siblings.map((x) => ({ quantity: x.order.quantity, name: x.order.ticketType.name, at: x.order.createdAt }))].sort((a, b) => a.at.getTime() - b.at.getTime());
+    const lineText = lines.map((l) => `${l.quantity} × ${l.name}`).join(', ');
+    const count = lines.reduce((n, l) => n + l.quantity, 0);
+    const total = g.order.totalCents + siblings.reduce((n, x) => n + x.order.totalCents, 0);
     const e = g.order.event;
     // The tickets' own date (multiple dates) or days (multi-day).
     const when = whenText(e.dateMode, e, g.order.ticketType, e.dates);
@@ -116,12 +128,12 @@ export class GiftService implements OnModuleInit, OnModuleDestroy {
     const link = `${config.webUrl}/gift/${g.token}`;
     const from = firstName(g.order.buyerName);
     const { html, text } = render({
-      preheader: `${from} sent you ${g.order.quantity === 1 ? 'a ticket' : `${g.order.quantity} tickets`} to ${e.title}.`,
+      preheader: `${from} sent you ${count === 1 ? 'a ticket' : `${count} tickets`} to ${e.title}.`,
       heading: `${from} sent you tickets to ${e.title}`,
-      ...(g.hidePrice ? {} : { highlight: { label: `${g.order.quantity} × ${g.order.ticketType.name}`, value: formatMoney(g.order.totalCents, g.order.currency) } }),
+      ...(g.hidePrice ? {} : { highlight: { label: lineText, value: formatMoney(total, g.order.currency) } }),
       paragraphs: [
         ...(g.message ? [`“${g.message}” — ${from}`] : []),
-        `${g.order.quantity} × ${g.order.ticketType.name} · ${when}${where ? ` · ${where}` : ''}`,
+        `${lineText} · ${when}${where ? ` · ${where}` : ''}`,
         'Open your gift to add the tickets to your Omoshow account. Your QR code appears there before the event.',
       ],
       cta: { label: 'Open your gift', url: link },
@@ -129,6 +141,7 @@ export class GiftService implements OnModuleInit, OnModuleDestroy {
     });
     const ok = await this.mail.send('gift.delivered', { to: g.recipientEmail, subject: `🎁 ${from} sent you tickets to ${e.title}`, html, text });
     await this.prisma.gift.update({ where: { id }, data: { sentAt: g.sentAt ?? new Date() } });
+    if (siblings.length) await this.prisma.gift.updateMany({ where: { id: { in: siblings.map((x) => x.id) }, sentAt: null }, data: { sentAt: new Date() } });
     void this.notices.giftDelivered(id);
     this.log.log(`Gift ${id} delivered to the recipient (${ok ? 'email sent' : 'email not sent'})`);
     return true;
@@ -203,6 +216,8 @@ export class GiftService implements OnModuleInit, OnModuleDestroy {
             // The tickets' date (DATES) or days (DAYS)
             ...ticketDates(g.order.event.dateMode, g.order.ticketType, g.order.event.dates),
             quantity: g.order.quantity,
+            // A cart sent as a gift: its other ticket types, which open with this one.
+            also: await this.alsoIn(g.order.groupId, g.orderId),
             seats: g.order.tickets
               .filter((x) => x.seat !== null)
               .map((x) => {
@@ -213,6 +228,13 @@ export class GiftService implements OnModuleInit, OnModuleDestroy {
           }
         : {}),
     };
+  }
+
+  /** The other ticket types of a cart sent as a gift ([] for a one-type gift). */
+  private async alsoIn(groupId: string | null, orderId: string) {
+    if (!groupId) return [];
+    const rows = await this.prisma.order.findMany({ where: { groupId, id: { not: orderId }, status: 'PAID', gift: { isNot: null } }, orderBy: { createdAt: 'asc' }, select: { quantity: true, ticketType: { select: { name: true } } } });
+    return rows.map((r) => ({ quantity: r.quantity, name: r.ticketType.name }));
   }
 
   async claim(t: string, user: AuthUser) {
@@ -250,7 +272,17 @@ export class GiftService implements OnModuleInit, OnModuleDestroy {
       });
       if (!count) throw new BadRequestException('There are no tickets left in this gift.');
       await tx.gift.update({ where: { id: g.id }, data: { claimedAt: new Date(), claimedBy: user.id } });
-      return count;
+      // A cart sent as a gift: the rest of it comes too.
+      const groupId = (await tx.order.findUnique({ where: { id: g.orderId }, select: { groupId: true } }))?.groupId;
+      if (!groupId) return count;
+      const rest = await tx.gift.findMany({ where: { id: { not: g.id }, claimedAt: null, order: { groupId, status: 'PAID' } }, select: { id: true, orderId: true } });
+      if (!rest.length) return count;
+      const more = await tx.ticket.updateMany({
+        where: { orderId: { in: rest.map((x) => x.orderId) }, status: 'TRANSFER_PENDING' },
+        data: { status: 'ACTIVE', transferTo: null, ownerId: user.id, holderEmail: user.email, holderName: user.name, qrVersion: { increment: 1 } },
+      });
+      await tx.gift.updateMany({ where: { id: { in: rest.map((x) => x.id) } }, data: { claimedAt: new Date(), claimedBy: user.id } });
+      return count + more.count;
     });
     await this.audit.log(user.id, g.order.kind === 'COMP' ? 'comp.claim' : 'gift.claim', 'Gift', g.id, { tickets: result });
     return { claimed: true, tickets: result };
