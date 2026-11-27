@@ -30,7 +30,7 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiProperty, ApiTags } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { ArrayMaxSize, IsArray, IsIn, IsInt, IsOptional, IsString, Matches, Max, MaxLength, Min, ValidateNested } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsInt, IsOptional, IsString, Matches, Max, MaxLength, Min, ValidateNested } from 'class-validator';
 import { Readable } from 'node:stream';
 import type { Request } from 'express';
 import { Prisma } from '@prisma/client';
@@ -74,6 +74,7 @@ export const coverUrl = (id: string, kind: MediaItem['kind'] = 'image') =>
   `${config.mediaexUrl}/api/media/${id}/transform?${kind === 'video' ? 't=1&' : ''}w=1200&h=675&fit=cover&pos=attention&f=auto&q=78`;
 
 export class StartUploadDto {
+  @ApiProperty({ required: false }) @IsOptional() @IsBoolean() multipart?: boolean;
   @ApiProperty() @IsString() @MaxLength(255) fileName: string;
   // The real per-type limits are checked in startUpload, with a readable message; this only stops absurd values.
   @ApiProperty() @IsInt() @Min(1) @Max(10 * 1024 * 1024 * 1024) size: number;
@@ -149,15 +150,17 @@ export class MediaService {
     if (kind === 'video' && !MEDIA_LIMITS.videoTypes.includes(mime)) throw new BadRequestException('Videos can be MP4, MOV or WebM.');
     if (kind === 'image' && dto.size > MEDIA_LIMITS.imageBytes) throw new BadRequestException(`Photos can be up to ${MB(MEDIA_LIMITS.imageBytes)}.`);
     if (kind === 'video' && dto.size > MEDIA_LIMITS.videoBytes) throw new BadRequestException(`Videos can be up to ${MB(MEDIA_LIMITS.videoBytes)}.`);
-    const r = await this.mediaex<{ asset: { id: string }; upload: { kind: string; url?: string; method?: string; headers?: Record<string, string> } }>('/uploads', {
+    const r = await this.mediaex<{ asset: { id: string }; upload: { kind: string; url?: string; method?: string; headers?: Record<string, string>; partSize?: number; partCount?: number } }>('/uploads', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ fileName: dto.fileName, size: dto.size, mimeType: dto.mimeType }),
+      body: JSON.stringify({ fileName: dto.fileName, size: dto.size, mimeType: dto.mimeType, multipart: dto.multipart === true }),
     });
-    if (r.upload.kind !== 'single' || !r.upload.url) throw new BadRequestException('That file is too large to upload in one go.');
+    const multipart = r.upload.kind === 'multipart' && dto.multipart === true;
+    if (!multipart && (r.upload.kind !== 'single' || !r.upload.url)) throw new BadRequestException('That file requires a resumable upload.');
     await this.prisma.mediaUpload.create({ data: { id: r.asset.id, userId: user.id, kind, fileName: dto.fileName.slice(0, 255), size: dto.size } });
     // Files stored on mediaEX's own disk go through this API (which adds the key); bucket URLs are already signed.
-    const viaMediaex = r.upload.url.startsWith(`${config.mediaexUrl}/api/v1/uploads/`);
+    if (multipart) return { id: r.asset.id, kind, upload: { through: 'multipart' as const, partSize: r.upload.partSize, partCount: r.upload.partCount } };
+    const viaMediaex = r.upload.url!.startsWith(`${config.mediaexUrl}/api/v1/uploads/`);
     return {
       id: r.asset.id,
       kind,
@@ -175,6 +178,33 @@ export class MediaService {
   }
 
   /** Streams the browser's file to mediaEX, adding the key. */
+  async listParts(id: string, user: AuthUser) {
+    await this.own(id, user);
+    return this.mediaex(`/uploads/${id}/parts`);
+  }
+
+  async partTarget(id: string, user: AuthUser, number: number) {
+    await this.own(id, user);
+    if (!Number.isSafeInteger(number) || number < 1 || number > 10000) throw new BadRequestException('Invalid upload part.');
+    type Part = { number: number; size: number; url: string; headers: Record<string, string> };
+    const result = await this.mediaex<{ parts: Part[] }>(`/uploads/${id}/parts`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ numbers: [number] }),
+    });
+    const part = result.parts[0];
+    if (!part || part.number !== number || !Number.isSafeInteger(part.size) || part.size < 1) throw new ServiceUnavailableException('Unexpected upload part.');
+    const relay = part.url === `${config.mediaexUrl}/api/v1/uploads/${id}/parts/${number}`;
+    return { number, size: part.size, through: relay ? 'eventro' : 'bucket', url: relay ? null : part.url, headers: relay ? {} : part.headers };
+  }
+
+  async relayPart(id: string, user: AuthUser, number: number, req: Request) {
+    const part = await this.partTarget(id, user, number);
+    if (part.through !== 'eventro' || Number(req.headers['content-length']) !== part.size) throw new BadRequestException('Unexpected upload destination or part size.');
+    return this.mediaex(`/uploads/${id}/parts/${number}`, {
+      method: 'PUT', headers: { 'content-type': 'application/octet-stream', 'content-length': String(part.size) },
+      body: Readable.toWeb(req) as never, duplex: 'half',
+    });
+  }
+
   async relay(id: string, user: AuthUser, req: Request) {
     const u = await this.own(id, user);
     const length = Number(req.headers['content-length']);
@@ -313,6 +343,24 @@ export class MediaController {
   }
 
   @ApiBearerAuth()
+  @Get('media/uploads/:id/parts')
+  parts(@Param('id') id: string, @CurrentUser() u: AuthUser) {
+    return this.media.listParts(id, u);
+  }
+
+  @ApiBearerAuth()
+  @Post('media/uploads/:id/parts/:number')
+  part(@Param('id') id: string, @Param('number') number: string, @CurrentUser() u: AuthUser) {
+    return this.media.partTarget(id, u, Number(number));
+  }
+
+  @ApiBearerAuth()
+  @Put('media/uploads/:id/parts/:number')
+  putPart(@Param('id') id: string, @Param('number') number: string, @CurrentUser() u: AuthUser, @Req() req: Request) {
+    return this.media.relayPart(id, u, Number(number), req);
+  }
+
+  @ApiBearerAuth()
   @Post('media/uploads/:id/complete')
   @HttpCode(200)
   complete(@Param('id') id: string, @CurrentUser() u: AuthUser) {
@@ -334,3 +382,4 @@ export class MediaController {
 
 @Module({ controllers: [MediaController], providers: [MediaService] })
 export class MediaModule {}
+
