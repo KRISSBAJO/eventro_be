@@ -787,7 +787,7 @@ test('resale orders with a donation: the total, the seller’s payout unchanged,
   assert.equal(cb.status, 'REFUNDED');
   assert.equal(cb.refundedCents, b.price + 300);
   assert.equal(cb.donationRefundedCents, 300);
-  assert.equal((await prisma.resaleListing.findUniqueOrThrow({ where: { id: b.listingId } })).payoutStatus, 'HELD', 'a cancelled resale order holds the seller’s payout, as before');
+  assert.equal((await prisma.resaleListing.findUniqueOrThrow({ where: { id: b.listingId } })).payoutStatus, 'CANCELLED', 'a cancelled event cancels the seller’s resale payout (their own order was refunded)');
   const ca = await prisma.order.findUniqueOrThrow({ where: { id: paid.id } });
   assert.equal(ca.status, 'REFUNDED');
   assert.equal(ca.donationRefundedCents, 700);

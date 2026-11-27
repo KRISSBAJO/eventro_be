@@ -360,7 +360,7 @@ test('organizer cancels an event: everything refunded once, tickets void, buyers
   assert.equal(byId.get(b.id)!.status, 'PAID', 'failed refund stays PAID for an admin to see');
   assert.equal(await prisma.ticket.count({ where: { eventId: ev.id, status: { not: 'VOID' } } }), 0);
   assert.equal((await prisma.resaleListing.findUniqueOrThrow({ where: { id: open.listingId } })).status, 'CANCELLED');
-  assert.equal((await prisma.resaleListing.findUniqueOrThrow({ where: { id: listed.listingId } })).payoutStatus, 'HELD', 'resale payout held like an admin refund');
+  assert.equal((await prisma.resaleListing.findUniqueOrThrow({ where: { id: listed.listingId } })).payoutStatus, 'CANCELLED', 'the seller’s own order was refunded, so their resale payout is cancelled');
   assert.equal((await prisma.hold.findUniqueOrThrow({ where: { id: openHold.id } })).status, 'RELEASED');
   const audit = await prisma.auditLog.findFirstOrThrow({ where: { entityId: ev.id, action: 'event.cancel' } });
   assert.deepEqual((audit.data as Json).failed, [{ orderId: b.id, message: 'Card network unavailable' }]);

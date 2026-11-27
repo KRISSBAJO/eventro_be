@@ -312,16 +312,16 @@ export class NoticeService implements OnModuleInit, OnModuleDestroy {
     return [...new Set(rows.map((r) => r.ownerId ?? byEmail.get(r.holderEmail)).filter((x): x is string => !!x))];
   }
 
-  /** The event (or one date of it) moved: to everyone holding a ticket for it. Once per change and person. */
-  eventMoved(e: { id: string; title: string; orgName: string }, c: { id: string; to: string }, userIds: string[]) {
+  /** A change to the event (a new time, postponed, back on, a tier's perks): to everyone holding an affected ticket. Once per change and person. */
+  eventMoved(e: { id: string }, c: { id: string; title: string; body: string }, userIds: string[]) {
     return this.guard(`event.moved ${c.id}`, async () => {
       await this.push.send(
         'event.moved',
         'orders',
         userIds.map((userId) => ({
           userId,
-          title: `New time: ${e.title}`,
-          body: `${e.orgName} moved it to ${c.to}. Your tickets still work. Can’t make it? You can get a refund.`,
+          title: c.title,
+          body: c.body,
           data: link('/tickets', { type: 'event.moved', eventId: e.id }),
           dedupeKey: `event.moved:${c.id}:${userId}`,
         })),

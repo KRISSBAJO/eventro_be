@@ -185,11 +185,25 @@ export class EventDatesService {
     return [await tx.ticketType.create({ data: { ...t.data, eventId: ev.id, validDateIds: daysFor(t.data.name, t.validDates, dates) } })];
   }
 
-  /** Refuses changes that only work before anything was ordered (switching between one date, dates and days). */
+  /**
+   * Refuses changes that only work before anything was sold (switching between one date, dates and days): an order
+   * that was ever paid (refunded ones too: their tickets and records point at today's dates), a complimentary ticket,
+   * or a checkout still in progress. Abandoned checkouts don't count, and the message says which it is.
+   */
   private async assertNoOrders(tx: Tx, eventId: string) {
-    const orders = await tx.order.count({ where: { eventId } });
-    if (orders) {
-      throw new ConflictException({ statusCode: 409, code: 'DATE_MODE_LOCKED', message: 'This event has orders, so it can’t switch between one date, multiple dates and a multi-day event.' });
+    const recent = new Date(Date.now() - 30 * 60_000);
+    const [paid, comps, pending] = await Promise.all([
+      tx.order.count({ where: { eventId, kind: 'SALE', paidAt: { not: null } } }),
+      tx.order.count({ where: { eventId, kind: 'COMP' } }),
+      tx.order.count({ where: { eventId, status: 'PENDING', paidAt: null, createdAt: { gt: recent } } }),
+    ]);
+    if (paid || comps || pending) {
+      const why = paid
+        ? `It has ${paid} paid ${paid === 1 ? 'order' : 'orders'} (refunded ones count too)`
+        : comps
+          ? `It has ${comps} complimentary ${comps === 1 ? 'ticket' : 'tickets'}`
+          : `Someone is checking out right now (${pending} ${pending === 1 ? 'checkout' : 'checkouts'} in progress); try again in a few minutes`;
+      throw new ConflictException({ statusCode: 409, code: 'DATE_MODE_LOCKED', message: `${why}, so it can’t switch between one date, multiple dates and a multi-day event.` });
     }
   }
 
@@ -219,6 +233,13 @@ export class EventDatesService {
       const kept = keep ? await tx.ticketType.findMany({ where: { eventId: ev.id, eventDateId: keep.id } }) : [];
       const byTier = new Map(kept.map((t) => [t.tierKey ?? t.id, t.id]));
       await tx.ticketType.updateMany({ where: { id: { in: kept.map((t) => t.id) } }, data: { eventDateId: null, tierKey: null } });
+      // Abandoned checkouts on the copies that go (nothing paid: paid orders block the switch) move to the kept copy
+      // of their tier, closed, so the copies can be removed.
+      const gone = await tx.ticketType.findMany({ where: { eventId: ev.id, eventDateId: { not: null } }, select: { id: true, tierKey: true } });
+      for (const g of gone) {
+        const to = byTier.get(g.tierKey ?? g.id) ?? kept[0]?.id;
+        if (to) await tx.order.updateMany({ where: { ticketTypeId: g.id }, data: { ticketTypeId: to, status: 'CANCELLED' } });
+      }
       await tx.ticketType.deleteMany({ where: { eventId: ev.id, eventDateId: { not: null } } });
       const map = remapSections(ev.seatMap as SeatMap | null, (k) => byTier.get(k) ?? k);
       if (map) await tx.event.update({ where: { id: ev.id }, data: { seatMap: map } });

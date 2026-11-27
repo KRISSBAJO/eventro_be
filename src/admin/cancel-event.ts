@@ -21,7 +21,7 @@ import { NoticeService } from '../push/notices';
 import { VenueBookingService } from '../venues/venue-bookings';
 import { dateName, dateView, summaryTimes, type DateRow } from '../domain/event-dates';
 import { releaseReservationIds, releaseReservations } from '../schedule/release';
-import type { EventDate } from '@prisma/client';
+import type { EventDate, Prisma } from '@prisma/client';
 import { dayShare } from '../guarantee/guarantee';
 import { ticketLeft } from '../domain/pwyw';
 
@@ -150,6 +150,7 @@ export class EventCancellation {
 
     // 3. No ticket for a cancelled event can be used, listed or transferred, refunded or not.
     await this.prisma.ticket.updateMany({ where: { eventId, status: { not: 'VOID' } }, data: { status: 'VOID', listCents: null, transferTo: null, transferExpiresAt: null } });
+    await this.cancelSellerPayouts({ eventId });
     // Session places booked with them go back too.
     await releaseReservations(this.prisma, { eventId });
 
@@ -186,6 +187,18 @@ export class EventCancellation {
       holdsReleased: holds.count,
       venueBookingCancelled,
     };
+  }
+
+  /**
+   * Resold tickets for what was cancelled: the buyer was refunded, and so was the seller's own order for the ticket,
+   * so the seller's payout from the resale is cancelled rather than held (releasing it would pay them twice). Payouts
+   * already paid stay as they are, for the team to settle.
+   */
+  private async cancelSellerPayouts(where: Prisma.ResaleListingWhereInput) {
+    await this.prisma.resaleListing.updateMany({
+      where: { ...where, status: 'SOLD', payoutStatus: { in: ['PENDING', 'AVAILABLE', 'HELD'] } },
+      data: { payoutStatus: 'CANCELLED', payoutNote: 'Cancelled with the event: the seller’s own order for this ticket was refunded instead.' },
+    });
   }
 
   /* ---------- one date of a multiple-dates event ---------- */
@@ -312,6 +325,7 @@ export class EventCancellation {
 
     // 3. No ticket for the date can be used, listed or transferred, refunded or not.
     await this.prisma.ticket.updateMany({ where: { eventDateId: d.id, status: { not: 'VOID' } }, data: { status: 'VOID', listCents: null, transferTo: null, transferExpiresAt: null } });
+    await this.cancelSellerPayouts({ ticket: { eventDateId: d.id } });
     await releaseReservations(this.prisma, { eventDateId: d.id });
 
     const totalRefundedCents: Record<string, number> = {};
@@ -488,6 +502,7 @@ export class EventCancellation {
         failed.push({ orderId: o.id, message, email: o.email, buyerName: o.buyerName, cents, currency: o.currency });
       }
     }
+    await this.cancelSellerPayouts({ ticket: { ticketTypeId: { in: onlyThis } } });
     // Tickets for this day alone can't be used, listed or transferred; passes keep working on their other days.
     const voided = await this.prisma.ticket.updateMany({ where: { ticketTypeId: { in: onlyThis }, status: { not: 'VOID' } }, data: { status: 'VOID', listCents: null, transferTo: null, transferExpiresAt: null } });
     // Sessions booked on that day go back.

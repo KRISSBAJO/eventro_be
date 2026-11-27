@@ -1,4 +1,8 @@
-/** Date changes of live events (see src/organizer/date-changes.ts): which tickets a move hits, and how GET /me/tickets shows it. */
+/**
+ * Changes to live events that ticket holders are told about and buyers can take a refund for (see
+ * src/organizer/date-changes.ts): TIME (a start moved), POSTPONED (new date to be announced), PERKS (a sold tier lost
+ * something it promised). Which tickets each hits, and how GET /me/tickets shows it.
+ */
 import type { DateChange, Prisma } from '@prisma/client';
 import { dayShare } from '../guarantee/guarantee';
 import { ticketLeft } from './pwyw';
@@ -10,6 +14,16 @@ export const MIN_MOVE_MS = 30 * 60_000;
 export const REFUND_WINDOW_MS = 14 * DAY;
 
 export type Move = { eventDateId: string | null; from: Date; to: Date };
+export type ChangeKind = 'TIME' | 'POSTPONED' | 'PERKS';
+/** How long buyers have to take a refund while an event is postponed (then it's cancelled and everyone refunded). */
+export const POSTPONE_LIMIT_MS = 90 * DAY;
+
+/** The tickets a change affects. */
+export function ticketsHit(c: { eventId: string; kind?: string; eventDateId: string | null; ticketTypeIds?: string[] }, mode: string): Prisma.TicketWhereInput {
+  if (c.kind === 'PERKS') return { eventId: c.eventId, ticketTypeId: { in: c.ticketTypeIds ?? [] } };
+  if (c.kind === 'POSTPONED') return { eventId: c.eventId };
+  return ticketsMoved(c.eventId, mode, c.eventDateId);
+}
 
 /** The tickets a move affects. */
 export function ticketsMoved(eventId: string, mode: string, eventDateId: string | null): Prisma.TicketWhereInput {
@@ -18,9 +32,20 @@ export function ticketsMoved(eventId: string, mode: string, eventDateId: string 
   return { eventId };
 }
 
-/** Whether a change applies to a ticket of this type (SINGLE: every ticket; DATES: its date; DAYS: one of its days). */
-export const changeHits = (c: Pick<DateChange, 'eventDateId'>, mode: string, tt: { eventDateId: string | null; validDateIds: string[] }) =>
-  mode === 'SINGLE' ? c.eventDateId === null : mode === 'DATES' ? c.eventDateId === tt.eventDateId : !!c.eventDateId && tt.validDateIds.includes(c.eventDateId);
+/**
+ * Whether a change applies to a ticket of this type. A postponement: every ticket. Lost perks: that tier's tickets.
+ * A time change: SINGLE every ticket; DATES its date; DAYS one of its days.
+ */
+export const changeHits = (c: Pick<DateChange, 'eventDateId'> & { kind?: string; ticketTypeIds?: string[] }, mode: string, tt: { id?: string; eventDateId: string | null; validDateIds: string[] }) =>
+  c.kind === 'POSTPONED'
+    ? true
+    : c.kind === 'PERKS'
+      ? !!tt.id && (c.ticketTypeIds ?? []).includes(tt.id)
+      : mode === 'SINGLE'
+        ? c.eventDateId === null
+        : mode === 'DATES'
+          ? c.eventDateId === tt.eventDateId
+          : !!c.eventDateId && tt.validDateIds.includes(c.eventDateId);
 
 /**
  * The latest change for a ticket that its order was bought before (later buyers bought the new time), as GET
@@ -29,7 +54,7 @@ export const changeHits = (c: Pick<DateChange, 'eventDateId'>, mode: string, tt:
 export function dateChangeView(
   changes: DateChange[],
   mode: string,
-  tt: { eventDateId: string | null; validDateIds: string[] },
+  tt: { id?: string; eventDateId: string | null; validDateIds: string[] },
   order: { kind: string; status: string; paidAt: Date | null; createdAt: Date; totalCents: number; refundedCents: number },
   opts: { isBuyer: boolean; used: boolean; now?: number; refund?: (c: DateChange) => { cents: number; whole: boolean }; taken?: (changeId: string) => boolean },
 ) {
@@ -41,6 +66,9 @@ export function dateChangeView(
   const refund = opts.refund?.(c);
   return {
     id: c.id,
+    kind: (c.kind ?? 'TIME') as ChangeKind,
+    /** PERKS: { tier, removed } */
+    detail: (c.detail ?? null) as { tier?: string; removed?: string[] } | null,
     fromStartsAt: c.fromStartsAt,
     toStartsAt: c.toStartsAt,
     reason: c.reason,
@@ -62,12 +90,13 @@ export function moveRefund(
   mode: string,
   tt: { validDateIds: string[] },
   dates: { id: string; startsAt: Date; status: string }[],
-  change: Pick<DateChange, 'eventDateId'>,
+  change: Pick<DateChange, 'eventDateId'> & { kind?: string },
   ticketIds: string[],
 ) {
   const left = Math.max(0, o.totalCents - o.refundedCents);
   const dayId = change.eventDateId;
-  if (mode !== 'DAYS' || !dayId) return { cents: left, whole: true };
+  // A postponement or a lost perk is about the whole order.
+  if (mode !== 'DAYS' || !dayId || (change.kind && change.kind !== 'TIME')) return { cents: left, whole: true };
   const own = dates.filter((d) => tt.validDateIds.includes(d.id)).sort((a, b) => a.startsAt.getTime() - b.startsAt.getTime());
   if (!own.some((d) => d.id !== dayId && d.status === 'ACTIVE')) return { cents: left, whole: true };
   const days = own.map((d) => d.id);

@@ -306,6 +306,8 @@ export class EventsService {
       feePermille: config.organizerFeePermille,
       donations: donationsView(e),
       salesPaused: e.salesPaused,
+      // Postponed: new date to be announced (tickets stay valid).
+      ...(e.postponedAt ? { postponedAt: e.postponedAt, postponeReason: e.postponeReason } : {}),
       ...(cancelled ? { status: e.status, cancelledAt: e.cancelledAt, cancelReason: e.cancelReason } : e.status !== 'PUBLISHED' ? { preview: true, status: e.status } : {}),
       presentedBy: e.org.name,
       // The organizer's public page (GET /organizers/:slug), to follow them.
@@ -404,6 +406,28 @@ export class EventsController {
   search(@Query() q: EventQueryDto) {
     return this.events.search(q);
   }
+
+  /**
+   * Omoshow in numbers, for the "Sell tickets" pitch: events on sale now, tickets issued so far, organizers with a
+   * public page and cities with something on. Counted at most every 10 minutes.
+   */
+  @Public()
+  @Get('stats')
+  async stats() {
+    if (this.statsCache && this.statsCache.at > Date.now() - 10 * 60_000) return this.statsCache.value;
+    const upcoming: Prisma.EventWhereInput = { status: 'PUBLISHED', visibility: 'PUBLIC', ...dateRangeWhere(new Date()) };
+    const [eventsOnSale, ticketsIssued, organizers, places] = await Promise.all([
+      this.prisma.event.count({ where: upcoming }),
+      this.prisma.ticket.count({ where: { status: { not: 'VOID' } } }),
+      this.prisma.organization.count({ where: { suspendedAt: null, events: { some: { publishedAt: { not: null }, visibility: 'PUBLIC' } } } }),
+      this.prisma.event.findMany({ where: { ...upcoming, online: false, venueId: { not: null } }, select: { venue: { select: { city: true, country: true } } }, distinct: ['venueId'] }),
+    ]);
+    const cities = new Set(places.map((p) => `${p.venue?.city?.trim().toLowerCase()}|${p.venue?.country ?? ''}`).filter((k) => !k.startsWith('undefined')));
+    const value = { eventsOnSale, ticketsIssued, organizers, cities: cities.size };
+    this.statsCache = { at: Date.now(), value };
+    return value;
+  }
+  private statsCache: { at: number; value: { eventsOnSale: number; ticketsIssued: number; organizers: number; cities: number } } | null = null;
 
   /** The home page spotlight, or { spotlight: null } when nothing is on sale. */
   @Public()

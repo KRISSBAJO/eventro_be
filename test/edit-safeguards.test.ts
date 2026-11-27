@@ -105,7 +105,7 @@ test('domain: pending edits, organizer share of a refund, date change view', () 
   assert.equal(organizerShareOf(o, 10_000, 9_000), 9_000);
   assert.equal(organizerShareOf(o, 5_000, 9_000), 4_500);
   // A change after the purchase shows; one before it doesn't (they bought the new time).
-  const c = { id: 'c', eventId: 'e', eventDateId: null, fromStartsAt: new Date(), toStartsAt: new Date(), reason: null, refundUntil: new Date(Date.now() + DAY), createdAt: new Date() };
+  const c = { id: 'c', eventId: 'e', kind: 'TIME', ticketTypeIds: [], detail: null, emailed: 0, failed: 0, eventDateId: null, fromStartsAt: new Date(), toStartsAt: new Date(), reason: null, refundUntil: new Date(Date.now() + DAY), createdAt: new Date() };
   const order = { kind: 'SALE', status: 'PAID', paidAt: new Date(Date.now() - DAY), createdAt: new Date(Date.now() - DAY), totalCents: 1000, refundedCents: 0 };
   assert.equal(dateChangeView([c], 'SINGLE', { eventDateId: null, validDateIds: [] }, order, { isBuyer: true, used: false })?.refundable, true);
   assert.equal(dateChangeView([c], 'SINGLE', { eventDateId: null, validDateIds: [] }, { ...order, paidAt: new Date(Date.now() + 1000) }, { isBuyer: true, used: false }), null);
@@ -300,4 +300,127 @@ test('multi-day: cancelling one day refunds day-only tickets in full and a pass 
   assert.equal(hold.status, 400);
   const door = await call('POST', `/organizer/events/${ev.id}/check-in`, { code: p.tickets[0].id, eventDateId: day2.id }, org.token);
   assert.equal(door.status, 400);
+});
+
+test('postponed: sales pause, holders hear, buyers can take a refund; a new date ends it; 90 days without one cancels it', async () => {
+  const { DateChangeService } = await import('../src/organizer/date-changes');
+  const admin = await account('admin@test.local', 'Admin');
+  const org = await account(`safe-p-${run}@test.local`, 'Pola Organizer');
+  const fan = await account(`safe-pf-${run}@test.local`, 'Pia Fan');
+  const { ev } = await published(org.token, admin.token, single(`Postponed ${run}`));
+  const orderId = await buy(fan, ev.ticketTypes[0].id, 2);
+  await prisma.order.update({ where: { id: orderId }, data: { paidAt: new Date(Date.now() - DAY), createdAt: new Date(Date.now() - DAY) } });
+  // Who it reaches, before doing it.
+  const impact = await ok(call('GET', `/organizer/events/${ev.id}/impact`, undefined, org.token));
+  assert.deepEqual([impact.paidOrders, impact.tickets, impact.comps], [1, 2, 0]);
+  assert.equal((await call('POST', `/organizer/events/${ev.id}/postpone`, { reason: 'short' }, org.token)).status, 400);
+  const p = await ok(call('POST', `/organizer/events/${ev.id}/postpone`, { reason: 'The venue roof needs repairs first' }, org.token));
+  assert.ok(p.postponedAt);
+  const after = await prisma.event.findUniqueOrThrow({ where: { id: ev.id } });
+  assert.equal(after.salesPaused, true);
+  assert.equal((await call('POST', `/organizer/events/${ev.id}/resume`, undefined, org.token)).status, 400, 'no selling again while postponed');
+  assert.ok(await waitFor(() => prisma.emailLog.findFirst({ where: { kind: 'event.postponed', to: fan.user.email } })));
+  const counted = await waitFor(() => prisma.dateChange.findFirst({ where: { eventId: ev.id, kind: 'POSTPONED', OR: [{ emailed: { gt: 0 } }, { failed: { gt: 0 } }] } }));
+  assert.ok(counted, 'delivery counted on the change');
+  const t = ((await ok(call('GET', '/me/tickets', undefined, fan.token))).tickets as Json[]).find((x) => x.orderId === orderId)!;
+  assert.equal(t.dateChange.kind, 'POSTPONED');
+  assert.equal(t.dateChange.refundable, true);
+  // A new date: the postponement ends, sales resume, and the move is announced with its own window.
+  await ok(call('PATCH', `/organizer/events/${ev.id}`, { startsAt: at(45), endsAt: at(45, 23) }, org.token));
+  const back = await prisma.event.findUniqueOrThrow({ where: { id: ev.id } });
+  assert.deepEqual([back.postponedAt, back.salesPaused], [null, false]);
+  const t2 = ((await ok(call('GET', '/me/tickets', undefined, fan.token))).tickets as Json[]).find((x) => x.orderId === orderId)!;
+  assert.equal(t2.dateChange.kind, 'TIME');
+  assert.equal(t2.dateChange.refundable, true);
+
+  // Postponed again and left for 90 days: cancelled, everyone refunded.
+  await ok(call('POST', `/organizer/events/${ev.id}/postpone`, { reason: 'Still waiting on the roof repairs' }, org.token));
+  await prisma.event.update({ where: { id: ev.id }, data: { postponedAt: new Date(Date.now() - 91 * DAY) } });
+  assert.ok((await app.get(DateChangeService).sweepPostponed()) >= 1);
+  const gone = await prisma.event.findUniqueOrThrow({ where: { id: ev.id } });
+  assert.equal(gone.status, 'CANCELLED');
+  assert.equal((await prisma.order.findUniqueOrThrow({ where: { id: orderId } })).status, 'REFUNDED');
+});
+
+test('back on: a postponed event goes ahead on its date; holders hear and sales resume', async () => {
+  const admin = await account('admin@test.local', 'Admin');
+  const org = await account(`safe-b-${run}@test.local`, 'Bisi Organizer');
+  const fan = await account(`safe-bf-${run}@test.local`, 'Bola Fan');
+  const { ev } = await published(org.token, admin.token, single(`Back On ${run}`));
+  await buy(fan, ev.ticketTypes[0].id, 1);
+  await ok(call('POST', `/organizer/events/${ev.id}/postpone`, { reason: 'Waiting on the permit for the stage' }, org.token));
+  await ok(call('DELETE', `/organizer/events/${ev.id}/postpone`, undefined, org.token));
+  const e = await prisma.event.findUniqueOrThrow({ where: { id: ev.id } });
+  assert.deepEqual([e.postponedAt, e.salesPaused], [null, false]);
+  assert.ok(await waitFor(() => prisma.emailLog.findFirst({ where: { kind: 'event.back_on', to: fan.user.email } })));
+  assert.equal((await call('DELETE', `/organizer/events/${ev.id}/postpone`, undefined, org.token)).status, 400);
+});
+
+test('perks taken off a sold tier: its buyers hear and can take a refund; other tiers are untouched', async () => {
+  const admin = await account('admin@test.local', 'Admin');
+  const org = await account(`safe-k-${run}@test.local`, 'Kemi Organizer');
+  const vip = await account(`safe-kv-${run}@test.local`, 'Vee VIP');
+  const ga = await account(`safe-kg-${run}@test.local`, 'Gee GA');
+  const { ev } = await published(org.token, admin.token, {
+    ...single(`Perks ${run}`),
+    ticketTypes: [
+      { name: 'VIP', basePriceCents: 9000, capacity: 20, perks: ['Early entry', 'Meet and greet'] },
+      { name: 'General', basePriceCents: 3000, capacity: 50 },
+    ],
+  });
+  const vipType = (ev.ticketTypes as Json[]).find((t) => t.name === 'VIP')!;
+  const gaType = (ev.ticketTypes as Json[]).find((t) => t.name === 'General')!;
+  const vipOrder = await buy(vip, vipType.id);
+  const gaOrder = await buy(ga, gaType.id);
+  for (const id of [vipOrder, gaOrder]) await prisma.order.update({ where: { id }, data: { paidAt: new Date(Date.now() - DAY), createdAt: new Date(Date.now() - DAY) } });
+  // What they bought is kept with the order.
+  const snap = (await prisma.order.findUniqueOrThrow({ where: { id: vipOrder } })).snapshot as Json;
+  assert.deepEqual([snap.tierName, snap.perks], ['VIP', ['Early entry', 'Meet and greet']]);
+  await ok(call('PATCH', `/organizer/events/${ev.id}/ticket-types/${vipType.id}`, { perks: ['Early entry'] }, org.token));
+  const c = await prisma.dateChange.findFirstOrThrow({ where: { eventId: ev.id, kind: 'PERKS' } });
+  assert.deepEqual((c.detail as Json).removed, ['Meet and greet']);
+  const vt = ((await ok(call('GET', '/me/tickets', undefined, vip.token))).tickets as Json[]).find((x) => x.orderId === vipOrder)!;
+  assert.equal(vt.dateChange.kind, 'PERKS');
+  assert.equal(vt.dateChange.refundable, true);
+  const gt = ((await ok(call('GET', '/me/tickets', undefined, ga.token))).tickets as Json[]).find((x) => x.orderId === gaOrder)!;
+  assert.equal(gt.dateChange, null, 'other tiers are not affected');
+  await ok(call('POST', `/me/orders/${vipOrder}/date-change-refund`, undefined, vip.token));
+  assert.equal((await prisma.order.findUniqueOrThrow({ where: { id: vipOrder } })).status, 'REFUNDED');
+  // Adding a perk is never a problem.
+  await ok(call('PATCH', `/organizer/events/${ev.id}/ticket-types/${gaType.id}`, { perks: ['Free coat check'] }, org.token));
+  assert.equal(await prisma.dateChange.count({ where: { eventId: ev.id, kind: 'PERKS' } }), 1);
+});
+
+test('cancelled or over: only the description can be corrected (and it is logged); tickets cannot change', async () => {
+  const admin = await account('admin@test.local', 'Admin');
+  const org = await account(`safe-o-${run}@test.local`, 'Ola Organizer');
+  const { ev } = await published(org.token, admin.token, single(`Over ${run}`));
+  await prisma.event.update({ where: { id: ev.id }, data: { startsAt: new Date(Date.now() - 2 * DAY), endsAt: new Date(Date.now() - 2 * DAY + 3 * 3_600_000) } });
+  const title = await call('PATCH', `/organizer/events/${ev.id}`, { title: 'Something else' }, org.token);
+  assert.equal(title.status, 400);
+  assert.match(title.body.message, /This event is over\. Only its description can still be corrected\./);
+  const fixed = await ok(call('PATCH', `/organizer/events/${ev.id}`, { description: 'Thanks for coming, everyone.' }, org.token));
+  assert.equal(fixed.description, 'Thanks for coming, everyone.');
+  assert.ok(await prisma.auditLog.findFirst({ where: { action: 'event.edit_closed', entityId: ev.id } }));
+  assert.equal((await call('PATCH', `/organizer/events/${ev.id}/ticket-types/${ev.ticketTypes[0].id}`, { perks: ['x'] }, org.token)).status, 400);
+  assert.equal((await call('POST', `/organizer/events/${ev.id}/ticket-types`, { name: 'Late', basePriceCents: 100, capacity: 5 }, org.token)).status, 400);
+});
+
+test('switching kinds of dates: abandoned checkouts do not lock it; paid orders do, and the message says why', async () => {
+  const admin = await account('admin@test.local', 'Admin');
+  const org = await account(`safe-s-${run}@test.local`, 'Sade Organizer');
+  const fan = await account(`safe-sf-${run}@test.local`, 'Sola Fan');
+  const { ev } = await published(org.token, admin.token, single(`Switch ${run}`));
+  // A checkout someone walked away from an hour ago.
+  const h = await ok(call('POST', '/holds', { ticketTypeId: ev.ticketTypes[0].id, quantity: 1 }, fan.token));
+  const o = await ok(call('POST', '/orders', { holdId: h.id, email: fan.user.email, name: fan.user.name }, fan.token));
+  await prisma.order.update({ where: { id: o.orderId }, data: { createdAt: new Date(Date.now() - 3_600_000) } });
+  await ok(call('PATCH', `/organizer/events/${ev.id}`, { dateMode: 'DATES', dates: [{ startsAt: at(30) }, { startsAt: at(31) }] }, org.token));
+  await ok(call('PATCH', `/organizer/events/${ev.id}`, { dateMode: 'SINGLE', startsAt: at(30) }, org.token));
+  // A paid order locks it.
+  const full = await ok(call('GET', `/organizer/events/${ev.id}`, undefined, org.token));
+  await buy(fan, (full.ticketTypes as Json[])[0].id);
+  const locked = await call('PATCH', `/organizer/events/${ev.id}`, { dateMode: 'DAYS', dates: [{ startsAt: at(30) }, { startsAt: at(31) }] }, org.token);
+  assert.equal(locked.status, 409);
+  assert.match(locked.body.message, /It has 1 paid order/);
 });

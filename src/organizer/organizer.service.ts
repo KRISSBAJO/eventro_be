@@ -64,6 +64,23 @@ const SYNC_SCAN_RESULT: Record<string, ScanResult> = {
 };
 const dayKey = (d: Date) => d.toISOString().slice(0, 10);
 
+/**
+ * Why an event can no longer be changed, or null: it was cancelled, or it's over (the end of its last date, or 6 hours
+ * after the start when there's no end, has passed).
+ */
+function closedWhy(ev: { status: string; startsAt: Date; endsAt: Date | null; dates: { status: string; startsAt: Date; endsAt: Date | null }[] }, now = new Date()) {
+  if (ev.status === 'CANCELLED') return 'This event was cancelled.';
+  const live = ev.dates.filter((d) => d.status === 'ACTIVE');
+  const ends = (live.length ? live : [ev]).map((d) => (d.endsAt ?? new Date(d.startsAt.getTime() + 6 * 3_600_000)).getTime());
+  return Math.max(...ends) < now.getTime() ? 'This event is over.' : null;
+}
+
+/** Refuses changes to the tickets of a cancelled or finished event. */
+function assertOpen(ev: Parameters<typeof closedWhy>[0]) {
+  const why = closedWhy(ev);
+  if (why) throw new BadRequestException(`${why} Its tickets can’t change any more.`);
+}
+
 /** What the door needs about a ticket, comps included ("Comp · Press"). */
 const DOOR_TICKET = { ticketType: { select: { name: true, validDateIds: true } }, order: { select: { kind: true, compGroup: true } } } as const;
 type DoorTicket = Prisma.TicketGetPayload<{ include: typeof DOOR_TICKET }>;
@@ -536,6 +553,17 @@ export class OrganizerService {
 
   async updateEvent(id: string, user: AuthUser, dto: UpdateEventDto) {
     const ev = await this.eventFor(id, user, EDIT);
+    // Cancelled or over: what happened is a record now (and may be in a dispute). Only the description can be
+    // corrected, and that's logged with the text it replaced.
+    const closed = closedWhy(ev);
+    if (closed) {
+      const other = Object.entries(dto).filter(([k, v]) => v !== undefined && k !== 'description' && k !== 'changeReason');
+      if (other.length) throw new BadRequestException(`${closed} Only its description can still be corrected.`);
+      if (dto.description === undefined) return { ...ev, dates: ev.dates.map(dateView), dateChanges: [], heldForReview: [] };
+      const fixed = await this.prisma.event.update({ where: { id }, data: { description: dto.description.trim() }, include: { dates: { orderBy: { startsAt: 'asc' } } } });
+      await this.audit.log(user.id, 'event.edit_closed', 'Event', id, { field: 'description', before: ev.description, after: fixed.description });
+      return { ...fixed, dates: fixed.dates.map(dateView), dateChanges: [], heldForReview: [] };
+    }
     const mode = dto.dateMode ?? ev.dateMode;
     if (mode !== 'SINGLE' && (dto.dateMode !== undefined || dto.dates !== undefined)) {
       if (ev.status === 'CANCELLED') throw new BadRequestException('This event was cancelled.');
@@ -624,6 +652,9 @@ export class OrganizerService {
             return old && isActive(old) && isActive(d) && old.startsAt.getTime() !== d.startsAt.getTime() ? [{ eventDateId: d.id, from: old.startsAt, to: d.startsAt }] : [];
           });
     const dateChanges = moves.length ? await this.dateChanges.record(id, moves, dto.changeReason, user) : [];
+    // Postponed, and now it has a date: the postponement ends and sales resume. A new time was announced above; the
+    // same time as before is announced as "back on".
+    if (ev.postponedAt && (dto.startsAt || dto.dates)) await this.dateChanges.endPostponement(id, user, dateChanges.length === 0);
     if (heldForReview.length) await this.audit.log(user.id, 'event.edit_submit', 'Event', id, { fields: heldForReview });
     return { ...updated, dates: updated.dates.map(dateView), dateChanges, heldForReview };
   }
@@ -688,6 +719,7 @@ export class OrganizerService {
 
   async addTicketType(id: string, user: AuthUser, dto: TicketTypeInputDto) {
     const ev = await this.eventFor(id, user, EDIT);
+    assertOpen(ev);
     if (ev.dateMode === 'SINGLE') {
       if (dto.capacityByDate || dto.validDates) throw new BadRequestException('capacityByDate and validDates are for events with more than one date.');
       return withLook(await this.prisma.ticketType.create({ data: { eventId: id, ...this.ticketTypeData(dto, ev.feeMode, ev.ticketTypes.length) } }));
@@ -701,6 +733,7 @@ export class OrganizerService {
 
   async updateTicketType(id: string, ttId: string, user: AuthUser, dto: UpdateTicketTypeDto) {
     const ev = await this.eventFor(id, user, EDIT);
+    assertOpen(ev);
     const tt = ev.ticketTypes.find((t) => t.id === ttId);
     if (!tt) throw new NotFoundException('Ticket type not found.');
     // DATES: the edit goes to every copy of the tier (one per date); capacity is per copy.
@@ -764,6 +797,11 @@ export class OrganizerService {
       for (const [cid, capacity] of caps) await tx.ticketType.update({ where: { id: cid }, data: { capacity } });
       return tx.ticketType.findUniqueOrThrow({ where: { id: ttId } });
     });
+    if (dto.perks !== undefined) {
+      const kept = new Set(updated.perks.map((p) => p.toLowerCase()));
+      const removed = tt.perks.filter((p) => !kept.has(p.toLowerCase()));
+      if (removed.length && copies.some((c) => c.sold > 0)) await this.dateChanges.perksRemoved(id, copies.map((c) => c.id), updated.name, removed, user);
+    }
     let priceDrop: Awaited<ReturnType<PriceDropService['record']>> = null;
     if (updated.priceCents !== tt.priceCents || pwywTouched) {
       await this.audit.log(user.id, 'ticket_type.price', 'TicketType', ttId, { eventId: id, fromCents: tt.priceCents, toCents: updated.priceCents, currency: ev.currency, pricing: updated.pricing, pwywMinCents: updated.pwywMinCents, pwywMaxCents: updated.pwywMaxCents });
@@ -811,6 +849,7 @@ export class OrganizerService {
 
   async deleteTicketType(id: string, ttId: string, user: AuthUser) {
     const ev = await this.eventFor(id, user, EDIT);
+    assertOpen(ev);
     const tt = ev.ticketTypes.find((t) => t.id === ttId);
     if (!tt) throw new NotFoundException('Ticket type not found.');
     // DATES: the whole tier goes (every date’s copy).
@@ -902,9 +941,30 @@ export class OrganizerService {
     return this.cancellation.cancelDate(id, dateId, user, reason, 'organizer');
   }
 
+  /** Postpones the event, new date to be announced (see DateChangeService). Org admins only, like cancelling. */
+  async postpone(id: string, user: AuthUser, reason: string) {
+    await this.eventFor(id, user, ADMIN_ONLY);
+    return this.dateChanges.postpone(id, reason, user);
+  }
+
+  /** A postponed event is back on as planned (same date): sales resume and holders hear. */
+  async endPostponement(id: string, user: AuthUser) {
+    await this.eventFor(id, user, ADMIN_ONLY);
+    return this.dateChanges.endPostponement(id, user, true);
+  }
+
+  /** Who a change to the event, or one date or day of it, would reach. */
+  async impact(id: string, user: AuthUser, dateId?: string) {
+    const ev = await this.eventFor(id, user, EDIT);
+    if (dateId && !ev.dates.some((d) => d.id === dateId)) throw new NotFoundException('Date not found.');
+    const changes = await this.prisma.dateChange.findMany({ where: { eventId: id }, orderBy: { createdAt: 'desc' }, take: 10 });
+    return { ...(await this.dateChanges.impact(id, dateId)), changes, postponedAt: ev.postponedAt, postponeReason: ev.postponeReason };
+  }
+
   async setPaused(id: string, user: AuthUser, paused: boolean) {
     const ev = await this.eventFor(id, user, EDIT);
     if (ev.status === 'CANCELLED') throw new BadRequestException('This event was cancelled.');
+    if (!paused && ev.postponedAt) throw new BadRequestException('This event is postponed. Set its new date (or mark it back on) to start selling again.');
     if (!paused) await this.notSuspended(ev.orgId);
     await this.audit.log(user.id, paused ? 'event.pause' : 'event.resume', 'Event', id);
     return this.prisma.event.update({ where: { id }, data: { salesPaused: paused } });

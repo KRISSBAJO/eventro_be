@@ -168,3 +168,28 @@ export function checkSingleTimes(t: { startsAt: Date; doorsAt: Date | null; ends
   if (t.endsAt && t.endsAt <= t.startsAt) throw new BadRequestException('The end has to be after the start.');
   if (startMoved && t.startsAt <= now) throw new BadRequestException('The start time is in the past.');
 }
+
+/**
+ * What a fan bought, as it was at checkout (Order.snapshot): the event, its date (DATES: the performance; DAYS: the
+ * days), the venue, the tier with its perks, and the price. Kept as-is when the event or tier changes later.
+ */
+export function purchaseSnapshot(
+  e: { title: string; dateMode: string; startsAt: Date; doorsAt: Date | null; endsAt: Date | null; online: boolean; currency: string },
+  tt: { name: string; perks: string[]; eventDateId: string | null; validDateIds: string[] },
+  venue: { name: string; city: string; address?: string } | null,
+  dates: DateRow[],
+  unitCents: number,
+) {
+  const t = ticketTimes(e.dateMode, e, tt, dates);
+  return {
+    title: e.title,
+    startsAt: t.first.startsAt.toISOString(),
+    ...(e.dateMode === 'DAYS' ? { days: validDays(dates, tt.validDateIds).map((d) => d.startsAt.toISOString()) } : {}),
+    venue: venue ? { name: venue.name, city: venue.city } : null,
+    online: e.online,
+    tierName: tt.name,
+    perks: tt.perks,
+    unitCents,
+    currency: e.currency,
+  };
+}

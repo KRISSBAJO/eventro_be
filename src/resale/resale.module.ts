@@ -207,6 +207,7 @@ export class ResaleService {
   async payout(id: string, admin: AuthUser, dto: PayoutDto) {
     const l = await this.prisma.resaleListing.findUnique({ where: { id } });
     if (!l || l.status !== 'SOLD') throw new NotFoundException('Sold listing not found.');
+    if (l.payoutStatus === 'CANCELLED') throw new BadRequestException('This payout was cancelled with the event: the seller’s own order for the ticket was refunded instead, so paying it would pay them twice.');
     const next =
       dto.action === 'PAY' ? (l.payoutStatus === 'AVAILABLE' ? 'PAID' : null) : dto.action === 'HOLD' ? (['PENDING', 'AVAILABLE'].includes(l.payoutStatus) ? 'HELD' : null) : l.payoutStatus === 'HELD' ? ((l.payoutAvailableAt ?? new Date()) <= new Date() ? 'AVAILABLE' : 'PENDING') : null;
     if (!next) {

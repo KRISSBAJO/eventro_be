@@ -385,6 +385,12 @@ model Event {
   /// When the event first went on sale (its first publish); later re-publishing doesn't move it. "Just announced"
   /// (GET /events?sort=new) ranks by it. Null for events never published.
   publishedAt DateTime?
+  /// Postponed, new date to be announced: sales are paused, tickets stay valid, buyers can take a refund. Setting a new
+  /// date ends it; after 90 days without one, the event is cancelled and everyone refunded (DateChangeService).
+  postponedAt     DateTime?
+  postponeReason  String?
+  /// the org admin who postponed it (the 90-day cancellation is made in their name)
+  postponedById   String?
   /// Changes to a live (PUBLISHED) event's title, subtitle, cover or photos wait here for Omoshow to check:
   /// { title?, subtitle?, imageUrl?, media?, submittedAt, by }. Fans keep seeing the approved version until then.
   pendingEdit     Json?
@@ -467,6 +473,15 @@ model OrganizerDebt {
 model DateChange {
   id           String   @id @default(cuid())
   eventId      String
+  /// TIME (a start moved), POSTPONED (new date to be announced), PERKS (a sold tier lost something it promised)
+  kind         String   @default("TIME")
+  /// PERKS: the ticket types (a tier's copies) it's about
+  ticketTypeIds String[] @default([])
+  /// PERKS: { tier, removed: [..] }
+  detail       Json?
+  /// emails sent and failed when holders were told
+  emailed      Int      @default(0)
+  failed       Int      @default(0)
   /// the date or day that moved (multiple-dates and multi-day events); null for a single-date event
   eventDateId  String?
   fromStartsAt DateTime
@@ -608,6 +623,9 @@ model Order {
   /// Refunds made (an event or date cancelled, or moved) after the organizer had already been paid for this order:
   /// their share of what was refunded, owed by them to Omoshow.
   refundOwedCents       Int     @default(0)
+  /// What the fan bought, as it was at checkout: { title, startsAt, venue, online, tierName, perks, unitCents, currency }.
+  /// The event and tier can change later; this is what support and refunds go by.
+  snapshot              Json?
   /// Comps: the group label ("Press", "Artist"…), the organizer's private note, who issued it and when it was revoked.
   compGroup       String?
   compNote        String?

@@ -586,10 +586,13 @@ export class AdminConsoleService {
           donationCents: true,
           donationRefundedCents: true,
           donationOwedCents: true,
+          refundOwedCents: true,
           donationCause: true,
           currency: true,
           status: true,
           provider: true,
+          // what the fan bought, as it was at checkout
+          snapshot: true,
           promoCode: true,
           createdAt: true,
           paidAt: true,

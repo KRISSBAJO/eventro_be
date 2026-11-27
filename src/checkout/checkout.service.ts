@@ -19,7 +19,7 @@ import type { AuthUser } from '../common/auth';
 import { paystackCountryFor } from '../organizer/payout-accounts';
 import { NoticeService } from '../push/notices';
 import { PROMO_ON_PWYW, checkDonation, donationsView, isPwyw, pwywUnit, pwywView, type DonationSettings, type PwywTier } from '../domain/pwyw';
-import { seatTier, ticketDateFields, ticketDates, ticketTimes, whenText } from '../domain/event-dates';
+import { purchaseSnapshot, seatTier, ticketDateFields, ticketDates, ticketTimes, whenText } from '../domain/event-dates';
 import { releaseReservations } from '../schedule/release';
 
 type Tx = Prisma.TransactionClient;
@@ -314,6 +314,9 @@ export class CheckoutService {
     // Nothing to pay (free tickets, $0 pay what you want, no donation): no payment provider, the tickets are issued now.
     const free = q.totalCents === 0;
     const provider = free ? null : this.payments.forCurrency(currency);
+    // What they're buying, as it is now (the event and tier can change later; support and refunds go by this).
+    const venue = hold.event.venueId ? await this.prisma.venue.findUnique({ where: { id: hold.event.venueId }, select: { name: true, city: true } }) : null;
+    const snapshot = purchaseSnapshot(hold.event, hold.ticketType, venue, hold.event.dates, q.unitCents);
     const order = await this.prisma.order.create({
       data: {
         id,
@@ -335,6 +338,7 @@ export class CheckoutService {
         currency,
         provider: provider?.name ?? 'free',
         clientIp,
+        snapshot,
         ...(risk.score >= FRAUD_FLAG_THRESHOLD ? { fraudFlag: { create: { score: risk.score, reasons: risk.reasons } } } : {}),
         ...(gift ? { gift: { create: gift } } : {}),
       },
@@ -408,6 +412,13 @@ export class CheckoutService {
         provider: provider.name,
         clientIp,
         resaleListingId: l.id,
+        snapshot: purchaseSnapshot(
+          l.event,
+          l.ticket.ticketType,
+          l.event.venueId ? await this.prisma.venue.findUnique({ where: { id: l.event.venueId }, select: { name: true, city: true } }) : null,
+          await this.prisma.eventDate.findMany({ where: { eventId: l.eventId } }),
+          l.priceCents,
+        ),
       },
     });
     // Paystack split: only the donation goes to the organizer's subaccount (a resale order's ticket share is the

@@ -91,6 +91,7 @@ export class TicketsService {
             paidAt: true,
             email: true,
             buyerId: true,
+            snapshot: true,
             quantity: true,
             totalCents: true,
             refundedCents: true,
@@ -124,7 +125,7 @@ export class TicketsService {
       const dateChange = dateChangeView(
         changes.filter((c) => c.eventId === t.eventId),
         event.dateMode,
-        t.ticketType,
+        { ...t.ticketType, id: t.ticketTypeId },
         order,
         {
           isBuyer: buyerId === user.id || buyerEmail === user.email,

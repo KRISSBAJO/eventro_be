@@ -18,6 +18,7 @@ import {
   AttachBookingDto,
   CancelDateDto,
   CancelEventDto,
+  PostponeDto,
   ChangeVenueDto,
   CheckInDto,
   CheckInSyncDto,
@@ -160,6 +161,18 @@ export class OrganizerController {
     return this.svc.cancelPreview(id, u);
   }
   /** Org admins: cancel the event and refund every paid order. Safe to call again (only failed refunds are retried). */
+  /** Postpones the event: new date to be announced (org admins). */
+  @Post('events/:id/postpone') @HttpCode(200) postpone(@Param('id') id: string, @CurrentUser() u: AuthUser, @Body() dto: PostponeDto) {
+    return this.svc.postpone(id, u, dto.reason);
+  }
+  /** A postponed event is back on as planned (same date). */
+  @Delete('events/:id/postpone') endPostponement(@Param('id') id: string, @CurrentUser() u: AuthUser) {
+    return this.svc.endPostponement(id, u);
+  }
+  /** Who a change would reach (the event, or one date or day with ?dateId=), and the event's recent changes. */
+  @Get('events/:id/impact') impact(@Param('id') id: string, @CurrentUser() u: AuthUser, @Query('dateId') dateId?: string) {
+    return this.svc.impact(id, u, dateId || undefined);
+  }
   @Post('events/:id/cancel') @HttpCode(200) cancel(@Param('id') id: string, @CurrentUser() u: AuthUser, @Body() dto: CancelEventDto) {
     return this.svc.cancelEvent(id, u, dto.reason, dto.confirmTitle);
   }

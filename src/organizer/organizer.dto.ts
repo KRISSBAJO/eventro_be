@@ -449,6 +449,10 @@ export class CancelDateDto {
   reason?: string;
 }
 
+export class PostponeDto {
+  @ApiProperty({ minLength: 10, description: 'Why it’s postponed: sent to ticket holders' }) @IsString() @MinLength(10) @MaxLength(500) reason: string;
+}
+
 export class CancelEventDto {
   @ApiProperty({ minLength: 10, description: 'Shown to buyers in the cancellation email and kept in the audit log' }) @IsString() @MinLength(10) @MaxLength(500) reason: string;
   @ApiProperty({ description: 'The event title, typed again to confirm' }) @IsString() @MaxLength(200) confirmTitle: string;
