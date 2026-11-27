@@ -314,6 +314,8 @@ export class EventsService {
     const left = (t: (typeof e.ticketTypes)[number]) => (cancelled || !onSale(t) ? 0 : (avail.get(t.id) ?? 0));
     // The schedule (agenda) with places left on bookable items; stages for the filter chips. Empty without one.
     const { schedule, stages } = await this.schedule.publicView(e);
+    // The organizer's rating: the average over all their events' visible reviews.
+    const rated = await this.prisma.eventReview.aggregate({ where: { orgId: e.orgId, status: 'VISIBLE' }, _avg: { rating: true }, _count: { _all: true } });
     return {
       id: e.id,
       slug: e.slug,
@@ -353,7 +355,7 @@ export class EventsService {
       ...(cancelled ? { status: e.status, cancelledAt: e.cancelledAt, cancelReason: e.cancelReason } : e.status !== 'PUBLISHED' ? { preview: true, status: e.status } : {}),
       presentedBy: e.org.name,
       // The organizer's public page (GET /organizers/:slug), to follow them.
-      organizer: { slug: e.org.slug, name: e.org.name, logoUrl: e.org.logoUrl, verified: !!e.org.verifiedAt },
+      organizer: { slug: e.org.slug, name: e.org.name, logoUrl: e.org.logoUrl, verified: !!e.org.verifiedAt, rating: rated._count._all ? { average: Math.round((rated._avg.rating ?? 0) * 10) / 10, count: rated._count._all } : null },
       venue: e.venue && { slug: e.venue.slug, name: e.venue.name, address: e.venue.address, city: e.venue.city, region: e.venue.region, country: e.venue.country, postalCode: e.venue.postalCode, timezone: e.venue.timezone, lat: e.venue.lat, lng: e.venue.lng },
       ticketTypes: e.ticketTypes.map((t) => ({
         id: t.id,
@@ -406,7 +408,7 @@ export class EventsController {
   @Public()
   @Get(':slug/calendar.ics')
   @Header('Content-Type', 'text/calendar; charset=utf-8')
-  @Header('Content-Disposition', 'attachment; filename="event.ics"')
+  @Header('Content-Disposition', 'inline; filename="event.ics"')
   calendar(@Param('slug') slug: string, @Query('date') dateId?: string) {
     return this.events.calendar(slug, dateId);
   }

@@ -452,6 +452,9 @@ model Event {
   /// Questions asked at checkout (see src/domain/questions.ts): [{ id, label, type, options, required, per }].
   questions              Json?
   reports                EventReport[]
+  reviews                EventReview[]
+  /// When ticket holders were asked to review the event (once, the day after it ends).
+  reviewAskedAt          DateTime?
 
   @@index([status, startsAt])
   @@index([orgId])
@@ -1398,4 +1401,51 @@ model EventReport {
   @@index([status, createdAt])
   @@index([eventId])
   @@index([clientIp, createdAt])
+}
+
+/// A review of an event by someone who held a ticket to it: 1 to 5 stars and a few words, written after the event
+/// ends (for 60 days). One per person and event. The organizer can reply; an Omoshow admin can hide one that breaks
+/// the rules (anyone signed in can flag it). An organizer's rating is the average over their events' visible reviews.
+model EventReview {
+  id         String    @id @default(cuid())
+  eventId    String
+  orgId      String
+  userId     String
+  /// shown with the review: first name and last initial ("Fola F.")
+  authorName String
+  rating     Int
+  body       String    @default("")
+  /// VISIBLE or HIDDEN (by an admin, with `hideReason`)
+  status     String    @default("VISIBLE")
+  hideReason String?
+  hiddenBy   String?
+  reply      String?
+  repliedAt  DateTime?
+  repliedBy  String?
+  /// open flags (cleared when an admin keeps or hides the review)
+  flags      Int       @default(0)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  event   Event             @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  flagged EventReviewFlag[]
+
+  @@unique([eventId, userId])
+  @@index([orgId, status])
+  @@index([flags])
+}
+
+/// Someone flagged a review for the admins to look at (once per person and review).
+model EventReviewFlag {
+  id        String   @id @default(cuid())
+  reviewId  String
+  userId    String
+  /// SPAM, OFFENSIVE, FAKE or OTHER
+  reason    String
+  note      String   @default("")
+  createdAt DateTime @default(now())
+
+  review EventReview @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+
+  @@unique([reviewId, userId])
 }

@@ -11,6 +11,7 @@
  *   price_drop               watchers              priceDrops  price_drop:<dropId>:<userId>
  *   waitlist                 people told           priceDrops  waitlist:<entryId>:<told ms>
  *   event.message            ticket holders        orders      event.message:<messageId>:<userId>
+ *   review.request           ticket holders        reminders   review.request:<eventId>:<userId>
  *   follow.new_event         followers             following   follow.new_event:<eventId>:<userId>
  *   event.cancelled          ticket holders        orders      event.cancelled:<eventId>:<userId>
  *   event.date_cancelled     the date's holders   orders      event.date_cancelled:<dateId>:<userId>
@@ -283,6 +284,23 @@ export class NoticeService implements OnModuleInit, OnModuleDestroy {
             },
           ];
         }),
+      );
+    });
+  }
+
+  /** "How was it?": to the ticket holders of an event that just ended (those with an account), once each. */
+  reviewRequest(e: { id: string; slug: string; title: string }, userIds: string[]) {
+    return this.guard(`review.request ${e.id}`, async () => {
+      await this.push.send(
+        'review.request',
+        'reminders',
+        userIds.map((userId) => ({
+          userId,
+          title: `How was ${e.title}?`,
+          body: 'Rate it in a tap. It helps other fans and the organizer.',
+          data: link(`/events/${e.slug}`, { type: 'review.request', eventId: e.id }),
+          dedupeKey: `review.request:${e.id}:${userId}`,
+        })),
       );
     });
   }

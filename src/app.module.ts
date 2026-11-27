@@ -22,6 +22,7 @@ import { MailModule } from './mail/mail.module';
 import { PriceDropModule } from './price-drops/price-drops.module';
 import { WaitlistModule } from './waitlist/waitlist.module';
 import { ReportModule } from './reports/reports.module';
+import { ReviewModule } from './reviews/reviews.module';
 import { GiftModule } from './gifts/gifts.module';
 import { VenuesModule } from './venues/venues.module';
 import { ResaleModule } from './resale/resale.module';
@@ -72,6 +73,7 @@ class CoreModule {}
     PriceDropModule,
     WaitlistModule,
     ReportModule,
+    ReviewModule,
     GiftModule,
     VenuesModule,
     ResaleModule,
