@@ -107,7 +107,7 @@ export class TicketsService {
           },
         },
         guaranteeClaim: true,
-        event: { select: { slug: true, title: true, subtitle: true, currency: true, status: true, cancelledAt: true, cancelReason: true, startsAt: true, doorsAt: true, endsAt: true, imageUrl: true, seatMap: true, online: true, streamUrl: true, timezone: true, resaleEnabled: true, resaleCapPercent: true, resaleRoyaltyPermille: true, transfersEnabled: true, transferCutoffMinutes: true, dateMode: true, dates: true, venue: { select: { name: true, address: true, city: true } } } },
+        event: { select: { slug: true, title: true, subtitle: true, minAge: true, currency: true, status: true, cancelledAt: true, cancelReason: true, startsAt: true, doorsAt: true, endsAt: true, imageUrl: true, seatMap: true, online: true, streamUrl: true, timezone: true, resaleEnabled: true, resaleCapPercent: true, resaleRoyaltyPermille: true, transfersEnabled: true, transferCutoffMinutes: true, dateMode: true, dates: true, venue: { select: { name: true, address: true, city: true } } } },
       },
       orderBy: [{ event: { startsAt: 'asc' } }, { id: 'asc' }],
     });

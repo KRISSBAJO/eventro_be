@@ -443,6 +443,15 @@ model Event {
   waitlist               WaitlistEntry[]
   messages               EventMessage[]
   messageOptOuts         EventMessageOptOut[]
+  /// Presale: with this code, fans can buy ticket types that aren't on public sale yet (TicketType.salesStart in the
+  /// future), from `presaleStartsAt` (null = as soon as the code is set) until each type's public on-sale.
+  presaleCode            String?
+  presaleStartsAt        DateTime?
+  /// The youngest age admitted, e.g. 18 ("18+"); null = all ages.
+  minAge                 Int?
+  /// Questions asked at checkout (see src/domain/questions.ts): [{ id, label, type, options, required, per }].
+  questions              Json?
+  reports                EventReport[]
 
   @@index([status, startsAt])
   @@index([orgId])
@@ -616,6 +625,9 @@ model Order {
   /// A cart: several ticket types of one event bought in one checkout (code CRT-…). Each type is its own order, so
   /// refunds, payouts and tickets work per order; they share one payment (`paymentRef`). Null for a single order.
   groupId         String?
+  /// Answers to the event's checkout questions: { order: [{ id, label, value }], tickets: [[{ id, label, value }], …] }
+  /// (`tickets` by ticket number within this order).
+  answers Json?
   clientIp        String?
   createdAt       DateTime    @default(now())
   paidAt          DateTime?
@@ -1361,4 +1373,29 @@ model EventMessageOptOut {
   event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
 
   @@unique([eventId, email])
+}
+
+/// "Report this event": someone told Omoshow an event looks wrong (a scam, wrong details, offensive…). Admins look at
+/// open reports and dismiss them or act (pause or cancel the event from the admin console).
+model EventReport {
+  id         String    @id @default(cuid())
+  eventId    String
+  /// SCAM, WRONG_INFO, OFFENSIVE, DUPLICATE or OTHER
+  reason     String
+  details    String    @default("")
+  email      String?
+  userId     String?
+  clientIp   String?
+  /// OPEN, DISMISSED or ACTIONED
+  status     String    @default("OPEN")
+  note       String?
+  resolvedBy String?
+  resolvedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt])
+  @@index([eventId])
+  @@index([clientIp, createdAt])
 }

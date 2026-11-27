@@ -2,6 +2,7 @@ import { previewToken } from '../events/preview';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { MemberRole, Prisma, type EventDate, type ScanResult, type TicketCheckIn } from '@prisma/client';
 import { PrismaService } from '../prisma.service';
+import { cleanQuestions, questionsOf, ticketAnswers } from '../domain/questions';
 import { AuditService } from '../common/audit.service';
 import { ScanLog } from '../common/scan-log';
 import { config } from '../config';
@@ -122,6 +123,18 @@ function pricingData(t: TicketTypeInputDto, feeMode: FeeMode) {
 
 /** The pricing fields a ticket type's owner sees. */
 const PRICING_FIELDS = { pricing: true, pwywMinCents: true, pwywSuggestedCents: true, pwywMaxCents: true, pwywQuickPicks: true } as const;
+
+/**
+ * A ticket type's sale window from the request: only the sides that were sent (null clears one), checked against the
+ * other side as it will be. Times are instants.
+ */
+function saleWindow(dto: { salesStart?: string | null; salesEnd?: string | null }, was: { salesStart: Date | null; salesEnd: Date | null } | null) {
+  if (dto.salesStart === undefined && dto.salesEnd === undefined) return {};
+  const start = dto.salesStart === undefined ? (was?.salesStart ?? null) : dto.salesStart ? new Date(dto.salesStart) : null;
+  const end = dto.salesEnd === undefined ? (was?.salesEnd ?? null) : dto.salesEnd ? new Date(dto.salesEnd) : null;
+  if (start && end && end <= start) throw new BadRequestException('Sales must end after they start.');
+  return { ...(dto.salesStart !== undefined ? { salesStart: start } : {}), ...(dto.salesEnd !== undefined ? { salesEnd: end } : {}) };
+}
 
 @Injectable()
 export class OrganizerService {
@@ -244,6 +257,7 @@ export class OrganizerService {
       ...pricingData(t, feeMode),
       capacity: t.capacity,
       maxPerOrder: t.maxPerOrder ?? 8,
+      ...saleWindow(t, null),
       sortOrder: i,
       perks: cleanPerks(t.perks),
       badge: t.badge?.trim() || null,
@@ -329,6 +343,10 @@ export class OrganizerService {
       visibility: dto.visibility ?? 'PUBLIC',
       ...donations,
       compLimit: dto.compLimit ?? null,
+      presaleCode: dto.presaleCode?.trim().toUpperCase() || null,
+      presaleStartsAt: dto.presaleStartsAt ? new Date(dto.presaleStartsAt) : null,
+      minAge: dto.minAge ?? null,
+      questions: cleanQuestions(dto.questions, []) ?? Prisma.DbNull,
       ticketTypes: { create: planned ? [] : dto.ticketTypes.map((t, i) => this.ticketTypeData(t, feeMode, i)) },
     } satisfies Prisma.EventUncheckedCreateInput;
     if (planned) {
@@ -409,6 +427,11 @@ export class OrganizerService {
       imageUrl: e.imageUrl,
       hasSeatMap: !!e.seatMap,
       venueBooking: VenueBookingService.eventSummary(e.venueBooking),
+      // Presale (the code is the organizer's to share), the age limit and the questions asked at checkout.
+      presaleCode: e.presaleCode,
+      presaleStartsAt: e.presaleStartsAt,
+      minAge: e.minAge,
+      questions: questionsOf(e.questions),
       ticketTypes: e.ticketTypes.map((t) =>
         withLook({
           id: t.id,
@@ -420,6 +443,8 @@ export class OrganizerService {
           sold: t.sold - (money.compsByType.get(t.id) ?? 0),
           comps: money.compsByType.get(t.id) ?? 0,
           maxPerOrder: t.maxPerOrder,
+          salesStart: t.salesStart,
+          salesEnd: t.salesEnd,
           sortOrder: t.sortOrder,
           perks: t.perks,
           badge: t.badge,
@@ -613,6 +638,11 @@ export class OrganizerService {
       ...(dto.transfersEnabled !== undefined ? { transfersEnabled: dto.transfersEnabled } : {}),
       ...(dto.transferCutoffMinutes !== undefined ? { transferCutoffMinutes: dto.transferCutoffMinutes } : {}),
       ...(dto.compLimit !== undefined ? { compLimit: dto.compLimit } : {}),
+      ...(dto.presaleCode !== undefined ? { presaleCode: dto.presaleCode?.trim().toUpperCase() || null } : {}),
+      ...(dto.presaleStartsAt !== undefined ? { presaleStartsAt: dto.presaleStartsAt ? new Date(dto.presaleStartsAt) : null } : {}),
+      ...(dto.minAge !== undefined ? { minAge: dto.minAge } : {}),
+      // Questions keep their ids when edited, so answers already given still line up.
+      ...(dto.questions !== undefined ? { questions: cleanQuestions(dto.questions, questionsOf(ev.questions)) ?? Prisma.DbNull } : {}),
     };
     // A live event's title, subtitle and cover wait for Omoshow to check them (see domain/pending-edit); fans keep
     // seeing the approved ones. Before it's live they change at once (the event's own review covers them), and any
@@ -786,6 +816,7 @@ export class OrganizerService {
         ...(dto.basePriceCents !== undefined && pricing === 'FIXED' ? { priceCents: buyerPrice(dto.basePriceCents, ev.feeMode, config.organizerFeePermille) } : {}),
         ...(pricingData as Prisma.TicketTypeUpdateManyMutationInput),
         ...(dto.maxPerOrder !== undefined ? { maxPerOrder: dto.maxPerOrder } : {}),
+        ...saleWindow(dto, tt),
         ...(dto.perks !== undefined ? { perks: cleanPerks(dto.perks) } : {}),
         ...(dto.badge !== undefined ? { badge: dto.badge.trim() || null } : {}),
         // null or "auto" goes back to the look from the name.
@@ -1154,7 +1185,7 @@ export class OrganizerService {
         checkedInAt: true,
         eventDateId: true,
         ticketType: { select: { name: true } },
-        order: { select: { kind: true, compGroup: true } },
+        order: { select: { kind: true, compGroup: true, answers: true } },
         checkIns: { select: { eventDateId: true }, orderBy: { at: 'asc' } },
       },
       orderBy: { id: 'asc' },
@@ -1167,6 +1198,8 @@ export class OrganizerService {
       ...r,
       type: order.kind === 'COMP' ? ('COMP' as const) : ('PAID' as const),
       compGroup: order.compGroup,
+      // What the buyer answered at checkout: asked once per order, then of this ticket (its number is the code's end).
+      answers: ticketAnswers(order.answers, (Number(r.id.slice(-2)) || 1) - 1),
       ...(multi ? { eventDateId, checkedInDates: checkIns.map((c) => c.eventDateId).filter((x): x is string => !!x) } : {}),
     }));
   }
@@ -1174,7 +1207,10 @@ export class OrganizerService {
   async attendeesCsv(id: string, user: AuthUser) {
     const rows = await this.attendees(id, user);
     // Multiple dates: a last column with the ticket's date (DATES) or the days it was checked in on (DAYS).
-    const ev = await this.prisma.event.findUniqueOrThrow({ where: { id }, select: { dateMode: true, dates: true } });
+    const ev = await this.prisma.event.findUniqueOrThrow({ where: { id }, select: { dateMode: true, dates: true, questions: true } });
+    // One column per checkout question (questions since removed keep their answers on the attendee list only).
+    const asked = questionsOf(ev.questions);
+    const answerCols = (r: (typeof rows)[number]) => asked.map((q) => r.answers.find((a) => a.id === q.id)?.value ?? '');
     const name = (dateId: string | null | undefined) => {
       const d = ev.dates.find((x) => x.id === dateId);
       return d ? dateName(d) : '';
@@ -1183,8 +1219,8 @@ export class OrganizerService {
       ev.dateMode === 'SINGLE' ? [] : [ev.dateMode === 'DATES' ? name(r.eventDateId) : (r.checkedInDates ?? []).map(name).join('; ')];
     const guests = await this.prisma.guestListEntry.findMany({ where: { eventId: id }, orderBy: { name: 'asc' }, take: 5000 });
     const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-    const head = ['Ticket', 'Name', 'Email', 'Ticket type', 'Section', 'Row', 'Seat', 'Status', 'Checked in at', 'Type', 'Group', ...(ev.dateMode === 'DATES' ? ['Date'] : ev.dateMode === 'DAYS' ? ['Checked in on'] : [])];
-    const tickets = rows.map((r) => [r.id, r.holderName, r.holderEmail, r.ticketType.name, r.section, r.row, r.seat, r.status, r.checkedInAt?.toISOString(), r.type === 'COMP' ? 'Comp' : 'Paid', r.compGroup, ...dateCol(r)]);
+    const head = ['Ticket', 'Name', 'Email', 'Ticket type', 'Section', 'Row', 'Seat', 'Status', 'Checked in at', 'Type', 'Group', ...(ev.dateMode === 'DATES' ? ['Date'] : ev.dateMode === 'DAYS' ? ['Checked in on'] : []), ...asked.map((q) => q.label)];
+    const tickets = rows.map((r) => [r.id, r.holderName, r.holderEmail, r.ticketType.name, r.section, r.row, r.seat, r.status, r.checkedInAt?.toISOString(), r.type === 'COMP' ? 'Comp' : 'Paid', r.compGroup, ...dateCol(r), ...answerCols(r)]);
     const list = guests.map((g) => [
       '',
       g.plusOnes ? `${g.name} +${g.plusOnes}` : g.name,

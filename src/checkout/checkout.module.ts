@@ -33,6 +33,18 @@ export class CreateHoldDto {
   @Min(0)
   @Max(PWYW_CEILING_CENTS)
   amountCents?: number;
+  @ApiPropertyOptional({ description: 'The event’s presale code, to buy before the public on-sale' }) @IsOptional() @IsString() @MaxLength(30) accessCode?: string;
+}
+
+/** One answer to a checkout question. */
+export class AnswerDto {
+  @ApiProperty() @IsString() @MaxLength(40) questionId: string;
+  @ApiProperty() @IsString() @MaxLength(200) value: string;
+  @ApiPropertyOptional({ description: 'For a question asked per ticket: the ticket’s number in this checkout, from 0 (a cart counts across its lines)' }) @IsOptional() @IsInt() @Min(0) @Max(119) ticket?: number;
+}
+
+export class PresaleDto {
+  @ApiProperty() @IsString() @MinLength(1) @MaxLength(30) code: string;
 }
 
 export class CartItemDto {
@@ -50,6 +62,7 @@ export class CartHoldsDto {
   @ValidateNested({ each: true })
   @Type(() => CartItemDto)
   items: CartItemDto[];
+  @ApiPropertyOptional({ description: 'The event’s presale code, to buy before the public on-sale' }) @IsOptional() @IsString() @MaxLength(30) accessCode?: string;
 }
 
 class CartPriceDto {
@@ -71,6 +84,13 @@ export class CartOrderDto extends CartPriceDto {
   @ApiProperty() @Transform(lower) @IsEmail() email: string;
   @ApiProperty() @IsString() @MinLength(2) @MaxLength(80) name: string;
   @ApiPropertyOptional({ enum: ['app'] }) @IsOptional() @IsIn(['app']) returnTo?: 'app';
+  @ApiPropertyOptional({ type: [AnswerDto], description: 'Answers to the event’s checkout questions (GET /holds/:id `questions`)' })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(200)
+  @ValidateNested({ each: true })
+  @Type(() => AnswerDto)
+  answers?: AnswerDto[];
 }
 
 /** Pay what you want and donations, on the quote and the order. */
@@ -98,6 +118,13 @@ export class CreateOrderDto extends PriceExtrasDto {
   @IsOptional()
   @IsIn(['app'])
   returnTo?: 'app';
+  @ApiPropertyOptional({ type: [AnswerDto], description: 'Answers to the event’s checkout questions (GET /holds/:id `questions`)' })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(200)
+  @ValidateNested({ each: true })
+  @Type(() => AnswerDto)
+  answers?: AnswerDto[];
 }
 
 /** What the fan chose before checkout moves elsewhere (the app hands card payments to the website). */
@@ -156,12 +183,21 @@ export class CheckoutController {
     return this.checkout.createHold(dto, user);
   }
 
+  /** Checks a presale code: which ticket types it opens right now. The code itself never comes back. */
+  @Public()
+  @Post('events/:slug/presale')
+  @HttpCode(200)
+  @RateLimit(RATE_RULES.checkout)
+  presale(@Param('slug') slug: string, @Body() dto: PresaleDto) {
+    return this.checkout.checkPresale(slug, dto.code);
+  }
+
   /** A cart: several ticket types of one event held together. */
   @OptionalAuth()
   @Post('holds/cart')
   @RateLimit(RATE_RULES.checkout)
   cartHolds(@Body() dto: CartHoldsDto, @CurrentUser() user: AuthUser | null) {
-    return this.checkout.createCartHolds(dto.items, user);
+    return this.checkout.createCartHolds(dto.items, user, dto.accessCode);
   }
 
   @Public()

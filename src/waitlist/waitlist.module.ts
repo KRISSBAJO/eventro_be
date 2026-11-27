@@ -139,7 +139,7 @@ export class WaitlistService implements OnModuleInit, OnModuleDestroy {
         : [];
     const types = e.ticketTypes.map((t) => {
       const mine = pastCutoff({ startsAt: starts(t), transferCutoffMinutes: e.transferCutoffMinutes }) ? [] : listings.filter((l) => l.ticket.ticketTypeId === t.id);
-      return { id: t.id, name: t.name, priceCents: t.priceCents, onSale: onSale(t), left: onSale(t) ? (avail.get(t.id) ?? 0) : 0, resale: mine.length, resaleFromCents: mine.length ? Math.min(...mine.map((l) => l.priceCents)) : null, upcoming: starts(t) > now };
+      return { id: t.id, name: t.name, priceCents: t.priceCents, justOnSale: !!t.salesStart && t.salesStart <= now && now.getTime() - t.salesStart.getTime() < 86_400_000, onSale: onSale(t), left: onSale(t) ? (avail.get(t.id) ?? 0) : 0, resale: mine.length, resaleFromCents: mine.length ? Math.min(...mine.map((l) => l.priceCents)) : null, upcoming: starts(t) > now };
     });
     return { event: e, types };
   }
@@ -273,19 +273,22 @@ export class WaitlistService implements OnModuleInit, OnModuleDestroy {
     for (const [email, p] of picked) {
       const lines = p.types.map((t) =>
         t.left > 0
-          ? `${t.name}: ${formatMoney(t.priceCents, e.currency)} all-in.`
+          ? `${t.name}: ${t.justOnSale ? 'now on sale, ' : ''}${formatMoney(t.priceCents, e.currency)} all-in.`
           : `${t.name}: a fan is selling ${t.resale === 1 ? 'one' : `${t.resale}`} from ${formatMoney(t.resaleFromCents ?? t.priceCents, e.currency)}. Resale tickets are reissued in your name by Omoshow.`,
       );
       const stop = { label: 'Leave the waitlist', url: `${config.webUrl}/waitlist/stop?t=${p.entries[0].token}` };
+      // Waiting for the on-sale (not a sell-out): say so.
+      const fresh = p.types.every((t) => t.justOnSale && t.left > 0);
+      const subject = `${fresh ? 'On sale now' : 'Tickets are back'}: ${e.title}`;
       const { html, text } = render({
-        preheader: `${p.types.map((t) => t.name).join(', ')} tickets are available again.`,
-        heading: `Tickets are back: ${e.title}`,
+        preheader: `${p.types.map((t) => t.name).join(', ')} tickets are ${fresh ? 'on sale' : 'available again'}.`,
+        heading: subject,
         paragraphs: [...lines, 'This doesn’t hold a ticket for you: they go to whoever checks out first.'],
         cta: { label: 'Get tickets', url },
-        footer: 'You asked us to tell you when tickets came back.',
+        footer: 'You asked us to tell you when tickets were available.',
         footerLink: stop,
       });
-      mails.push({ to: email, subject: `Tickets are back: ${e.title}`, html, text, unsubscribeUrl: stop.url });
+      mails.push({ to: email, subject, html, text, unsubscribeUrl: stop.url });
     }
     const ids = [...picked.values()].flatMap((p) => p.entries.map((x) => x.id));
     // Marked first, so a slow send can't tell the same people twice.

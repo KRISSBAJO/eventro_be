@@ -1,4 +1,4 @@
-import { Controller, Get, Injectable, Module, NotFoundException, Param, Query } from '@nestjs/common';
+import { Controller, Get, Header, Injectable, Module, NotFoundException, Param, Query } from '@nestjs/common';
 import { ApiProperty, ApiPropertyOptional, ApiTags } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import { IsDateString, IsIn, IsInt, IsOptional, IsString, Max, MaxLength, Min, Matches } from 'class-validator';
@@ -15,6 +15,8 @@ import { resolveLook } from '../domain/tier-look';
 import { pastCutoff } from '../resale/resale.module';
 import { donationsView, pwywView } from '../domain/pwyw';
 import { config } from '../config';
+import { presaleRunning, saleState } from '../domain/presale';
+import { questionsOf } from '../domain/questions';
 import { ScheduleService } from '../schedule/schedule.module';
 import { LIVE_TYPE, dateRangeWhere, dateView, liveType, nextActive, nextDateView, ticketTimes, type DateRow } from '../domain/event-dates';
 
@@ -245,6 +247,41 @@ export class EventsService {
     };
   }
 
+  /** The event as an iCalendar file (see GET /events/:slug/calendar.ics). */
+  async calendar(slug: string, dateId?: string) {
+    const e = await this.prisma.event.findUnique({ where: { slug }, include: { venue: true, dates: { orderBy: { startsAt: 'asc' } } } });
+    if (!e || e.status !== 'PUBLISHED') throw new NotFoundException('Event not found.');
+    const d = e.dateMode === 'SINGLE' ? null : pickDate(e.dates.filter((x) => x.status === 'ACTIVE'), dateId);
+    const start = d?.startsAt ?? e.startsAt;
+    const end = d?.endsAt ?? (d ? null : e.endsAt) ?? new Date(start.getTime() + 3 * 3600_000);
+    // Event times are the venue's wall clock stored as UTC: written out as local times in the event's zone.
+    const local = (x: Date) => x.toISOString().replace(/[-:]/g, '').slice(0, 15);
+    const zone = e.timezone && e.timezone !== 'UTC' ? `;TZID=${e.timezone}` : '';
+    const z = zone ? '' : 'Z';
+    const esc = (t: string) => t.replace(/\\/g, '\\\\').replace(/([,;])/g, '\\$1').replace(/\r?\n/g, '\\n');
+    const where = e.online ? 'Online' : e.venue ? [e.venue.name, e.venue.address, e.venue.city].filter(Boolean).join(', ') : '';
+    const url = `${config.webUrl}/events/${e.slug}`;
+    return [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'PRODID:-//Omoshow//Events//EN',
+      'CALSCALE:GREGORIAN',
+      'METHOD:PUBLISH',
+      'BEGIN:VEVENT',
+      `UID:${e.id}${d ? `-${d.id}` : ''}@omoshow`,
+      `DTSTAMP:${new Date().toISOString().replace(/[-:]/g, '').slice(0, 15)}Z`,
+      `DTSTART${zone}:${local(start)}${z}`,
+      `DTEND${zone}:${local(end)}${z}`,
+      `SUMMARY:${esc(e.title)}`,
+      ...(where ? [`LOCATION:${esc(where)}`] : []),
+      `DESCRIPTION:${esc(`Your tickets are in the Omoshow app. ${url}`)}`,
+      `URL:${url}`,
+      'END:VEVENT',
+      'END:VCALENDAR',
+      '',
+    ].join('\r\n');
+  }
+
   /**
    * A published event; a cancelled one (with `status: 'CANCELLED'` and the reason, so ticket holders who follow
    * an old link learn what happened; it has nothing on sale); or, with a valid preview token, one that isn't
@@ -306,6 +343,11 @@ export class EventsService {
       feePermille: config.organizerFeePermille,
       donations: donationsView(e),
       salesPaused: e.salesPaused,
+      // Presale: whether a code is being taken now (or from when); the code itself never leaves the server.
+      presale: e.presaleCode ? { open: presaleRunning(e, now), startsAt: e.presaleStartsAt } : null,
+      // The youngest age admitted (null = all ages), and the questions asked at checkout.
+      minAge: e.minAge,
+      questions: questionsOf(e.questions),
       // Postponed: new date to be announced (tickets stay valid).
       ...(e.postponedAt ? { postponedAt: e.postponedAt, postponeReason: e.postponeReason } : {}),
       ...(cancelled ? { status: e.status, cancelledAt: e.cancelledAt, cancelReason: e.cancelReason } : e.status !== 'PUBLISHED' ? { preview: true, status: e.status } : {}),
@@ -327,6 +369,10 @@ export class EventsService {
         pricing: t.pricing,
         pwyw: pwywView(t, e.feeMode, config.organizerFeePermille),
         available: left(t),
+        // Its sale window: SOON (not on public sale yet; a presale code may open it), ON or ENDED.
+        saleState: saleState(t, now),
+        salesStart: t.salesStart,
+        salesEnd: t.salesEnd,
         eventDateId: t.eventDateId,
         tierKey: t.tierKey,
         validDateIds: t.validDateIds,
@@ -352,6 +398,18 @@ export class EventsController {
     private readonly prisma: PrismaService,
     private readonly inventory: InventoryService,
   ) {}
+
+  /**
+   * The event as a calendar file (.ics), for "Add to calendar": one event with its start, end, place and link. With
+   * several dates, ?date= picks one (default: the next). Times are the venue's, with its time zone.
+   */
+  @Public()
+  @Get(':slug/calendar.ics')
+  @Header('Content-Type', 'text/calendar; charset=utf-8')
+  @Header('Content-Disposition', 'attachment; filename="event.ics"')
+  calendar(@Param('slug') slug: string, @Query('date') dateId?: string) {
+    return this.events.calendar(slug, dateId);
+  }
 
   /**
    * For a group of `qty`: places left in every section and the seats a hold would get right now

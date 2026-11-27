@@ -1,6 +1,8 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma.service';
+import { checkAnswers, questionsOf, type AnswerInput } from '../domain/questions';
+import { presaleOpen, saleState } from '../domain/presale';
 import { TIER_FIELDS, withLook } from '../domain/tier-look';
 import { InventoryService } from '../common/inventory.service';
 import { AuditService } from '../common/audit.service';
@@ -76,7 +78,7 @@ export class CheckoutService {
 
   /* ---------- holds ---------- */
 
-  async createHold(input: { ticketTypeId: string; quantity: number; sectionId?: string; seats?: { row: string; seat: number }[]; amountCents?: number }, user: AuthUser | null) {
+  async createHold(input: { ticketTypeId: string; quantity: number; sectionId?: string; seats?: { row: string; seat: number }[]; amountCents?: number; accessCode?: string }, user: AuthUser | null) {
     const now = new Date();
     return this.prisma.$transaction(async (tx) => {
       await lockTicketType(tx, input.ticketTypeId);
@@ -91,7 +93,11 @@ export class CheckoutService {
       // Multi-day: a ticket whose every day was cancelled has nothing left to admit to.
       if (ev.dateMode === 'DAYS' && tt.validDateIds.length && !ev.dates.some((d) => tt.validDateIds.includes(d.id) && d.status === 'ACTIVE')) throw new BadRequestException('The day these tickets were for was cancelled.');
       if (ticketTimes(ev.dateMode, ev, tt, ev.dates).first.startsAt <= now) throw new BadRequestException(date ? 'This date has already started.' : 'This event has already started.');
-      if ((tt.salesStart && tt.salesStart > now) || (tt.salesEnd && tt.salesEnd < now)) throw new BadRequestException('These tickets are not on sale right now.');
+      if (tt.salesEnd && tt.salesEnd <= now) throw new BadRequestException('Sales of these tickets have ended.');
+      // Not on public sale yet: the event's presale code opens it early (from when the presale starts).
+      if (tt.salesStart && tt.salesStart > now && !presaleOpen(ev, input.accessCode, now)) {
+        throw new BadRequestException(input.accessCode ? 'That presale code isn’t right, or the presale hasn’t opened yet.' : 'These tickets aren’t on sale yet.');
+      }
       if (input.quantity > tt.maxPerOrder) throw new BadRequestException(`You can buy up to ${tt.maxPerOrder} of these per order.`);
       // Pay what you want: the amount is checked here, and again at the quote and the order.
       const { amountCents } = unitFor(tt, ev, input.amountCents);
@@ -175,6 +181,8 @@ export class CheckoutService {
             donationDescription: true,
             donationSuggestedCents: true,
             donationMinCents: true,
+            minAge: true,
+            questions: true,
             venue: { select: { name: true, city: true, address: true } },
           },
         },
@@ -182,7 +190,7 @@ export class CheckoutService {
       },
     });
     if (!h) throw new NotFoundException('Hold not found.');
-    const { seatMap, donationsEnabled, donationCause, donationDescription, donationSuggestedCents, donationMinCents, dates, ...event } = h.event;
+    const { seatMap, donationsEnabled, donationCause, donationDescription, donationSuggestedCents, donationMinCents, dates, questions, ...event } = h.event;
     const section = (seatMap as SeatMap | null)?.sections.find((s) => s.id === h.sectionId);
     const { pwywMinCents, pwywSuggestedCents, pwywMaxCents, pwywQuickPicks, eventDateId, validDateIds, ...tt } = h.ticketType;
     const pwyw = pwywView(h.ticketType, event.feeMode, config.organizerFeePermille);
@@ -198,6 +206,8 @@ export class CheckoutService {
       unitCents: pwyw && h.amountCents !== null ? buyerPrice(h.amountCents, event.feeMode, config.organizerFeePermille) : h.ticketType.priceCents,
       // The donation chosen before checkout moved here (PATCH /holds/:id); 0 = none. The quote and order use it by default.
       donationCents: h.donationCents,
+      // Questions the organizer asks at checkout (answers go with POST /orders).
+      questions: questionsOf(questions),
       ticketType: { ...withLook(tt), pwyw, eventDateId, validDateIds },
       // The date being bought (multiple dates) or the days the tickets cover (multi-day)
       ...ticketDates(event.dateMode, h.ticketType, dates),
@@ -292,7 +302,7 @@ export class CheckoutService {
   }
 
   async createOrder(
-    input: PriceInput & { holdId: string; email: string; name: string; gift?: GiftInput; returnTo?: 'app' },
+    input: PriceInput & { holdId: string; email: string; name: string; gift?: GiftInput; returnTo?: 'app'; answers?: AnswerInput[] },
     user: AuthUser | null,
     clientIp: string | null,
   ) {
@@ -321,6 +331,8 @@ export class CheckoutService {
       secondsToCheckout: (now.getTime() - hold.createdAt.getTime()) / 1000,
     });
 
+    // The organizer's checkout questions: required ones answered, choices from the list.
+    const [answers] = checkAnswers(questionsOf(hold.event.questions), input.answers, [hold.quantity]);
     const id = orderCode();
     const currency: Currency = isCurrency(hold.event.currency) ? hold.event.currency : 'USD';
     // Nothing to pay (free tickets, $0 pay what you want, no donation): no payment provider, the tickets are issued now.
@@ -351,6 +363,7 @@ export class CheckoutService {
         provider: provider?.name ?? 'free',
         clientIp,
         snapshot,
+        ...(answers ? { answers } : {}),
         ...(risk.score >= FRAUD_FLAG_THRESHOLD ? { fraudFlag: { create: { score: risk.score, reasons: risk.reasons } } } : {}),
         ...(gift ? { gift: { create: gift } } : {}),
       },
@@ -459,12 +472,22 @@ export class CheckoutService {
 
   /* ---------- carts: several ticket types of one event in one checkout ---------- */
 
+  /** A presale code for an event: right or not, and the ticket types it opens before their public on-sale. */
+  async checkPresale(slug: string, code: string) {
+    const e = await this.prisma.event.findUnique({ where: { slug }, select: { status: true, presaleCode: true, presaleStartsAt: true, ticketTypes: { select: { id: true, salesStart: true, salesEnd: true } } } });
+    if (!e || e.status !== 'PUBLISHED') throw new NotFoundException('Event not found.');
+    const now = new Date();
+    if (!e.presaleCode || e.presaleCode.toUpperCase() !== code.trim().toUpperCase()) throw new BadRequestException('That code isn’t right for this event.');
+    if (e.presaleStartsAt && e.presaleStartsAt > now) return { ok: false, opensAt: e.presaleStartsAt, ticketTypeIds: [] as string[] };
+    return { ok: true, opensAt: e.presaleStartsAt, ticketTypeIds: e.ticketTypes.filter((t) => saleState(t, now) === 'SOON').map((t) => t.id) };
+  }
+
   /**
    * Holds every line of a cart (POST /holds/cart), all or nothing: if one line can't be held (sold out, off sale),
    * the ones already made are released and the fan sees why. Each line is an ordinary hold, so the seats, timer and
    * pay-what-you-want amount work as for a single ticket type.
    */
-  async createCartHolds(items: { ticketTypeId: string; quantity: number; amountCents?: number }[], user: AuthUser | null) {
+  async createCartHolds(items: { ticketTypeId: string; quantity: number; amountCents?: number }[], user: AuthUser | null, accessCode?: string) {
     const ids = items.map((i) => i.ticketTypeId);
     if (new Set(ids).size !== ids.length) throw new BadRequestException('Each ticket type can be in the cart once: change its quantity instead.');
     if (items.reduce((n, i) => n + i.quantity, 0) > CART_MAX_TICKETS) throw new BadRequestException(`You can buy up to ${CART_MAX_TICKETS} tickets in one order.`);
@@ -473,7 +496,7 @@ export class CheckoutService {
     if (new Set(types.map((t) => t.eventId)).size > 1) throw new BadRequestException('A cart holds tickets for one event at a time.');
     const holds: Awaited<ReturnType<CheckoutService['createHold']>>[] = [];
     try {
-      for (const i of items) holds.push(await this.createHold(i, user));
+      for (const i of items) holds.push(await this.createHold({ ...i, accessCode }, user));
     } catch (e) {
       await this.prisma.hold.updateMany({ where: { id: { in: holds.map((h) => h.id) }, status: 'ACTIVE' }, data: { status: 'RELEASED' } });
       throw e;
@@ -538,13 +561,15 @@ export class CheckoutService {
    * single payment for the total. The cart id stands in for an order id at the payment provider and on
    * GET /orders/:id, POST /orders/:id/verify and /pay. Gifts are bought one ticket type at a time.
    */
-  async createCartOrder(input: { holdIds: string[]; email: string; name: string; promoCode?: string; protection?: boolean; donationCents?: number; returnTo?: 'app' }, user: AuthUser | null, clientIp: string | null) {
+  async createCartOrder(input: { holdIds: string[]; email: string; name: string; promoCode?: string; protection?: boolean; donationCents?: number; returnTo?: 'app'; answers?: AnswerInput[] }, user: AuthUser | null, clientIp: string | null) {
     const now = new Date();
     const holds = await this.cartHolds(input.holdIds);
     if (holds.some((h) => h.order)) throw new ConflictException('An order already exists for these seats.');
     if (holds.some((h) => h.status !== 'ACTIVE' || h.expiresAt <= now)) throw new ConflictException('Your seats were released. Please pick them again.');
     const { lines, totals, promo } = await this.priceCart(holds, input);
     const event = holds[0].event;
+    // The organizer's checkout questions; a per-ticket answer's number counts across the cart's lines, in order.
+    const answers = checkAnswers(questionsOf(event.questions), input.answers, holds.map((h) => h.quantity));
     const since = new Date(now.getTime() - 10 * 60_000);
     const [sameEmail, sameIp] = await Promise.all([
       this.prisma.order.count({ where: { email: input.email, createdAt: { gte: since } } }),
@@ -594,6 +619,7 @@ export class CheckoutService {
             provider: provider?.name ?? 'free',
             clientIp,
             snapshot: purchaseSnapshot(event, l.hold.ticketType, venue, event.dates, l.q.unitCents),
+            ...(answers[i] ? { answers: answers[i]! } : {}),
           },
         }),
       ),

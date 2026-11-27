@@ -28,6 +28,7 @@ import {
 import { Category, type ScheduleKind } from '@prisma/client';
 import { DATE_MODES, MAX_DATES, MAX_DAYS, type DateMode } from '../domain/event-dates';
 import { MAX_ITEMS, MAX_PEOPLE, MAX_PLACES, SCHEDULE_KINDS } from '../domain/schedule';
+import { MAX_OPTIONS, MAX_QUESTIONS, QUESTION_SCOPES, QUESTION_TYPES } from '../domain/questions';
 
 const lower = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim().toLowerCase() : value);
 const upper = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim().toUpperCase() : value);
@@ -77,6 +78,14 @@ export class TicketTypeInputDto {
   basePriceCents: number;
   @ApiProperty() @IsInt() @Min(1) @Max(200_000) capacity: number;
   @ApiPropertyOptional({ default: 8 }) @IsOptional() @IsInt() @Min(1) @Max(20) maxPerOrder?: number;
+  @ApiPropertyOptional({ nullable: true, description: 'When this ticket type goes on public sale (an instant; null or left out = as soon as the event is on sale)' })
+  @IsOptional()
+  @IsDateString()
+  salesStart?: string | null;
+  @ApiPropertyOptional({ nullable: true, description: 'When sales of this ticket type end (an instant; null = when the event starts)' })
+  @IsOptional()
+  @IsDateString()
+  salesEnd?: string | null;
   @ApiPropertyOptional({ type: [String], description: 'Up to 8 inclusions, e.g. "Priority entry"' })
   @IsOptional()
   @IsArray()
@@ -138,8 +147,39 @@ export class EventDateInputDto {
   @ApiPropertyOptional({ description: 'e.g. "Matinee" or "Day 1: Afrobeats" (empty clears it)' }) @IsOptional() @IsString() @MaxLength(60) label?: string;
 }
 
-/** Charity donations at checkout and the comp limit, on create and edit. */
+/** A question asked at checkout. */
+export class QuestionDto {
+  @ApiPropertyOptional({ description: 'Edit: the question’s id, so earlier answers stay with it' }) @IsOptional() @IsString() @MaxLength(40) id?: string;
+  @ApiProperty({ example: 'T-shirt size' }) @IsString() @MinLength(2) @MaxLength(120) label: string;
+  @ApiPropertyOptional({ enum: QUESTION_TYPES, default: 'TEXT' }) @IsOptional() @IsIn(QUESTION_TYPES) type?: (typeof QUESTION_TYPES)[number];
+  @ApiPropertyOptional({ type: [String], description: 'CHOICE: 2 or more choices' })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(MAX_OPTIONS)
+  @IsString({ each: true })
+  @MinLength(1, { each: true })
+  @MaxLength(60, { each: true })
+  options?: string[];
+  @ApiPropertyOptional({ default: false }) @IsOptional() @IsBoolean() required?: boolean;
+  @ApiPropertyOptional({ enum: QUESTION_SCOPES, default: 'ORDER', description: 'Asked once per order, or once for each ticket' }) @IsOptional() @IsIn(QUESTION_SCOPES) per?: (typeof QUESTION_SCOPES)[number];
+}
+
+/** Charity donations at checkout, the comp limit, presale, the age limit and checkout questions, on create and edit. */
 export class EventExtrasDto {
+  @ApiPropertyOptional({ nullable: true, description: 'Presale code: with it, fans can buy ticket types before their public on-sale (null or empty = no presale)' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^$|^[A-Za-z0-9-]{3,30}$/, { message: 'A presale code is 3 to 30 letters, numbers or dashes.' })
+  presaleCode?: string | null;
+  @ApiPropertyOptional({ nullable: true, description: 'When the presale opens (an instant; null = as soon as the code is set)' }) @IsOptional() @IsDateString() presaleStartsAt?: string | null;
+  @ApiPropertyOptional({ nullable: true, description: 'Youngest age admitted, e.g. 18 (null = all ages)' }) @IsOptional() @IsInt() @Min(1) @Max(99) minAge?: number | null;
+  @ApiPropertyOptional({ type: [QuestionDto], nullable: true, description: `Questions asked at checkout (up to ${MAX_QUESTIONS}); the whole list, in order` })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(MAX_QUESTIONS)
+  @ValidateNested({ each: true })
+  @Type(() => QuestionDto)
+  questions?: QuestionDto[] | null;
   @ApiPropertyOptional({ description: "Accept donations at checkout. Omoshow collects donations on the organizer's behalf; the organizer is responsible for passing them to the cause." })
   @IsOptional()
   @IsBoolean()
@@ -332,6 +372,14 @@ export class UpdateTicketTypeDto {
   @ApiPropertyOptional() @IsOptional() @IsInt() @Min(0) @Max(10_000_000) basePriceCents?: number;
   @ApiPropertyOptional() @IsOptional() @IsInt() @Min(1) @Max(200_000) capacity?: number;
   @ApiPropertyOptional() @IsOptional() @IsInt() @Min(1) @Max(20) maxPerOrder?: number;
+  @ApiPropertyOptional({ nullable: true, description: 'When this ticket type goes on public sale (an instant; null or left out = as soon as the event is on sale)' })
+  @IsOptional()
+  @IsDateString()
+  salesStart?: string | null;
+  @ApiPropertyOptional({ nullable: true, description: 'When sales of this ticket type end (an instant; null = when the event starts)' })
+  @IsOptional()
+  @IsDateString()
+  salesEnd?: string | null;
   @ApiPropertyOptional({ type: [String], description: 'Up to 8 inclusions, e.g. "Priority entry"' })
   @IsOptional()
   @IsArray()
