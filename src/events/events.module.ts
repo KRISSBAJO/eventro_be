@@ -408,26 +408,29 @@ export class EventsController {
   }
 
   /**
-   * Omoshow in numbers, for the "Sell tickets" pitch: events on sale now, tickets issued so far, organizers with a
-   * public page and cities with something on. Counted at most every 10 minutes.
+   * Omoshow in numbers, for the "Sell tickets" pitch and the venue listing page: events on sale now, tickets issued so
+   * far, organizers with a public page, cities with something on, venues taking bookings and the cities they're in.
+   * Counted at most every 10 minutes.
    */
   @Public()
   @Get('stats')
   async stats() {
     if (this.statsCache && this.statsCache.at > Date.now() - 10 * 60_000) return this.statsCache.value;
     const upcoming: Prisma.EventWhereInput = { status: 'PUBLISHED', visibility: 'PUBLIC', ...dateRangeWhere(new Date()) };
-    const [eventsOnSale, ticketsIssued, organizers, places] = await Promise.all([
+    const [eventsOnSale, ticketsIssued, organizers, places, bookable] = await Promise.all([
       this.prisma.event.count({ where: upcoming }),
       this.prisma.ticket.count({ where: { status: { not: 'VOID' } } }),
       this.prisma.organization.count({ where: { suspendedAt: null, events: { some: { publishedAt: { not: null }, visibility: 'PUBLIC' } } } }),
       this.prisma.event.findMany({ where: { ...upcoming, online: false, venueId: { not: null } }, select: { venue: { select: { city: true, country: true } } }, distinct: ['venueId'] }),
+      this.prisma.venueListing.findMany({ where: { active: true, venue: { hiddenAt: null } }, select: { venue: { select: { city: true, country: true } } } }),
     ]);
+    const venueCities = new Set(bookable.map((b) => `${b.venue.city.trim().toLowerCase()}|${b.venue.country ?? ''}`));
     const cities = new Set(places.map((p) => `${p.venue?.city?.trim().toLowerCase()}|${p.venue?.country ?? ''}`).filter((k) => !k.startsWith('undefined')));
-    const value = { eventsOnSale, ticketsIssued, organizers, cities: cities.size };
+    const value = { eventsOnSale, ticketsIssued, organizers, cities: cities.size, venuesTakingBookings: bookable.length, venueCities: venueCities.size };
     this.statsCache = { at: Date.now(), value };
     return value;
   }
-  private statsCache: { at: number; value: { eventsOnSale: number; ticketsIssued: number; organizers: number; cities: number } } | null = null;
+  private statsCache: { at: number; value: { eventsOnSale: number; ticketsIssued: number; organizers: number; cities: number; venuesTakingBookings: number; venueCities: number } } | null = null;
 
   /** The home page spotlight, or { spotlight: null } when nothing is on sale. */
   @Public()
