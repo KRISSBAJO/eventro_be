@@ -14,6 +14,7 @@ import { CompController, CompService } from './comps';
 import { GuestListController, GuestListService } from './guest-list';
 import { DonationController, DonationService } from './donations';
 import { EventDatesService } from './event-dates';
+import { EventMessageController, EventMessageService, EventMessageStopController } from './messages';
 import {
   AttachBookingDto,
   CancelDateDto,
@@ -261,7 +262,7 @@ export class OrganizerController {
 
 @Module({
   imports: [CheckoutModule, AdminModule, VenuesModule],
-  controllers: [OrganizerController, CompController, GuestListController, DonationController, DateChangeController],
-  providers: [OrganizerService, PayoutAccounts, VenueChange, CompService, GuestListService, DonationService, EventDatesService, DateChangeService],
+  controllers: [OrganizerController, CompController, GuestListController, DonationController, DateChangeController, EventMessageController, EventMessageStopController],
+  providers: [OrganizerService, PayoutAccounts, VenueChange, CompService, GuestListService, DonationService, EventDatesService, DateChangeService, EventMessageService],
 })
 export class OrganizerModule {}

@@ -1,7 +1,7 @@
 import { BadRequestException, Body, Controller, Delete, Get, Headers, HttpCode, Module, Param, Patch, Post, Query, Req } from '@nestjs/common';
 import { ApiBearerAuth, ApiProperty, ApiPropertyOptional, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
-import { ArrayMaxSize, IsArray, IsBoolean, IsDateString, IsEmail, IsIn, IsInt, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
+import { ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsDateString, IsEmail, IsIn, IsInt, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
 import type { Request } from 'express';
 import { CheckoutService } from './checkout.service';
 import { Payments } from './payments';
@@ -33,6 +33,44 @@ export class CreateHoldDto {
   @Min(0)
   @Max(PWYW_CEILING_CENTS)
   amountCents?: number;
+}
+
+export class CartItemDto {
+  @ApiProperty() @IsString() @MaxLength(40) ticketTypeId: string;
+  @ApiProperty({ minimum: 1, maximum: 20 }) @IsInt() @Min(1) @Max(20) quantity: number;
+  @ApiPropertyOptional({ description: 'Pay what you want: the base amount per ticket (minor units), required for those tiers' }) @IsOptional() @IsInt() @Min(0) @Max(PWYW_CEILING_CENTS) amountCents?: number;
+}
+
+/** Several ticket types of one event, held together (all or nothing). */
+export class CartHoldsDto {
+  @ApiProperty({ type: [CartItemDto], description: '1 to 6 ticket types of one event, each once' })
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(6)
+  @ValidateNested({ each: true })
+  @Type(() => CartItemDto)
+  items: CartItemDto[];
+}
+
+class CartPriceDto {
+  @ApiProperty({ type: [String], description: 'The holds from POST /holds/cart, in order (the first carries the donation)' })
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(6)
+  @IsString({ each: true })
+  @MaxLength(40, { each: true })
+  holdIds: string[];
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() protection?: boolean;
+  @ApiPropertyOptional({ description: 'Applies to the fixed-price lines' }) @IsOptional() @IsString() @Matches(/^[A-Za-z0-9]{3,15}$/) promoCode?: string;
+  @ApiPropertyOptional({ description: 'One donation for the whole cart (minor units; 0 = none)' }) @IsOptional() @IsInt() @Min(0) @Max(DONATION_MAX_CENTS) donationCents?: number;
+}
+
+export class CartQuoteDto extends CartPriceDto {}
+
+export class CartOrderDto extends CartPriceDto {
+  @ApiProperty() @Transform(lower) @IsEmail() email: string;
+  @ApiProperty() @IsString() @MinLength(2) @MaxLength(80) name: string;
+  @ApiPropertyOptional({ enum: ['app'] }) @IsOptional() @IsIn(['app']) returnTo?: 'app';
 }
 
 /** Pay what you want and donations, on the quote and the order. */
@@ -118,6 +156,14 @@ export class CheckoutController {
     return this.checkout.createHold(dto, user);
   }
 
+  /** A cart: several ticket types of one event held together. */
+  @OptionalAuth()
+  @Post('holds/cart')
+  @RateLimit(RATE_RULES.checkout)
+  cartHolds(@Body() dto: CartHoldsDto, @CurrentUser() user: AuthUser | null) {
+    return this.checkout.createCartHolds(dto.items, user);
+  }
+
   @Public()
   @Get('holds/:id')
   getHold(@Param('id') id: string) {
@@ -139,6 +185,13 @@ export class CheckoutController {
   }
 
   @Public()
+  @Post('quote/cart')
+  @HttpCode(200)
+  quoteCart(@Body() dto: CartQuoteDto) {
+    return this.checkout.quoteCart(dto);
+  }
+
+  @Public()
   @Delete('holds/:id')
   release(@Param('id') id: string) {
     return this.checkout.releaseHold(id);
@@ -149,6 +202,14 @@ export class CheckoutController {
   @RateLimit(RATE_RULES.checkout)
   resaleOrder(@Param('id') id: string, @Body() dto: ResaleOrderDto, @CurrentUser() user: AuthUser | null, @Req() req: Request) {
     return this.checkout.createResaleOrder(id, dto, user, req.ip ?? null);
+  }
+
+  /** Checks out a cart: one order per ticket type, one payment. The answer's `orderId` is the cart's id (CRT-…). */
+  @OptionalAuth()
+  @Post('orders/cart')
+  @RateLimit(RATE_RULES.checkout)
+  cartOrder(@Body() dto: CartOrderDto, @CurrentUser() user: AuthUser | null, @Req() req: Request) {
+    return this.checkout.createCartOrder(dto, user, req.ip ?? null);
   }
 
   @OptionalAuth()

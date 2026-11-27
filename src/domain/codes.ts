@@ -12,6 +12,10 @@ function chunk(n: number) {
 /** Human-friendly order code, e.g. EVT-7F3K-2Q9M. */
 export const orderCode = () => `EVT-${chunk(4)}-${chunk(4)}`;
 
+/** Cart code, e.g. CRT-7F3K-2Q9M: several orders (one per ticket type) bought in one checkout. */
+export const cartCode = () => `CRT-${chunk(4)}-${chunk(4)}`;
+export const isCartCode = (id: string) => id.startsWith('CRT-');
+
 /** Venue booking code, e.g. VB-7KQ2-M9XD. */
 export const bookingCode = () => `VB-${chunk(4)}-${chunk(4)}`;
 

@@ -5,7 +5,7 @@ import { TIER_FIELDS, withLook } from '../domain/tier-look';
 import { InventoryService } from '../common/inventory.service';
 import { AuditService } from '../common/audit.service';
 import { config } from '../config';
-import { orderCode, ticketCode } from '../domain/codes';
+import { cartCode, isCartCode, orderCode, ticketCode } from '../domain/codes';
 import { buyerPrice, organizerNet, quote } from '../domain/money';
 import { FRAUD_FLAG_THRESHOLD, scoreOrder } from '../domain/fraud';
 import { pickFromSections, rowLabel, type SeatMap, type SeatPick } from '../domain/seatmap';
@@ -51,6 +51,9 @@ const buyerFee = (unitCents: number, quantity: number, feeMode: 'BUYER' | 'ORGAN
 
 /** Serializes inventory changes per ticket type (row lock for the rest of the transaction). */
 const lockTicketType = (tx: Tx, id: string) => tx.$queryRaw`SELECT id FROM "TicketType" WHERE id = ${id} FOR UPDATE`;
+
+/** Tickets across the lines of one cart. */
+const CART_MAX_TICKETS = 20;
 
 /** "Can't find my order?" emails per address per hour. */
 const FIND_PER_EMAIL_PER_HOUR = 3;
@@ -279,6 +282,15 @@ export class CheckoutService {
     return { split: { subaccount: org.paystackSubaccount, platformCents: Math.max(0, q.totalCents - share) } };
   }
 
+  /** The same split for a cart: `shareCents` is the organizer's share of every line plus the donation. */
+  private async paystackSplitFor(orgId: string, currency: string, shareCents: number, totalCents: number) {
+    const org = await this.prisma.organization.findUnique({ where: { id: orgId }, select: { payoutProvider: true, paystackSubaccount: true, bankCountry: true, payoutHoldUntil: true } });
+    if (org?.payoutProvider !== 'paystack' || !org.paystackSubaccount) return {};
+    if (org.payoutHoldUntil && org.payoutHoldUntil > new Date()) return {};
+    if (paystackCountryFor(currency)?.code !== org.bankCountry) return {};
+    return { split: { subaccount: org.paystackSubaccount, platformCents: Math.max(0, totalCents - shareCents) } };
+  }
+
   async createOrder(
     input: PriceInput & { holdId: string; email: string; name: string; gift?: GiftInput; returnTo?: 'app' },
     user: AuthUser | null,
@@ -445,8 +457,310 @@ export class CheckoutService {
     };
   }
 
+  /* ---------- carts: several ticket types of one event in one checkout ---------- */
+
+  /**
+   * Holds every line of a cart (POST /holds/cart), all or nothing: if one line can't be held (sold out, off sale),
+   * the ones already made are released and the fan sees why. Each line is an ordinary hold, so the seats, timer and
+   * pay-what-you-want amount work as for a single ticket type.
+   */
+  async createCartHolds(items: { ticketTypeId: string; quantity: number; amountCents?: number }[], user: AuthUser | null) {
+    const ids = items.map((i) => i.ticketTypeId);
+    if (new Set(ids).size !== ids.length) throw new BadRequestException('Each ticket type can be in the cart once: change its quantity instead.');
+    if (items.reduce((n, i) => n + i.quantity, 0) > CART_MAX_TICKETS) throw new BadRequestException(`You can buy up to ${CART_MAX_TICKETS} tickets in one order.`);
+    const types = await this.prisma.ticketType.findMany({ where: { id: { in: ids } }, select: { id: true, eventId: true } });
+    if (types.length !== ids.length) throw new NotFoundException('Ticket type not found.');
+    if (new Set(types.map((t) => t.eventId)).size > 1) throw new BadRequestException('A cart holds tickets for one event at a time.');
+    const holds: Awaited<ReturnType<CheckoutService['createHold']>>[] = [];
+    try {
+      for (const i of items) holds.push(await this.createHold(i, user));
+    } catch (e) {
+      await this.prisma.hold.updateMany({ where: { id: { in: holds.map((h) => h.id) }, status: 'ACTIVE' }, data: { status: 'RELEASED' } });
+      throw e;
+    }
+    return { holds, expiresAt: new Date(Math.min(...holds.map((h) => h.expiresAt.getTime()))) };
+  }
+
+  /** The holds of a cart, in the order given: all there, for one event. */
+  private async cartHolds(holdIds: string[]) {
+    if (new Set(holdIds).size !== holdIds.length) throw new BadRequestException('The same hold is listed twice.');
+    const rows = await this.prisma.hold.findMany({ where: { id: { in: holdIds } }, include: { ticketType: true, event: { include: { dates: true } }, order: { select: { id: true } } } });
+    const holds = holdIds.map((id) => rows.find((r) => r.id === id));
+    if (holds.some((h) => !h)) throw new NotFoundException('Hold not found.');
+    if (new Set(rows.map((r) => r.eventId)).size > 1) throw new BadRequestException('A cart holds tickets for one event at a time.');
+    return holds as NonNullable<(typeof holds)[number]>[];
+  }
+
+  /**
+   * Prices a cart line by line with the same rules as a single hold. A promo code applies to the fixed-price lines
+   * (it's refused only if every line is pay what you want); protection applies to every line; the donation is one
+   * amount for the whole cart, carried by the first line.
+   */
+  private async priceCart(holds: Awaited<ReturnType<CheckoutService['cartHolds']>>, input: { promoCode?: string; protection?: boolean; donationCents?: number }) {
+    if (input.promoCode && holds.every((h) => isPwyw(h.ticketType))) throw new BadRequestException(PROMO_ON_PWYW);
+    const lines = await Promise.all(
+      holds.map(async (hold, i) => ({
+        hold,
+        ...(await this.price(hold, {
+          promoCode: input.promoCode && !isPwyw(hold.ticketType) ? input.promoCode : undefined,
+          protection: input.protection,
+          donationCents: i === 0 ? (input.donationCents ?? 0) : 0,
+        })),
+      })),
+    );
+    const sum = (f: (l: (typeof lines)[number]) => number) => lines.reduce((n, l) => n + f(l), 0);
+    const totals = {
+      quantity: sum((l) => l.q.quantity),
+      subtotalCents: sum((l) => l.q.subtotalCents),
+      discountCents: sum((l) => l.q.discountCents),
+      protectionCents: sum((l) => l.q.protectionCents),
+      donationCents: sum((l) => l.q.donationCents),
+      totalCents: sum((l) => l.q.totalCents),
+      feeCents: sum((l) => l.feeCents),
+    };
+    return { lines, totals: { ...totals, ticketTotalCents: totals.totalCents - totals.donationCents }, promo: lines.find((l) => l.promo)?.promo ?? null };
+  }
+
+  /** What a cart's lines look like in a quote or an order answer. */
+  private cartLineView(l: Awaited<ReturnType<CheckoutService['priceCart']>>['lines'][number]) {
+    return { holdId: l.hold.id, ticketTypeId: l.hold.ticketTypeId, name: l.hold.ticketType.name, ...l.q, ticketTotalCents: l.q.totalCents - l.q.donationCents, feeCents: l.feeCents, amountCents: l.amountCents };
+  }
+
+  /** Prices for a cart with an optional promo code, before the orders exist (POST /quote/cart). */
+  async quoteCart(input: { holdIds: string[]; promoCode?: string; protection?: boolean; donationCents?: number }) {
+    const holds = await this.cartHolds(input.holdIds);
+    const { lines, totals, promo } = await this.priceCart(holds, input);
+    return { promo, ...totals, lines: lines.map((l) => this.cartLineView(l)) };
+  }
+
+  /**
+   * Checks out a cart (POST /orders/cart): one order per line, all with the cart's id (`groupId`, CRT-…), paid with a
+   * single payment for the total. The cart id stands in for an order id at the payment provider and on
+   * GET /orders/:id, POST /orders/:id/verify and /pay. Gifts are bought one ticket type at a time.
+   */
+  async createCartOrder(input: { holdIds: string[]; email: string; name: string; promoCode?: string; protection?: boolean; donationCents?: number; returnTo?: 'app' }, user: AuthUser | null, clientIp: string | null) {
+    const now = new Date();
+    const holds = await this.cartHolds(input.holdIds);
+    if (holds.some((h) => h.order)) throw new ConflictException('An order already exists for these seats.');
+    if (holds.some((h) => h.status !== 'ACTIVE' || h.expiresAt <= now)) throw new ConflictException('Your seats were released. Please pick them again.');
+    const { lines, totals, promo } = await this.priceCart(holds, input);
+    const event = holds[0].event;
+    const since = new Date(now.getTime() - 10 * 60_000);
+    const [sameEmail, sameIp] = await Promise.all([
+      this.prisma.order.count({ where: { email: input.email, createdAt: { gte: since } } }),
+      clientIp ? this.prisma.order.count({ where: { clientIp, createdAt: { gte: since } } }) : Promise.resolve(0),
+    ]);
+    // One fraud check for the whole cart (its total and ticket count), flagged on the first order.
+    const risk = scoreOrder({
+      email: input.email,
+      totalCents: this.fx.convert(totals.totalCents, event.currency, 'USD'),
+      quantity: totals.quantity,
+      maxPerOrder: holds.reduce((n, h) => n + h.ticketType.maxPerOrder, 0),
+      recentOrdersSameEmail: sameEmail + 1,
+      recentOrdersSameIp: sameIp + 1,
+      secondsToCheckout: (now.getTime() - Math.min(...holds.map((h) => h.createdAt.getTime()))) / 1000,
+    });
+
+    const groupId = cartCode();
+    const currency: Currency = isCurrency(event.currency) ? event.currency : 'USD';
+    const free = totals.totalCents === 0;
+    const provider = free ? null : this.payments.forCurrency(currency);
+    const venue = event.venueId ? await this.prisma.venue.findUnique({ where: { id: event.venueId }, select: { name: true, city: true } }) : null;
+    const orderIds = lines.map(() => orderCode());
+    await this.prisma.$transaction(
+      lines.map((l, i) =>
+        this.prisma.order.create({
+          data: {
+            id: orderIds[i],
+            groupId,
+            // one transaction shares one clock: keep the lines in the order they were picked
+            createdAt: new Date(now.getTime() + i),
+            eventId: l.hold.eventId,
+            ticketTypeId: l.hold.ticketTypeId,
+            holdId: l.hold.id,
+            buyerId: user?.id ?? null,
+            email: input.email,
+            buyerName: input.name.trim(),
+            quantity: l.hold.quantity,
+            unitCents: l.q.unitCents,
+            subtotalCents: l.q.subtotalCents,
+            discountCents: l.q.discountCents,
+            protectionCents: l.q.protectionCents,
+            totalCents: l.q.totalCents,
+            donationCents: l.q.donationCents,
+            donationCause: l.q.donationCents > 0 ? event.donationCause : null,
+            promoCode: l.promo?.code ?? null,
+            currency,
+            provider: provider?.name ?? 'free',
+            clientIp,
+            snapshot: purchaseSnapshot(event, l.hold.ticketType, venue, event.dates, l.q.unitCents),
+          },
+        }),
+      ),
+    );
+    const holdExpiresAt = new Date(Math.min(...holds.map((h) => h.expiresAt.getTime())));
+    const answer = { groupId, orderId: groupId, orderIds, currency, holdExpiresAt, promo, ...totals, lines: lines.map((l, i) => ({ orderId: orderIds[i], ...this.cartLineView(l) })) };
+
+    if (!provider) {
+      const done = await this.fulfilGroup(groupId);
+      return { ...answer, status: done.status, provider: 'free' as const, clientSecret: null, redirectUrl: null };
+    }
+    let pay;
+    try {
+      // The organizer's share of every line (and the whole donation) settles to their Paystack subaccount.
+      const share = lines.reduce((n, l) => n + Math.max(0, organizerNet(l.q.unitCents, event.feeMode, config.organizerFeePermille) * l.q.quantity - l.q.discountCents), 0) + totals.donationCents;
+      pay = await provider.createPayment({
+        orderId: groupId,
+        amountCents: totals.totalCents,
+        currency,
+        email: input.email,
+        description: `${lines.map((l) => `${l.q.quantity} × ${l.hold.ticketType.name}`).join(', ')} — ${event.title}`.slice(0, 240),
+        returnTo: input.returnTo,
+        ...(provider.name === 'paystack' ? await this.paystackSplitFor(event.orgId, currency, share, totals.totalCents) : {}),
+      });
+    } catch (e) {
+      // The payment couldn't be started: the unpaid orders go, so the holds can be checked out again.
+      await this.prisma.order.deleteMany({ where: { groupId, status: 'PENDING' } });
+      throw e;
+    }
+    await this.prisma.order.updateMany({ where: { groupId }, data: { paymentRef: pay.paymentRef } });
+    if (risk.score >= FRAUD_FLAG_THRESHOLD) await this.prisma.fraudFlag.create({ data: { orderId: orderIds[0], score: risk.score, reasons: risk.reasons } }).catch(() => undefined);
+    return { ...answer, status: 'PENDING' as const, provider: provider.name, clientSecret: pay.clientSecret ?? null, redirectUrl: pay.redirectUrl ?? null };
+  }
+
+  /** A cart as one thing: its orders (each as GET /orders/:id shows it), every ticket, and the totals. */
+  async groupView(groupId: string) {
+    const rows = await this.prisma.order.findMany({ where: { groupId }, orderBy: { createdAt: 'asc' }, select: { id: true } });
+    if (!rows.length) throw new NotFoundException('Order not found.');
+    const orders = await Promise.all(rows.map((r) => this.orderView(r.id)));
+    const first = orders[0];
+    const sum = (f: (o: (typeof orders)[number]) => number) => orders.reduce((n, o) => n + f(o), 0);
+    // Paid once every line that still stands is paid; a line whose seats were lost was refunded on its own.
+    const live = orders.filter((o) => o.status !== 'CANCELLED');
+    const status = !live.length ? ('CANCELLED' as const) : live.some((o) => o.status === 'PENDING') ? ('PENDING' as const) : live.every((o) => o.status === 'PAID') ? ('PAID' as const) : live[0].status;
+    return {
+      ...first,
+      id: groupId,
+      groupId,
+      status,
+      quantity: sum((o) => (o.status === 'CANCELLED' ? 0 : o.quantity)),
+      subtotalCents: sum((o) => o.subtotalCents),
+      discountCents: sum((o) => o.discountCents),
+      protectionCents: sum((o) => o.protectionCents),
+      donationCents: sum((o) => o.donationCents),
+      totalCents: sum((o) => o.totalCents),
+      refundedCents: sum((o) => o.refundedCents),
+      tickets: orders.flatMap((o) => o.tickets),
+      orders,
+      // lines that couldn't be completed (seats gone, date cancelled) and were refunded on their own
+      refundedOrders: orders.filter((o) => o.status === 'CANCELLED').map((o) => o.id),
+    };
+  }
+
+  /**
+   * Marks every order of a cart paid and issues its tickets (see `fulfil`; safe to call again). A line that can't be
+   * completed (its seats went after the hold ran out, its date was cancelled) is refunded on its own and the rest go
+   * ahead. One receipt for the whole cart.
+   */
+  async fulfilGroup(groupId: string) {
+    const rows = await this.prisma.order.findMany({ where: { groupId }, orderBy: { createdAt: 'asc' }, select: { id: true } });
+    if (!rows.length) throw new NotFoundException('Order not found.');
+    const fresh: string[] = [];
+    let failed: unknown = null;
+    for (const r of rows) {
+      try {
+        await this.fulfil(r.id, fresh);
+      } catch (e) {
+        // A line refunded on its own (ConflictException) doesn't stop the others; anything else is retried later.
+        if (!(e instanceof ConflictException)) failed ??= e;
+      }
+    }
+    if (fresh.length) {
+      void this.sendCartReceipt(groupId, fresh).catch((e) => this.log.warn(`Receipt for ${groupId}: ${(e as Error).message}`));
+      void this.notices.orderPaid(fresh[0]);
+      for (const id of fresh) void this.notices.newSale(id);
+    }
+    if (failed) throw failed;
+    const view = await this.groupView(groupId);
+    if (view.status === 'CANCELLED') throw new ConflictException('These tickets were no longer available when your payment finished. You have been refunded in full.');
+    return view;
+  }
+
+  /** A cart's payment, checked with the provider (the website asks after the fan pays; the webhooks do the same). */
+  private async verifyGroup(groupId: string) {
+    const orders = await this.prisma.order.findMany({ where: { groupId }, select: { id: true, status: true, provider: true, paymentRef: true, totalCents: true, currency: true } });
+    if (!orders.length) throw new NotFoundException('Order not found.');
+    if (!orders.some((o) => o.status === 'PENDING')) return this.groupView(groupId);
+    const total = orders.reduce((n, o) => n + o.totalCents, 0);
+    const { provider, paymentRef, currency } = orders[0];
+    const mismatch = (paid: number, cur: string) => {
+      this.log.error(`${provider} amount mismatch on ${groupId}: paid ${paid} ${cur}, expected ${total} ${currency}`);
+      return new BadRequestException('The payment amount doesn’t match the order. Our team has been alerted.');
+    };
+    if (provider === 'stripe') {
+      const stripe = this.payments.stripe;
+      if (!stripe || !paymentRef) throw new BadRequestException('Card payments aren’t configured on this server.');
+      const pi = await stripe.paymentIntents.retrieve(paymentRef);
+      if (pi.metadata?.orderId !== groupId) throw new BadRequestException('That payment belongs to a different order.');
+      if (pi.status !== 'succeeded') return { ...(await this.groupView(groupId)), paymentStatus: pi.status };
+      if (pi.amount !== total || pi.currency.toUpperCase() !== currency) throw mismatch(pi.amount, pi.currency);
+      return this.fulfilGroup(groupId);
+    }
+    if (provider !== 'paystack') throw new BadRequestException('This order isn’t paid through Paystack.');
+    if (!this.payments.paystack) throw new BadRequestException('Paystack isn’t configured on this server.');
+    const t = await this.payments.paystack.verify(paymentRef ?? groupId);
+    if (t.status !== 'success') return { ...(await this.groupView(groupId)), paymentStatus: t.status };
+    if (t.amount !== total || t.currency !== currency) throw mismatch(t.amount, t.currency);
+    return this.fulfilGroup(groupId);
+  }
+
+  /** One email for a cart: every line that was paid, the total, when and where. */
+  private async sendCartReceipt(groupId: string, orderIds: string[]) {
+    const orders = await this.prisma.order.findMany({
+      where: { id: { in: orderIds } },
+      orderBy: { createdAt: 'asc' },
+      include: { event: { select: { title: true, startsAt: true, online: true, dateMode: true, dates: true, venue: { select: { name: true, city: true } } } }, ticketType: { select: { name: true, eventDateId: true, validDateIds: true } } },
+    });
+    if (!orders.length) return;
+    const o = orders[0];
+    const total = orders.reduce((n, x) => n + x.totalCents, 0);
+    const donation = orders.reduce((n, x) => n + x.donationCents, 0);
+    const where = o.event.online ? 'Online' : o.event.venue ? `${o.event.venue.name}, ${o.event.venue.city}` : '';
+    const count = orders.reduce((n, x) => n + x.quantity, 0);
+    const { html, text } = render({
+      preheader: `${count} tickets for ${o.event.title}. Order ${groupId}.`,
+      heading: `You're going to ${o.event.title}`,
+      highlight: { label: `Order ${groupId} · ${total > 0 ? 'paid' : 'confirmed'}`, value: total > 0 ? formatMoney(total, o.currency) : 'Free' },
+      paragraphs: [
+        ...orders.map((x) => {
+          const tickets = x.totalCents - x.donationCents;
+          // Each line's own date (multiple dates) or days (a multi-day pass), when lines differ.
+          const when = o.event.dateMode === 'SINGLE' ? '' : ` · ${whenText(x.event.dateMode, x.event, x.ticketType, x.event.dates)}`;
+          return `${x.quantity} × ${x.ticketType.name}: ${tickets > 0 ? formatMoney(tickets, x.currency) : 'Free'}${when}`;
+        }),
+        ...(donation > 0
+          ? [`Donation to ${o.donationCause ?? 'the organizer’s cause'}: ${formatMoney(donation, o.currency)}. Thank you! Omoshow collects donations on the organizer's behalf; the organizer is responsible for passing them to the cause. Donations aren’t refunded if a ticket doesn’t scan.`]
+          : []),
+        `${o.event.dateMode === 'SINGLE' ? `${whenText(o.event.dateMode, o.event, o.ticketType, o.event.dates)}${where ? ' · ' : ''}` : ''}${where}`,
+        'Your tickets are in your Omoshow account. The QR code refreshes every few seconds, so screenshots won’t work at the door.',
+      ].filter(Boolean),
+      cta: { label: 'View my tickets', url: `${config.webUrl}/tickets` },
+      footer: 'You got this email because you bought tickets on Omoshow. Need help?',
+      footerLink: { label: 'Visit the help centre', url: `${config.webUrl}/help` },
+    });
+    await this.mail.send('order.receipt', { to: o.email, subject: `Your tickets: ${o.event.title} (${groupId})`, html, text });
+  }
+
   /** Development only: completes a mock payment. */
   async payMock(orderId: string) {
+    if (isCartCode(orderId)) {
+      const o = await this.prisma.order.findFirst({ where: { groupId: orderId }, select: { provider: true } });
+      if (!o) throw new NotFoundException('Order not found.');
+      if (o.provider === 'free') return this.fulfilGroup(orderId);
+      if (o.provider !== 'mock') throw new ForbiddenException('This order is paid through a payment provider.');
+      if (config.isProduction) throw new ForbiddenException('Test payments are switched off on this site.');
+      return this.fulfilGroup(orderId);
+    }
     const o = await this.prisma.order.findUnique({ where: { id: orderId } });
     if (!o) throw new NotFoundException('Order not found.');
     // A $0 order was completed when it was made: this just returns it.
@@ -465,6 +779,7 @@ export class CheckoutService {
    * We ask the provider directly rather than waiting for the webhook, so the confirmation shows straight away.
    */
   async verifyPaystack(orderId: string) {
+    if (isCartCode(orderId)) return this.verifyGroup(orderId);
     const o = await this.prisma.order.findUnique({ where: { id: orderId } });
     if (!o) throw new NotFoundException('Order not found.');
     if (o.status === 'PAID') return this.orderView(orderId);
@@ -507,7 +822,7 @@ export class CheckoutService {
     return this.fulfil(o.id);
   }
 
-  async fulfil(orderId: string) {
+  async fulfil(orderId: string, cart?: string[]) {
     const result = await this.prisma.$transaction(
       async (tx) => {
         await tx.$queryRaw`SELECT id FROM "Order" WHERE id = ${orderId} FOR UPDATE`;
@@ -612,8 +927,11 @@ export class CheckoutService {
         });
         await tx.ticketType.update({ where: { id: order.ticketTypeId }, data: { sold: { increment: order.quantity } } });
         if (order.hold) await tx.hold.update({ where: { id: order.hold.id }, data: { status: 'CONVERTED' } });
-        if (order.promoCode) {
-          await tx.promo.update({ where: { eventId_code: { eventId: order.eventId, code: order.promoCode } }, data: { used: { increment: 1 } } });
+        // A promo code is used once per checkout: a cart's later lines don't count again. (updateMany: a code deleted
+        // while the fan was paying mustn't stop a paid order.)
+        const counted = order.promoCode && order.groupId ? await tx.order.count({ where: { groupId: order.groupId, promoCode: order.promoCode, status: 'PAID' } }) : 0;
+        if (order.promoCode && !counted) {
+          await tx.promo.updateMany({ where: { eventId: order.eventId, code: order.promoCode }, data: { used: { increment: 1 } } });
         }
         const paid = await tx.order.update({ where: { id: order.id }, data: { status: 'PAID', paidAt: now, buyerId: owner } });
         return { order: paid, refund: false, fresh: true };
@@ -630,6 +948,11 @@ export class CheckoutService {
       );
     }
     // Only the call that actually marked it paid sends the receipt (webhook retries don't send it again).
+    // Part of a cart: the cart sends one receipt and the pushes for all its lines (fulfilGroup).
+    if (result.fresh && cart) {
+      cart.push(orderId);
+      return this.orderView(orderId);
+    }
     if (result.fresh) {
       void this.sendReceipt(orderId).catch((e) => this.log.warn(`Receipt for ${orderId}: ${(e as Error).message}`));
       void this.gifts.afterPaid(orderId).catch((e) => this.log.warn(`Gift for ${orderId}: ${(e as Error).message}`));
@@ -770,9 +1093,14 @@ export class CheckoutService {
   }
 
   async getOrder(orderId: string, user: AuthUser | null, email?: string) {
-    const o = await this.prisma.order.findUnique({ where: { id: orderId }, select: { buyerId: true, email: true } });
+    const cart = isCartCode(orderId);
+    const o = cart
+      ? await this.prisma.order.findFirst({ where: { groupId: orderId }, select: { buyerId: true, email: true } })
+      : await this.prisma.order.findUnique({ where: { id: orderId }, select: { buyerId: true, email: true } });
     const allowed = o && ((user && (o.buyerId === user.id || user.roles.includes('ADMIN'))) || (email && email.trim().toLowerCase() === o.email));
     if (!allowed) throw new NotFoundException('Order not found.');
+    // A cart: its orders together (refund requests are made per order).
+    if (cart) return { ...(await this.groupView(orderId)), refundRequests: [] };
     // The buyer (or an admin) also sees refund requests, newest first, so the app can show where one stands.
     const refundRequests = await this.prisma.refundRequest.findMany({
       where: { orderId },
@@ -851,14 +1179,18 @@ export class CheckoutService {
     if (!orderId) return;
     if (type === 'payment_intent.succeeded') {
       try {
-        await this.fulfil(orderId);
+        if (isCartCode(orderId)) await this.fulfilGroup(orderId);
+        else await this.fulfil(orderId);
       } catch (e) {
         this.log.warn(`Fulfilment for ${orderId} ended with: ${(e as Error).message}`);
       }
-    } else if (type === 'payment_intent.payment_failed' || type === 'payment_intent.canceled') {
-      const o = await this.prisma.order.findUnique({ where: { id: orderId } });
-      if (o?.status === 'PENDING') {
-        await this.prisma.order.update({ where: { id: orderId }, data: { status: 'CANCELLED' } });
+    } else if (type === 'payment_intent.canceled') {
+      // Only a cancelled payment ends the order. A declined card (payment_intent.payment_failed) doesn't: the fan can
+      // try again on the same payment while the seats are held, and that payment must still find its order.
+      const orders = await this.prisma.order.findMany({ where: isCartCode(orderId) ? { groupId: orderId } : { id: orderId }, select: { id: true, status: true, holdId: true } });
+      for (const o of orders) {
+        if (o.status !== 'PENDING') continue;
+        await this.prisma.order.update({ where: { id: o.id }, data: { status: 'CANCELLED' } });
         if (o.holdId) await this.prisma.hold.updateMany({ where: { id: o.holdId, status: 'ACTIVE' }, data: { status: 'RELEASED' } });
       }
     }

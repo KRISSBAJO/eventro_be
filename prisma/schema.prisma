@@ -440,6 +440,9 @@ model Event {
   guestList              GuestListEntry[]
   guestCheckIns          GuestCheckIn[]
   scheduleItems          ScheduleItem[]
+  waitlist               WaitlistEntry[]
+  messages               EventMessage[]
+  messageOptOuts         EventMessageOptOut[]
 
   @@index([status, startsAt])
   @@index([orgId])
@@ -608,7 +611,11 @@ model Order {
   currency        String      @default("USD")
   status          OrderStatus @default(PENDING)
   provider        String // "stripe" | "mock"
-  paymentRef      String?     @unique
+  /// The provider's payment (Stripe PaymentIntent id, Paystack reference). Orders bought together in one cart share it.
+  paymentRef      String?
+  /// A cart: several ticket types of one event bought in one checkout (code CRT-…). Each type is its own order, so
+  /// refunds, payouts and tickets work per order; they share one payment (`paymentRef`). Null for a single order.
+  groupId         String?
   clientIp        String?
   createdAt       DateTime    @default(now())
   paidAt          DateTime?
@@ -647,6 +654,8 @@ model Order {
 
   @@index([eventId, status, paidAt])
   @@index([eventId, kind])
+  @@index([groupId])
+  @@index([paymentRef])
   @@index([email])
 }
 
@@ -1295,4 +1304,61 @@ model GuaranteeClaim {
   @@index([status, createdAt])
   @@index([refundStatus])
   @@index([eventId])
+}
+
+/// "Tell me when tickets come back": a fan waiting on a sold-out ticket type, or (ticketTypeId "") on any ticket for
+/// the event. When tickets are back (a refund, more capacity, an abandoned checkout, a fan resale) the people who have
+/// waited longest are told first (`notifiedAt`); after that the entry is done until they join again.
+model WaitlistEntry {
+  id           String    @id @default(cuid())
+  eventId      String
+  ticketTypeId String    @default("")
+  email        String
+  userId       String?
+  token        String    @unique
+  clientIp     String?
+  notifiedAt   DateTime?
+  stoppedAt    DateTime?
+  createdAt    DateTime  @default(now())
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, ticketTypeId, email])
+  @@index([eventId, notifiedAt])
+  @@index([clientIp, createdAt])
+}
+
+/// A message from the organizer to the people holding tickets ("Doors now 7 PM, bring ID"). It goes by email and, to
+/// holders with the app, by push, and shows on their tickets. `ticketTypeIds` empty and no `eventDateId`: everyone.
+model EventMessage {
+  id            String    @id @default(cuid())
+  eventId       String
+  senderId      String
+  subject       String
+  body          String
+  ticketTypeIds String[]  @default([])
+  eventDateId   String?
+  /// people it went to (one per email address), and how delivery went
+  recipients    Int       @default(0)
+  emailed       Int       @default(0)
+  emailFailed   Int       @default(0)
+  pushed        Int       @default(0)
+  deliveredAt   DateTime?
+  createdAt     DateTime  @default(now())
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@index([eventId, createdAt])
+}
+
+/// A ticket holder who asked not to be emailed the organizer's messages about an event (the link in each one).
+model EventMessageOptOut {
+  id        String   @id @default(cuid())
+  eventId   String
+  email     String
+  createdAt DateTime @default(now())
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, email])
 }

@@ -9,6 +9,8 @@
  *   gift.delivered           recipient             tickets     gift.delivered:<giftId>
  *   resale.sold              seller                orders      resale.sold:<listingId>
  *   price_drop               watchers              priceDrops  price_drop:<dropId>:<userId>
+ *   waitlist                 people told           priceDrops  waitlist:<entryId>:<told ms>
+ *   event.message            ticket holders        orders      event.message:<messageId>:<userId>
  *   follow.new_event         followers             following   follow.new_event:<eventId>:<userId>
  *   event.cancelled          ticket holders        orders      event.cancelled:<eventId>:<userId>
  *   event.date_cancelled     the date's holders   orders      event.date_cancelled:<dateId>:<userId>
@@ -259,6 +261,50 @@ export class NoticeService implements OnModuleInit, OnModuleDestroy {
         })),
       );
     });
+  }
+
+  /** Tickets are back: to the people on the waitlist who were just told and have an account. */
+  ticketsBack(e: { id: string; slug: string; title: string }, people: { email: string; userId: string | null; names: string[]; key: string }[], at: Date) {
+    return this.guard(`waitlist ${e.id}`, async () => {
+      const byEmail = await this.usersByEmail(people.filter((p) => !p.userId).map((p) => p.email));
+      await this.push.send(
+        'waitlist',
+        'priceDrops',
+        people.flatMap((p) => {
+          const userId = p.userId ?? byEmail.get(p.email);
+          if (!userId) return [];
+          return [
+            {
+              userId,
+              title: `Tickets are back: ${e.title}`,
+              body: `${p.names.join(', ')} ${p.names.length === 1 ? 'is' : 'are'} available again. First to check out gets them.`,
+              data: link(`/events/${e.slug}`, { type: 'waitlist', eventId: e.id }),
+              dedupeKey: `waitlist:${p.key}:${at.getTime()}`,
+            },
+          ];
+        }),
+      );
+    });
+  }
+
+  /** A message from the organizer: to the ticket holders it's for who have an account. Returns how many pushes went out. */
+  async organizerMessage(e: { id: string }, m: { id: string; title: string; body: string }, userIds: string[]) {
+    let sent = 0;
+    await this.guard(`event.message ${m.id}`, async () => {
+      const r = await this.push.send(
+        'event.message',
+        'orders',
+        userIds.map((userId) => ({
+          userId,
+          title: m.title,
+          body: m.body,
+          data: link('/tickets', { type: 'event.message', eventId: e.id, messageId: m.id }),
+          dedupeKey: `event.message:${m.id}:${userId}`,
+        })),
+      );
+      sent = r.sent;
+    });
+    return sent;
   }
 
   /**

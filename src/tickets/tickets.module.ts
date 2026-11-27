@@ -1,5 +1,6 @@
 import { BadRequestException, Body, Controller, Delete, Get, Header, HttpCode, Injectable, Module, NotFoundException, Param, Post } from '@nestjs/common';
 import { dateChangeView, moveRefund, ticketIdsOf } from '../domain/date-changes';
+import { messageHits } from '../domain/event-messages';
 import { ApiBearerAuth, ApiProperty, ApiTags } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import { IsEmail, IsInt, Min } from 'class-validator';
@@ -87,6 +88,7 @@ export class TicketsService {
         order: {
           select: {
             id: true,
+            groupId: true,
             createdAt: true,
             paidAt: true,
             email: true,
@@ -121,7 +123,13 @@ export class TicketsService {
       ? await this.prisma.auditLog.findMany({ where: { entity: 'Order', action: 'order.date_change_refund', entityId: { in: [...new Set(rows.map((r) => r.orderId))] } }, select: { entityId: true, data: true } })
       : [];
     const taken = new Set(took.map((a) => `${a.entityId}:${(a.data as { dateChangeId?: string } | null)?.dateChangeId ?? ''}`));
+    // Messages from the organizer to ticket holders, newest first (each ticket shows the ones meant for its type and date).
+    const messages = await this.prisma.eventMessage.findMany({ where: { eventId: { in: [...new Set(rows.map((r) => r.eventId))] } }, orderBy: { createdAt: 'desc' }, take: 400 });
     const tickets = rows.map(({ event: { seatMap, streamUrl, dates, ...event }, guaranteeClaim, order: { email: buyerEmail, buyerId, ...order }, ...t }) => {
+      const updates = messages
+        .filter((m) => m.eventId === t.eventId && messageHits(m, event.dateMode, { ...t.ticketType, id: t.ticketTypeId }))
+        .slice(0, 5)
+        .map((m) => ({ id: m.id, subject: m.subject, body: m.body, sentAt: m.createdAt }));
       const dateChange = dateChangeView(
         changes.filter((c) => c.eventId === t.eventId),
         event.dateMode,
@@ -142,7 +150,7 @@ export class TicketsService {
       const guarantee = guaranteeFor({ id: t.id, resaleGuarantee: t.resaleGuarantee, guaranteeClaim }, order, event, Date.now(), dated);
       // Multiple dates: the ticket's own date (DATES) or the days it admits on (DAYS); the event's dates for context.
       const when = ticketDates(event.dateMode, t.ticketType, dates);
-      return { ...t, order, dateChange, ticketType: withLook(t.ticketType), ...seed, event: { ...event, streamUrl: watch, dates: dates.sort(byStart).map(dateView) }, ...when, sectionName: s ? sectionName(s) : null, guarantee, sessions: sessions.get(t.id) ?? [] };
+      return { ...t, order, dateChange, updates, ticketType: withLook(t.ticketType), ...seed, event: { ...event, streamUrl: watch, dates: dates.sort(byStart).map(dateView) }, ...when, sectionName: s ? sectionName(s) : null, guarantee, sessions: sessions.get(t.id) ?? [] };
     });
     const incoming = await this.prisma.ticket.findMany({
       where: { transferTo: user.email, status: 'TRANSFER_PENDING' },

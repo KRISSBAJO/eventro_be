@@ -20,6 +20,7 @@ import { FxModule } from './fx/fx.module';
 import { NewsletterModule } from './newsletter/newsletter.module';
 import { MailModule } from './mail/mail.module';
 import { PriceDropModule } from './price-drops/price-drops.module';
+import { WaitlistModule } from './waitlist/waitlist.module';
 import { GiftModule } from './gifts/gifts.module';
 import { VenuesModule } from './venues/venues.module';
 import { ResaleModule } from './resale/resale.module';
@@ -68,6 +69,7 @@ class CoreModule {}
     MailModule,
     PushModule,
     PriceDropModule,
+    WaitlistModule,
     GiftModule,
     VenuesModule,
     ResaleModule,
