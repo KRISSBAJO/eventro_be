@@ -10,6 +10,7 @@
  *
  * Images are served by mediaEX's on-the-fly transformer (resized, WebP/AVIF), videos by its HLS player.
  */
+import { mediaexTrace } from './mediaex-trace';
 import { holdLiveEdit, pendingEditJson, readPendingEdit } from '../domain/pending-edit';
 import {
   BadRequestException,
@@ -109,37 +110,42 @@ export class MediaService {
   /** Calls the mediaEX API with the key. Turns its errors into readable ones. */
   private async mediaex<T>(path: string, init: RequestInit & { duplex?: 'half' } = {}): Promise<T> {
     if (!this.enabled) throw new ServiceUnavailableException('Photo and video uploads aren’t switched on yet (MEDIAEX_API_KEY is not set).');
-    let res: Response;
+    const started = Date.now();
+    const method = init.method ?? 'GET';
+    let res: Response | undefined;
+    let text: string;
     try {
       res = await fetch(`${config.mediaexUrl}/api/v1${path}`, {
         ...init,
         headers: { authorization: `Bearer ${config.mediaexApiKey}`, ...(init.headers as Record<string, string> | undefined) },
       });
+      text = await res.text();
     } catch (e) {
-      this.log.warn(`mediaEX unreachable: ${(e as Error).message}`);
+      this.log.warn(mediaexTrace(path, method, started, res, undefined, e));
       throw new ServiceUnavailableException('The media service isn’t reachable right now. Try again in a minute.');
     }
-    const text = await res.text();
     let data: unknown = null;
     try {
       data = text ? JSON.parse(text) : null;
     } catch {
       // Not mediaEX's JSON: usually MEDIAEX_URL points at the wrong host, or a proxy in front of it is failing.
-      this.log.error(`mediaEX answered ${res.status} with non-JSON for ${init.method ?? 'GET'} ${path}: ${text.replace(/\s+/g, ' ').slice(0, 160)}`);
+      this.log.error({ ...mediaexTrace(path, method, started, res), invalidJson: true });
       throw new ServiceUnavailableException(
         res.status === 404
           ? 'Uploads aren’t working right now: the media service isn’t answering (Omoshow’s MEDIAEX_URL may be wrong). Try again later.'
           : 'Uploads aren’t working right now: the media service sent an unexpected reply. Try again in a minute.',
       );
     }
+    const trace = mediaexTrace(path, method, started, res, data);
     if (!res.ok) {
+      this.log.warn(trace);
       const msg = (data as { error?: string } | null)?.error ?? `mediaEX error ${res.status}`;
       if (res.status === 401 || res.status === 403) {
-        this.log.error(`mediaEX rejected the API key: ${msg}`);
         throw new ServiceUnavailableException('The media service rejected Omoshow’s key. An admin needs to check MEDIAEX_API_KEY.');
       }
       throw new BadRequestException(msg);
     }
+    this.log.log(trace);
     return data as T;
   }
 
